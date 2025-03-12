@@ -8,6 +8,39 @@
 	let fileContent = '';
 	let isLoading = false;
 	let error = '';
+	let isNativeFileSystemAvailable = false;
+	let lastChecked = null;
+
+	// Helper function to check if running in Tauri
+	function isTauri() {
+		return typeof window !== 'undefined' && '__TAURI__' in window;
+	}
+
+	// Check if native filesystem is available
+	async function checkNativeFileSystem() {
+		isLoading = true;
+		error = ''; // Clear any previous errors
+		try {
+			// Try to directly save a file - this will work only if we have native filesystem access
+			// No need to pre-check for Tauri - just try the operation and see if it succeeds
+			const savedPath = await invoke('save_hello_world');
+
+			// If we get here without errors, filesystem is available
+			isNativeFileSystemAvailable = true;
+			lastChecked = new Date();
+			console.log('Native filesystem is available', savedPath);
+			isLoading = false;
+			return true;
+		} catch (err) {
+			console.error('Native filesystem check failed:', err);
+			error = `Filesystem check failed: ${err.message || 'Unknown error'}`;
+			isNativeFileSystemAvailable = false;
+			lastChecked = new Date();
+			console.log('Native filesystem is not available');
+			isLoading = false;
+			return false;
+		}
+	}
 
 	// Save hello world to JSON file
 	async function saveHelloWorld() {
@@ -41,6 +74,10 @@
 		}
 	}
 
+	onMount(async () => {
+		await checkNativeFileSystem();
+	});
+
 	// Seeds for data examples
 	const features = [
 		'Smart Home Automation',
@@ -54,48 +91,99 @@
 <!-- File System Demo Section -->
 <section class="w-full bg-blue-950 px-4 py-8 text-white">
 	<div class="mx-auto max-w-4xl">
-		<div class="mb-8 rounded-xl border border-emerald-500/20 bg-blue-900/50 p-6 backdrop-blur-xl">
-			<h2 class="mb-4 text-2xl font-bold text-emerald-400">Tauri File System Demo</h2>
-
-			<div class="mb-6 flex flex-wrap gap-4">
-				<button
-					on:click={saveHelloWorld}
-					class="rounded-lg bg-emerald-500 px-4 py-2 font-medium text-black transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
-					disabled={isLoading}
-				>
-					{isLoading ? 'Processing...' : 'Save Hello World JSON'}
-				</button>
-
-				<button
-					on:click={readHelloWorld}
-					class="rounded-lg bg-blue-700 px-4 py-2 font-medium text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
-					disabled={isLoading}
-				>
-					{isLoading ? 'Processing...' : 'Read Hello World JSON'}
-				</button>
-			</div>
-
-			{#if error}
-				<div class="mb-4 rounded-lg border border-red-500/50 bg-red-900/50 p-3 text-red-300">
-					{error}
-				</div>
-			{/if}
-
-			{#if filePath}
-				<div class="mb-4 overflow-x-auto rounded-lg border border-blue-500/50 bg-blue-800/50 p-3">
-					<p class="font-mono text-sm">File saved at: {filePath}</p>
-				</div>
-			{/if}
-
-			{#if fileContent}
-				<div class="mt-4">
-					<h3 class="mb-2 text-lg font-semibold text-emerald-300">File Content:</h3>
-					<div class="overflow-x-auto rounded-lg border border-slate-700 bg-slate-900/50 p-3">
-						<pre class="font-mono text-sm text-slate-300">{fileContent}</pre>
+		{#if isNativeFileSystemAvailable}
+			<div class="mb-8 rounded-xl border border-emerald-500/20 bg-blue-900/50 p-6 backdrop-blur-xl">
+				<div class="flex items-center justify-between">
+					<h2 class="mb-4 text-2xl font-bold text-emerald-400">Tauri File System Demo</h2>
+					<div class="rounded-full bg-emerald-500/20 px-3 py-1 text-sm text-emerald-300">
+						<span class="mr-2 inline-block h-2 w-2 rounded-full bg-emerald-400"></span>
+						Native FS Connected
 					</div>
 				</div>
-			{/if}
-		</div>
+
+				<div class="mb-6 flex flex-wrap gap-4">
+					<button
+						on:click={saveHelloWorld}
+						class="rounded-lg bg-emerald-500 px-4 py-2 font-medium text-black transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+						disabled={isLoading}
+					>
+						{isLoading ? 'Processing...' : 'Save Hello World JSON'}
+					</button>
+
+					<button
+						on:click={readHelloWorld}
+						class="rounded-lg bg-blue-700 px-4 py-2 font-medium text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+						disabled={isLoading}
+					>
+						{isLoading ? 'Processing...' : 'Read Hello World JSON'}
+					</button>
+				</div>
+
+				{#if error}
+					<div class="mb-4 rounded-lg border border-red-500/50 bg-red-900/50 p-3 text-red-300">
+						{error}
+					</div>
+				{/if}
+
+				{#if filePath}
+					<div class="mb-4 overflow-x-auto rounded-lg border border-blue-500/50 bg-blue-800/50 p-3">
+						<p class="font-mono text-sm">File saved at: {filePath}</p>
+					</div>
+				{/if}
+
+				{#if fileContent}
+					<div class="mt-4">
+						<h3 class="mb-2 text-lg font-semibold text-emerald-300">File Content:</h3>
+						<div class="overflow-x-auto rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+							<pre class="font-mono text-sm text-slate-300">{fileContent}</pre>
+						</div>
+					</div>
+				{/if}
+
+				{#if lastChecked}
+					<div class="mt-4 text-xs text-emerald-200/50">
+						Last checked: {lastChecked.toLocaleTimeString()}
+					</div>
+				{/if}
+			</div>
+		{:else}
+			<div class="mb-8 rounded-xl border border-amber-500/20 bg-blue-900/50 p-6 backdrop-blur-xl">
+				<div class="flex items-center justify-between">
+					<h2 class="mb-4 text-2xl font-bold text-amber-400">Tauri File System Demo</h2>
+					<div class="rounded-full bg-amber-500/20 px-3 py-1 text-sm text-amber-300">
+						<span class="mr-2 inline-block h-2 w-2 rounded-full bg-amber-400"></span>
+						Native FS Not Available
+					</div>
+				</div>
+
+				<p class="text-amber-100/80">
+					Native filesystem access is not available in this environment. To access the native
+					filesystem, please run the app in Tauri desktop mode.
+				</p>
+
+				{#if error}
+					<div
+						class="mt-3 mb-4 rounded-lg border border-red-500/50 bg-red-900/50 p-3 text-sm text-red-300"
+					>
+						{error}
+					</div>
+				{/if}
+
+				<button
+					on:click={checkNativeFileSystem}
+					class="mt-4 rounded-lg bg-amber-600 px-4 py-2 font-medium text-white transition-colors hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50"
+					disabled={isLoading}
+				>
+					{isLoading ? 'Checking...' : 'Check Again'}
+				</button>
+
+				{#if lastChecked}
+					<div class="mt-4 text-xs text-amber-200/50">
+						Last checked: {lastChecked.toLocaleTimeString()}
+					</div>
+				{/if}
+			</div>
+		{/if}
 	</div>
 </section>
 
