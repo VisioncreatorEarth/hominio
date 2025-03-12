@@ -1,9 +1,10 @@
 import { PGlite } from '@electric-sql/pglite';
-import type { LoroDoc } from 'loro-crdt';
+import type { LoroDoc, VersionVector } from 'loro-crdt';
+import * as tauriFS from '$lib/utils/tauriFS';
 
 // Type definitions for versions and metadata
-type LoroVersion = Record<string, any>;
-type LoroMetadata = Record<string, any>;
+type LoroVersion = VersionVector;
+type LoroMetadata = Record<string, unknown>;
 
 // Type definition for query result rows
 interface PGResultRow {
@@ -26,9 +27,27 @@ export class LoroPGLiteStorage {
     private db: PGlite | null = null;
     private initialized = false;
     private dbName = 'loro_storage';
+    private dbPath: string | null = null;
+    private storageMode: 'native' | 'indexeddb' | 'not-initialized' = 'not-initialized';
 
     constructor() {
         // Initialize database on first use
+    }
+
+    /**
+     * Get the current storage mode
+     * @returns The storage mode ('native', 'indexeddb', or 'not-initialized')
+     */
+    getStorageMode(): 'native' | 'indexeddb' | 'not-initialized' {
+        return this.storageMode;
+    }
+
+    /**
+     * Get the database path (only available in native mode)
+     * @returns The database path or null if not using native filesystem
+     */
+    getDbPath(): string | null {
+        return this.dbPath;
     }
 
     /**
@@ -38,8 +57,35 @@ export class LoroPGLiteStorage {
         if (this.initialized) return;
 
         try {
-            // Open database with IndexedDB persistence
-            this.db = new PGlite(`idb://${this.dbName}`);
+            // Determine if we're running in Tauri to use native filesystem
+            if (tauriFS.isTauri()) {
+                // Use native filesystem for Tauri mode
+                console.log("Running in Tauri mode - using native filesystem for PGlite");
+
+                // Get app data directory path
+                const appDataDirPath = await tauriFS.getAppDataDir();
+                const hominioDirPath = `${appDataDirPath}hominio`;
+
+                // Ensure the directory exists
+                const dirExists = await tauriFS.exists(hominioDirPath);
+                if (!dirExists) {
+                    await tauriFS.createDir(hominioDirPath, { recursive: true });
+                    console.log(`Created hominio directory at ${hominioDirPath}`);
+                }
+
+                // Set the database file path 
+                this.dbPath = `${hominioDirPath}/${this.dbName}.db`;
+                console.log(`Using native filesystem for PGlite at: ${this.dbPath}`);
+
+                // Initialize PGlite with file:// protocol for native filesystem
+                this.db = new PGlite(`file://${this.dbPath}`);
+                this.storageMode = 'native';
+            } else {
+                // Use IndexedDB for browser mode
+                console.log("Running in browser mode - using IndexedDB for PGlite");
+                this.db = new PGlite(`idb://${this.dbName}`);
+                this.storageMode = 'indexeddb';
+            }
 
             // Create schema if it doesn't exist
             await this.db.exec(`
@@ -132,7 +178,8 @@ export class LoroPGLiteStorage {
             // Generate an update ID
             const updateId = crypto.randomUUID();
 
-            // Export incremental update
+            // Export incremental update - properly handle the type 
+            // The LoroDoc.export method expects a VersionVector for the 'from' parameter
             const updateData = loroDoc.export({ mode: 'update', from: fromVersion });
 
             // Current version after the update

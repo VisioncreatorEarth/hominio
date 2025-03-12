@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { LoroDoc } from 'loro-crdt';
 	import { loroStorage } from '$lib/stores/loroStorage';
+	import { loroPGLiteStorage } from '$lib/stores/loroPGLiteStorage';
 	import {
 		createLoroSyncService,
 		type LoroSyncService,
@@ -36,6 +37,8 @@
 	let lastSyncTime = '';
 	let lastUpdateReceived: number | null = null;
 	let connectedClients: string[] = [];
+	let storageMode: 'native' | 'indexeddb' | 'not-initialized' = 'not-initialized';
+	let dbPath: string | null = null;
 
 	// Function to save Loro state using PGlite
 	async function saveToStorage() {
@@ -401,6 +404,10 @@
 				await saveToStorage();
 			}
 
+			// Get storage mode for display
+			storageMode = loroPGLiteStorage.getStorageMode();
+			dbPath = loroPGLiteStorage.getDbPath();
+
 			// Set up BroadcastChannel for real-time sync between tabs
 			setupBroadcastChannel();
 
@@ -469,6 +476,37 @@
 							Client ID: <span class="font-mono">{clientId}</span>
 						</p>
 						<p class="mt-1 text-xs text-emerald-100/50">Auto-syncing enabled</p>
+					</div>
+				</div>
+			</div>
+
+			<!-- Storage Mode Indicator -->
+			<div class="mb-6 rounded-lg border border-emerald-500/20 bg-blue-900/30 p-4">
+				<div class="flex items-center justify-between">
+					<div>
+						<h2 class="mb-2 text-xl font-semibold text-emerald-400">Storage</h2>
+						{#if storageMode === 'native'}
+							<div class="mb-2 flex items-center">
+								<span class="mr-2 inline-block h-2 w-2 rounded-full bg-emerald-400"></span>
+								<p class="text-sm font-medium text-emerald-300">Native Filesystem Storage</p>
+							</div>
+							{#if dbPath}
+								<p class="font-mono text-xs text-emerald-100/50">{dbPath}</p>
+							{/if}
+						{:else if storageMode === 'indexeddb'}
+							<div class="mb-2 flex items-center">
+								<span class="mr-2 inline-block h-2 w-2 rounded-full bg-amber-400"></span>
+								<p class="text-sm font-medium text-amber-300">Browser IndexedDB Storage</p>
+							</div>
+							<p class="text-xs text-amber-100/50">
+								For persistent filesystem storage, run in Tauri desktop app
+							</p>
+						{:else}
+							<div class="mb-2 flex items-center">
+								<span class="mr-2 inline-block h-2 w-2 rounded-full bg-gray-400"></span>
+								<p class="text-sm font-medium text-gray-300">Storage Not Initialized</p>
+							</div>
+						{/if}
 					</div>
 				</div>
 			</div>

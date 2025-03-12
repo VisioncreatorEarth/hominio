@@ -1,8 +1,8 @@
-import type { LoroDoc } from 'loro-crdt';
+import type { LoroDoc, VersionVector } from 'loro-crdt';
 import { loroPGLiteStorage } from './loroPGLiteStorage';
 
 // Type definitions for versions and metadata
-type LoroVersion = Record<string, unknown>;
+type LoroVersion = VersionVector;
 type LoroMetadata = Record<string, unknown>;
 
 /**
