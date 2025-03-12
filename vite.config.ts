@@ -12,6 +12,18 @@ export default defineConfig({
 		topLevelAwait()
 	],
 	optimizeDeps: {
-		exclude: ['loro-crdt']
-	}
+		exclude: ['loro-crdt', '@electric-sql/pglite']
+	},
+	build: {
+		// Make sure Rollup correctly handles WASM files for PGlite
+		rollupOptions: {
+			output: {
+				manualChunks: {
+					pglite: ['@electric-sql/pglite']
+				}
+			}
+		}
+	},
+	// Properly handle WASM files for PGlite
+	assetsInclude: ['**/*.wasm', '**/*.data']
 });

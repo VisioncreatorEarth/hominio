@@ -1,45 +1,17 @@
-import Dexie from 'dexie';
 import type { LoroDoc } from 'loro-crdt';
+import { loroPGLiteStorage } from './loroPGLiteStorage';
+
+// Type definitions for versions and metadata
+type LoroVersion = Record<string, unknown>;
+type LoroMetadata = Record<string, unknown>;
 
 /**
- * LoroDatabase - A Dexie wrapper for storing Loro document snapshots
- * Uses IndexedDB for efficient storage and retrieval
- */
-class LoroDatabase extends Dexie {
-    // Table definitions
-    snapshots: Dexie.Table<ISnapshot, string>;
-
-    constructor() {
-        super('LoroStorage');
-
-        // Define tables and indexes
-        this.version(1).stores({
-            snapshots: 'id, timestamp, docType'
-        });
-
-        // Type the tables
-        this.snapshots = this.table('snapshots');
-    }
-}
-
-// Interface for a snapshot entry
-interface ISnapshot {
-    id: string;           // Unique ID for the snapshot
-    docType: string;      // Type of document (e.g., 'todos', 'notes')
-    data: Uint8Array;     // The binary snapshot data
-    timestamp: number;    // When the snapshot was created
-    meta?: any;           // Optional metadata
-}
-
-/**
- * LoroStorage - A storage adapter for Loro that uses IndexedDB via Dexie
+ * LoroStorage - A storage adapter for Loro that uses PGlite
  * Provides persistent storage for Loro documents with version history
  */
 export class LoroStorage {
-    private db: LoroDatabase;
-
     constructor() {
-        this.db = new LoroDatabase();
+        console.log('LoroStorage initialized with PGlite backend');
     }
 
     /**
@@ -49,23 +21,14 @@ export class LoroStorage {
      * @param docType Type of document for categorization
      * @param meta Optional metadata to store with the snapshot
      */
-    async saveSnapshot(docId: string, loroDoc: LoroDoc, docType: string = 'default', meta: any = {}): Promise<void> {
+    async saveSnapshot(docId: string, loroDoc: LoroDoc, docType: string = 'default', meta: LoroMetadata = {}): Promise<void> {
         try {
-            // Export snapshot as binary data
-            const bytes = loroDoc.export({ mode: 'snapshot' });
+            await loroPGLiteStorage.saveSnapshot(docId, loroDoc, docType, meta);
+            console.log(`Loro snapshot saved: ${docId}`);
 
-            // Create snapshot entry
-            const snapshot: ISnapshot = {
-                id: docId,
-                docType,
-                data: bytes,
-                timestamp: Date.now(),
-                meta
-            };
-
-            // Store in IndexedDB
-            await this.db.snapshots.put(snapshot);
-            console.log(`Loro snapshot saved to IndexedDB: ${docId}`);
+            // Also store the current version for incremental updates
+            // We store this in memory for now, but in a real application you'd want to persist this
+            this._storeLastVersion(docId, loroDoc.version());
         } catch (error) {
             console.error('Error saving Loro snapshot:', error);
             throw error;
@@ -80,22 +43,13 @@ export class LoroStorage {
      */
     async loadSnapshot(docId: string, loroDoc: LoroDoc): Promise<boolean> {
         try {
-            // Retrieve the latest snapshot for this document
-            const snapshot = await this.db.snapshots
-                .where('id')
-                .equals(docId)
-                .reverse()
-                .first();
-
-            if (snapshot) {
-                // Import the snapshot into the Loro document
-                loroDoc.import(snapshot.data);
-                console.log(`Loro snapshot loaded from IndexedDB: ${docId}`);
-                return true;
+            const loaded = await loroPGLiteStorage.loadSnapshot(docId, loroDoc);
+            if (loaded) {
+                // Store the version after loading for incremental updates
+                this._storeLastVersion(docId, loroDoc.version());
+                console.log(`Loro snapshot loaded: ${docId}`);
             }
-
-            console.log(`No snapshot found for document: ${docId}`);
-            return false;
+            return loaded;
         } catch (error) {
             console.error('Error loading Loro snapshot:', error);
             return false;
@@ -107,14 +61,24 @@ export class LoroStorage {
      * @param docId Document ID to query
      * @returns Array of snapshots (without binary data)
      */
-    async listSnapshots(docId: string): Promise<Array<Omit<ISnapshot, 'data'>>> {
-        const snapshots = await this.db.snapshots
-            .where('id')
-            .equals(docId)
-            .toArray();
-
-        // Return without the binary data to avoid large payloads
-        return snapshots.map(({ data, ...rest }) => rest);
+    async listSnapshots(docId: string): Promise<Array<{
+        id: string;
+        docType: string;
+        timestamp: number;
+        meta: LoroMetadata;
+    }>> {
+        try {
+            const snapshots = await loroPGLiteStorage.listSnapshots(docId);
+            return snapshots.map(snapshot => ({
+                id: snapshot.docId,
+                docType: snapshot.docType,
+                timestamp: snapshot.updatedAt.getTime(),
+                meta: snapshot.meta
+            }));
+        } catch (error) {
+            console.error('Error listing Loro snapshots:', error);
+            return [];
+        }
     }
 
     /**
@@ -122,20 +86,37 @@ export class LoroStorage {
      * @param docId Document ID to delete
      */
     async deleteAllSnapshots(docId: string): Promise<number> {
-        return await this.db.snapshots
-            .where('id')
-            .equals(docId)
-            .delete();
+        try {
+            return await loroPGLiteStorage.deleteSnapshot(docId);
+        } catch (error) {
+            console.error('Error deleting Loro snapshots:', error);
+            return 0;
+        }
     }
 
     /**
      * Get all document IDs in storage
      */
     async getAllDocumentIds(): Promise<string[]> {
-        const uniqueIds = await this.db.snapshots
-            .orderBy('id')
-            .uniqueKeys();
-        return uniqueIds as string[];
+        try {
+            return await loroPGLiteStorage.getAllDocumentIds();
+        } catch (error) {
+            console.error('Error getting Loro document IDs:', error);
+            return [];
+        }
+    }
+
+    // Private map to store the last known version of each document
+    private _lastVersions = new Map<string, LoroVersion>();
+
+    // Store the last version for a document (for incremental updates)
+    private _storeLastVersion(docId: string, version: LoroVersion): void {
+        this._lastVersions.set(docId, version);
+    }
+
+    // Get the last version for a document
+    private _getLastVersion(docId: string): LoroVersion | undefined {
+        return this._lastVersions.get(docId);
     }
 }
 

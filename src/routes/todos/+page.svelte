@@ -37,26 +37,26 @@
 	let lastUpdateReceived: number | null = null;
 	let connectedClients: string[] = [];
 
-	// Function to save Loro state to IndexedDB using our adapter
-	async function saveToIndexedDB() {
+	// Function to save Loro state using PGlite
+	async function saveToStorage() {
 		try {
 			await loroStorage.saveSnapshot(TODO_DOC_ID, loroDoc, TODO_DOC_TYPE);
-			console.log('Todo state saved to IndexedDB');
+			console.log('Todo state saved to storage');
 		} catch (err) {
-			console.error('Error saving Loro state to IndexedDB:', err);
+			console.error('Error saving Loro state:', err);
 		}
 	}
 
-	// Function to load Loro state from IndexedDB using our adapter
-	async function loadFromIndexedDB() {
+	// Function to load Loro state from storage
+	async function loadFromStorage() {
 		try {
 			const success = await loroStorage.loadSnapshot(TODO_DOC_ID, loroDoc);
 			if (success) {
-				console.log('Todo state loaded from IndexedDB');
+				console.log('Todo state loaded from storage');
 				return true;
 			}
 		} catch (err) {
-			console.error('Error loading Loro state from IndexedDB:', err);
+			console.error('Error loading Loro state:', err);
 		}
 		return false;
 	}
@@ -168,7 +168,7 @@
 		updateTodosFromLoro();
 
 		// Save state and broadcast update
-		await saveToIndexedDB();
+		await saveToStorage();
 		broadcastUpdate();
 
 		// Trigger server sync automatically with high priority
@@ -216,7 +216,7 @@
 				updateTodosFromLoro();
 
 				// Save state and broadcast update
-				await saveToIndexedDB();
+				await saveToStorage();
 				broadcastUpdate();
 
 				// Trigger server sync automatically with high priority
@@ -248,7 +248,7 @@
 				updateTodosFromLoro();
 
 				// Save state and broadcast update
-				await saveToIndexedDB();
+				await saveToStorage();
 				broadcastUpdate();
 
 				// Trigger server sync automatically with high priority
@@ -385,20 +385,20 @@
 				Object.getOwnPropertyNames(Object.getPrototypeOf(todoList))
 			);
 
-			// Try to load saved state from IndexedDB
-			const loaded = await loadFromIndexedDB();
+			// Try to load saved state from storage
+			const loaded = await loadFromStorage();
 
 			if (!loaded && todoList.length === 0) {
 				// Add a welcome todo if empty
 				todoList.push({
 					id: crypto.randomUUID(),
-					text: 'Welcome to Loro Todo! This is a local-first app with real-time tab & device sync.',
+					text: 'Welcome to Loro Todo! This is a local-first app with SQL-based storage.',
 					completed: false,
 					createdAt: Date.now()
 				});
 
 				// Save the initial state
-				await saveToIndexedDB();
+				await saveToStorage();
 			}
 
 			// Set up BroadcastChannel for real-time sync between tabs
@@ -499,7 +499,7 @@
 			<!-- Todo List -->
 			<div class="space-y-3">
 				{#if todos.length === 0}
-					<p class="italic text-emerald-100/60">No todos yet. Add one above!</p>
+					<p class="text-emerald-100/60 italic">No todos yet. Add one above!</p>
 				{:else}
 					{#each todos as todo (todo.id)}
 						<div
@@ -540,10 +540,9 @@
 
 		<!-- Footer -->
 		<div class="mt-8 text-sm text-emerald-100/60">
-			<p>This is a local-first app powered by Loro CRDT, IndexedDB, and server-side sync.</p>
+			<p>This is a local-first app powered by Loro CRDT with SQL-based storage.</p>
 			<p class="mt-1">
-				Your todos are saved in your browser's database and synchronize in real-time across tabs and
-				devices.
+				Your todos are saved in your browser using PGlite (PostgreSQL in the browser).
 			</p>
 		</div>
 	</div>
