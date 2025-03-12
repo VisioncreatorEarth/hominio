@@ -2,7 +2,12 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { LoroDoc } from 'loro-crdt';
 	import { loroStorage } from '$lib/stores/loroStorage';
-	import { createLoroSyncService, type LoroSyncService } from '$lib/services/loroSyncService';
+	import {
+		createLoroSyncService,
+		type LoroSyncService,
+		type SyncEvent,
+		type SyncStatus
+	} from '$lib/services/loroSyncService';
 
 	// Define Todo type
 	interface Todo {
@@ -26,35 +31,11 @@
 	let broadcastChannel: BroadcastChannel | null = null;
 	let lastUpdateId: string | null = null;
 	let syncService: LoroSyncService | null = null;
-	let syncEnabled = true;
 	let clientId = crypto.randomUUID().slice(0, 8); // Short client ID for display
-	let isSyncing = false;
+	let syncStatus: SyncStatus = 'idle'; // 'idle', 'syncing', 'success', 'error'
 	let lastSyncTime = '';
-	let syncStatus = 'idle'; // 'idle', 'syncing', 'success', 'error'
-
-	// Server response data
-	let serverMessage = '';
-	let isLoadingMessage = false;
-	let messageError = '';
-
-	// Function to fetch server message
-	async function fetchServerMessage() {
-		isLoadingMessage = true;
-		messageError = '';
-
-		try {
-			const response = await fetch('/api/hello');
-			if (!response.ok) throw new Error(`HTTP error ${response.status}`);
-
-			const data = await response.json();
-			serverMessage = data.message;
-		} catch (error) {
-			console.error('Error fetching server message:', error);
-			messageError = error instanceof Error ? error.message : 'Failed to fetch server message';
-		} finally {
-			isLoadingMessage = false;
-		}
-	}
+	let lastUpdateReceived: number | null = null;
+	let connectedClients: string[] = [];
 
 	// Function to save Loro state to IndexedDB using our adapter
 	async function saveToIndexedDB() {
@@ -183,8 +164,8 @@
 		await saveToIndexedDB();
 		broadcastUpdate();
 
-		// Trigger server sync if enabled
-		if (syncService && syncEnabled) {
+		// Trigger server sync automatically
+		if (syncService) {
 			syncService.syncWithServer();
 			updateLastSyncTime();
 		}
@@ -229,8 +210,8 @@
 				await saveToIndexedDB();
 				broadcastUpdate();
 
-				// Trigger server sync if enabled
-				if (syncService && syncEnabled) {
+				// Trigger server sync automatically
+				if (syncService) {
 					syncService.syncWithServer();
 					updateLastSyncTime();
 				}
@@ -259,8 +240,8 @@
 				await saveToIndexedDB();
 				broadcastUpdate();
 
-				// Trigger server sync if enabled
-				if (syncService && syncEnabled) {
+				// Trigger server sync automatically
+				if (syncService) {
 					syncService.syncWithServer();
 					updateLastSyncTime();
 				}
@@ -290,6 +271,39 @@
 		}
 	}
 
+	// Handle sync service events
+	function handleSyncEvent(event: SyncEvent) {
+		console.log('Sync event:', event);
+
+		if (event.type === 'status-change' && event.status) {
+			syncStatus = event.status;
+
+			// Only update the sync time when we get a success status
+			if (event.status === 'success') {
+				updateLastSyncTime();
+			}
+		}
+
+		if (event.type === 'updates-received') {
+			lastUpdateReceived = event.timestamp;
+
+			// Force immediate UI update
+			updateTodosFromLoro();
+
+			// If this was a forced update, also update the sync time
+			const details = event.details as Record<string, unknown> | undefined;
+			if (details?.forceUpdate) {
+				updateLastSyncTime();
+			}
+		}
+
+		if (event.type === 'sync-complete') {
+			// Update the UI immediately after sync completes
+			updateTodosFromLoro();
+			updateLastSyncTime();
+		}
+	}
+
 	// Initialize Loro Sync Service
 	function setupSyncService() {
 		if (!loroDoc || !isLoroReady) return;
@@ -298,9 +312,12 @@
 			// Create a sync service with auto-start
 			syncService = createLoroSyncService(TODO_DOC_ID, loroDoc, {
 				clientId,
-				autoStart: syncEnabled,
+				autoStart: true, // Always auto-start
 				syncIntervalMs: 3000
 			});
+
+			// Add event listener for sync events
+			syncService.addEventListener(handleSyncEvent);
 
 			console.log('Loro sync service initialized with client ID:', clientId);
 			updateLastSyncTime();
@@ -310,22 +327,8 @@
 		}
 	}
 
-	// Toggle sync on/off
-	function toggleSync() {
-		syncEnabled = !syncEnabled;
-
-		if (syncService) {
-			if (syncEnabled) {
-				syncService.startSync();
-				updateLastSyncTime();
-			} else {
-				syncService.stopSync();
-			}
-		}
-	}
-
 	// Helper function to format time
-	function formatTime(timestamp) {
+	function formatTime(timestamp: number): string {
 		const date = new Date(timestamp);
 		return date.toLocaleTimeString();
 	}
@@ -333,55 +336,6 @@
 	// Update last sync time
 	function updateLastSyncTime() {
 		lastSyncTime = formatTime(Date.now());
-	}
-
-	// Manually sync now
-	async function syncNow() {
-		if (!syncService) return;
-
-		try {
-			// Show syncing status
-			syncStatus = 'syncing';
-			isSyncing = true;
-
-			// Force a sync by first forcing a small update
-			// This ensures there's always something to sync
-			const dummyUpdateId = 'sync-trigger-' + Date.now();
-			const dummyProp = `_sync_${Date.now()}`;
-
-			// Add a temporary hidden property to the document
-			// This ensures we always have an update to send
-			let metaMap = loroDoc.getMap('_syncMeta');
-			if (!metaMap) {
-				metaMap = loroDoc.createMap('_syncMeta');
-			}
-			metaMap.set(dummyProp, dummyUpdateId);
-
-			// Perform the sync (both pull and push)
-			await syncService.syncWithServer();
-
-			// Update UI
-			updateTodosFromLoro();
-
-			// Update sync timestamp
-			updateLastSyncTime();
-
-			// Show success status briefly
-			syncStatus = 'success';
-			setTimeout(() => {
-				if (syncStatus === 'success') syncStatus = 'idle';
-			}, 3000);
-
-			console.log('Manual sync completed successfully');
-		} catch (error) {
-			console.error('Error during manual sync:', error);
-			syncStatus = 'error';
-			setTimeout(() => {
-				if (syncStatus === 'error') syncStatus = 'idle';
-			}, 3000);
-		} finally {
-			isSyncing = false;
-		}
 	}
 
 	// Initialize Loro on mount
@@ -438,9 +392,6 @@
 			// Log initial state
 			console.log('Initial todos:', todos);
 			console.log('Loro list length:', todoList.length);
-
-			// Fetch server message
-			fetchServerMessage();
 		} catch (error: unknown) {
 			const errorMessage = error instanceof Error ? error.message : String(error);
 			status = `Error: ${errorMessage}`;
@@ -456,6 +407,7 @@
 		}
 
 		if (syncService) {
+			syncService.removeEventListener(handleSyncEvent);
 			syncService.stopSync();
 			console.log('Sync service stopped');
 		}
@@ -484,73 +436,9 @@
 						<p class="text-sm text-emerald-100/70">
 							Client ID: <span class="font-mono">{clientId}</span>
 						</p>
-						<p class="mt-1 text-xs text-emerald-100/50">
-							{syncEnabled ? 'Syncing enabled' : 'Syncing disabled'}
-							{#if lastSyncTime}
-								<span class="mx-1">•</span> Last sync: {lastSyncTime}
-							{/if}
-						</p>
-					</div>
-					<div class="flex items-center gap-2">
-						<button
-							on:click={syncNow}
-							disabled={isSyncing || !syncEnabled}
-							class="relative rounded border border-emerald-500/30 bg-blue-900/80 px-4 py-2 text-emerald-400 hover:bg-blue-800/80 disabled:opacity-50"
-						>
-							{#if syncStatus === 'syncing'}
-								<span class="flex items-center">
-									<span class="mr-2 h-3 w-3 animate-pulse rounded-full bg-emerald-400"></span>
-									Syncing...
-								</span>
-							{:else if syncStatus === 'success'}
-								<span class="flex items-center">
-									<span class="mr-2 text-emerald-400">✓</span>
-									Synced!
-								</span>
-							{:else if syncStatus === 'error'}
-								<span class="flex items-center">
-									<span class="mr-2 text-red-400">×</span>
-									Sync Failed
-								</span>
-							{:else}
-								Sync Now
-							{/if}
-						</button>
-						<button
-							on:click={toggleSync}
-							class={syncEnabled
-								? 'rounded bg-emerald-600/40 px-4 py-2 text-emerald-300 hover:bg-emerald-600/60'
-								: 'rounded bg-blue-900/80 px-4 py-2 text-emerald-400/60 hover:bg-blue-800/80'}
-						>
-							{syncEnabled ? 'Disable Sync' : 'Enable Sync'}
-						</button>
+						<p class="mt-1 text-xs text-emerald-100/50">Auto-syncing enabled</p>
 					</div>
 				</div>
-			</div>
-
-			<!-- Server Message Section -->
-			<div class="mb-6 rounded-lg border border-emerald-500/20 bg-blue-900/30 p-4">
-				<h2 class="mb-2 text-xl font-semibold text-emerald-400">Server Message</h2>
-
-				{#if isLoadingMessage}
-					<p class="text-emerald-100/70">Loading message from server...</p>
-				{:else if messageError}
-					<p class="text-red-400">{messageError}</p>
-					<button
-						on:click={fetchServerMessage}
-						class="mt-2 rounded bg-blue-800 px-3 py-1 text-sm text-emerald-300 hover:bg-blue-700"
-					>
-						Try Again
-					</button>
-				{:else}
-					<p class="text-emerald-100">{serverMessage}</p>
-					<button
-						on:click={fetchServerMessage}
-						class="mt-2 rounded bg-blue-800 px-3 py-1 text-sm text-emerald-300 hover:bg-blue-700"
-					>
-						Refresh
-					</button>
-				{/if}
 			</div>
 
 			<!-- Add Todo Form -->

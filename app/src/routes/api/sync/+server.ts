@@ -8,6 +8,13 @@ interface UpdateMetadata {
     updateId: string;
 }
 
+// Interface for poll response
+interface PollResponse {
+    type: 'updates-available' | 'no-updates';
+    docId: string;
+    timestamp: number;
+}
+
 // In-memory store for sync data (would use a database in production)
 // Maps document IDs to their updates
 const updateStore: Map<string, Array<{
@@ -20,13 +27,53 @@ const updateStore: Map<string, Array<{
 // Map of registered documents
 const documents: Map<string, {
     lastActivity: number,
-    clients: Set<string>
+    clients: Set<string>,
+    lastPollTime: number
 }> = new Map();
+
+// Map to track long-polling connections
+const longPolls: Map<string, {
+    resolver: (value: PollResponse) => void,
+    timeout: ReturnType<typeof setTimeout>
+}> = new Map();
+
+// Poll interval in milliseconds
+const POLL_INTERVAL = 1000; // 1 second
+
+// Function to notify clients of updates
+function notifyClientsOfUpdates(docId: string, excludeClientId?: string) {
+    // Get all long-polling connections for this document
+    for (const [key, poll] of longPolls.entries()) {
+        // Check if this poll is for the current document
+        if (key.startsWith(`${docId}:`)) {
+            const clientId = key.split(':')[1];
+
+            // Don't notify the client that sent the update
+            if (excludeClientId && clientId === excludeClientId) {
+                continue;
+            }
+
+            // Resolve the long-polling promise to send updates to the client
+            poll.resolver({
+                type: 'updates-available',
+                docId,
+                timestamp: Date.now()
+            });
+
+            // Clear the timeout since we're resolving manually
+            clearTimeout(poll.timeout);
+
+            // Remove this poll from the map
+            longPolls.delete(key);
+        }
+    }
+}
 
 // Register or get document info
 export const GET: RequestHandler = async ({ url }) => {
     const docId = url.searchParams.get('docId');
     const clientId = url.searchParams.get('clientId');
+    const longPoll = url.searchParams.get('longPoll') === 'true';
 
     if (!docId || !clientId) {
         return new Response(JSON.stringify({ error: 'Missing docId or clientId' }), {
@@ -39,7 +86,8 @@ export const GET: RequestHandler = async ({ url }) => {
     if (!documents.has(docId)) {
         documents.set(docId, {
             lastActivity: Date.now(),
-            clients: new Set()
+            clients: new Set(),
+            lastPollTime: Date.now()
         });
 
         // Initialize update store for this document
@@ -53,7 +101,60 @@ export const GET: RequestHandler = async ({ url }) => {
     docInfo.clients.add(clientId);
     docInfo.lastActivity = Date.now();
 
-    // Get updates since last sync
+    // Handle long polling request
+    if (longPoll) {
+        const lastSync = url.searchParams.get('lastSync');
+        const lastSyncTime = lastSync ? parseInt(lastSync) : 0;
+
+        // Check if there are already updates available
+        let hasUpdates = false;
+        if (updateStore.has(docId)) {
+            hasUpdates = updateStore.get(docId)!.some(
+                update => update.timestamp > lastSyncTime && update.clientId !== clientId
+            );
+        }
+
+        // If updates are already available, return them immediately
+        if (hasUpdates) {
+            return json({
+                type: 'updates-available',
+                docId,
+                timestamp: Date.now()
+            });
+        }
+
+        // Otherwise, set up long polling
+        const pollKey = `${docId}:${clientId}`;
+
+        // Create a promise that will resolve when updates are available
+        // or after the timeout period
+        const pollPromise = new Promise<PollResponse>(resolve => {
+            // Set up a timeout to resolve the promise after the poll interval
+            const timeout = setTimeout(() => {
+                // If the poll is still in the map, resolve it with a no-updates response
+                if (longPolls.has(pollKey)) {
+                    resolve({
+                        type: 'no-updates',
+                        docId,
+                        timestamp: Date.now()
+                    });
+                    longPolls.delete(pollKey);
+                }
+            }, POLL_INTERVAL);
+
+            // Store the resolver and timeout in the map
+            longPolls.set(pollKey, {
+                resolver: resolve,
+                timeout
+            });
+        });
+
+        // Wait for the poll to resolve
+        const result = await pollPromise;
+        return json(result);
+    }
+
+    // Regular (non-polling) request - get updates since last sync
     const lastSync = url.searchParams.get('lastSync');
     const lastSyncTime = lastSync ? parseInt(lastSync) : 0;
 
@@ -90,7 +191,8 @@ export const POST: RequestHandler = async ({ request }) => {
         if (!documents.has(docId)) {
             documents.set(docId, {
                 lastActivity: Date.now(),
-                clients: new Set([clientId])
+                clients: new Set([clientId]),
+                lastPollTime: Date.now()
             });
         }
 
@@ -108,9 +210,10 @@ export const POST: RequestHandler = async ({ request }) => {
         const updatesArray = new Uint8Array(updates);
 
         // Store the update
+        const timestamp = Date.now();
         updateStore.get(docId)!.push({
             clientId,
-            timestamp: Date.now(),
+            timestamp,
             updates: updatesArray,
             updateId
         });
@@ -121,9 +224,12 @@ export const POST: RequestHandler = async ({ request }) => {
             updateStore.get(docId)!.splice(0, updateStore.get(docId)!.length - 100);
         }
 
+        // Notify other clients that updates are available
+        notifyClientsOfUpdates(docId, clientId);
+
         return json({
             success: true,
-            timestamp: Date.now()
+            timestamp
         });
     } catch (error) {
         console.error('Error processing sync update:', error);
