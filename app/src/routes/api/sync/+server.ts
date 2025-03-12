@@ -38,10 +38,18 @@ const longPolls: Map<string, {
 }> = new Map();
 
 // Poll interval in milliseconds
-const POLL_INTERVAL = 1000; // 1 second
+const POLL_INTERVAL = 1000; // Set to exactly 1 second as originally intended
+
+// Minimum time between notifications for the same client (rate limiting)
+const MIN_NOTIFICATION_INTERVAL = 1000; // 1 second minimum between notifications
+
+// Track last notification time for each client
+const lastNotificationTime: Map<string, number> = new Map();
 
 // Function to notify clients of updates
 function notifyClientsOfUpdates(docId: string, excludeClientId?: string) {
+    const currentTime = Date.now();
+
     // Get all long-polling connections for this document
     for (const [key, poll] of longPolls.entries()) {
         // Check if this poll is for the current document
@@ -53,11 +61,13 @@ function notifyClientsOfUpdates(docId: string, excludeClientId?: string) {
                 continue;
             }
 
+            console.log(`Notifying client ${clientId} of updates to document ${docId}`);
+
             // Resolve the long-polling promise to send updates to the client
             poll.resolver({
                 type: 'updates-available',
                 docId,
-                timestamp: Date.now()
+                timestamp: currentTime
             });
 
             // Clear the timeout since we're resolving manually
@@ -105,6 +115,25 @@ export const GET: RequestHandler = async ({ url }) => {
     if (longPoll) {
         const lastSync = url.searchParams.get('lastSync');
         const lastSyncTime = lastSync ? parseInt(lastSync) : 0;
+        const currentTime = Date.now();
+        const pollKey = `${docId}:${clientId}`;
+
+        // Check if this client was recently notified (rate limiting)
+        const clientKey = `${docId}:${clientId}`;
+        const lastNotifyTime = lastNotificationTime.get(clientKey) || 0;
+        const timeSinceLastNotify = currentTime - lastNotifyTime;
+
+        if (timeSinceLastNotify < MIN_NOTIFICATION_INTERVAL) {
+            // If we recently notified this client, just return no-updates
+            // This prevents creating a long poll that would be immediately resolved
+            console.log(`Rate limiting poll for client ${clientId}, last notified ${timeSinceLastNotify}ms ago`);
+            return json({
+                type: 'no-updates',
+                docId,
+                timestamp: currentTime,
+                rateLimit: true
+            });
+        }
 
         // Check if there are already updates available
         let hasUpdates = false;
@@ -116,16 +145,17 @@ export const GET: RequestHandler = async ({ url }) => {
 
         // If updates are already available, return them immediately
         if (hasUpdates) {
+            // Update last notification time
+            lastNotificationTime.set(clientKey, currentTime);
+
             return json({
                 type: 'updates-available',
                 docId,
-                timestamp: Date.now()
+                timestamp: currentTime
             });
         }
 
         // Otherwise, set up long polling
-        const pollKey = `${docId}:${clientId}`;
-
         // Create a promise that will resolve when updates are available
         // or after the timeout period
         const pollPromise = new Promise<PollResponse>(resolve => {
@@ -151,6 +181,12 @@ export const GET: RequestHandler = async ({ url }) => {
 
         // Wait for the poll to resolve
         const result = await pollPromise;
+
+        // If this was an updates-available response, update the last notification time
+        if (result.type === 'updates-available') {
+            lastNotificationTime.set(clientKey, Date.now());
+        }
+
         return json(result);
     }
 
@@ -224,7 +260,8 @@ export const POST: RequestHandler = async ({ request }) => {
             updateStore.get(docId)!.splice(0, updateStore.get(docId)!.length - 100);
         }
 
-        // Notify other clients that updates are available
+        // Notify other clients immediately that updates are available
+        // This is critical for real-time responsiveness
         notifyClientsOfUpdates(docId, clientId);
 
         return json({

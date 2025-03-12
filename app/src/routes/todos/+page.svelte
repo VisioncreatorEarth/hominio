@@ -120,29 +120,34 @@
 	function updateTodosFromLoro() {
 		if (!todoList) return;
 
-		// Get the length of the list
-		const length = todoList.length;
+		try {
+			// Get the length of the list
+			const length = todoList.length;
+			console.log(`Updating UI from Loro, list length: ${length}`);
 
-		// Create a new array from the Loro List
-		const updatedTodos = [];
-		for (let i = 0; i < length; i++) {
-			const todo = todoList.get(i);
-			if (todo) {
-				// Make sure we properly handle all properties
-				updatedTodos.push({
-					id: todo.id,
-					text: todo.text,
-					completed: !!todo.completed,
-					createdAt: todo.createdAt
-				});
+			// Create a new array from the Loro List
+			const updatedTodos = [];
+			for (let i = 0; i < length; i++) {
+				const todo = todoList.get(i);
+				if (todo) {
+					// Make sure we properly handle all properties
+					updatedTodos.push({
+						id: todo.id,
+						text: todo.text,
+						completed: !!todo.completed,
+						createdAt: todo.createdAt
+					});
+				}
 			}
+
+			// Sort and update
+			todos = updatedTodos.sort((a, b) => b.createdAt - a.createdAt);
+
+			// Debug todo states
+			console.log('Updated todos:', todos);
+		} catch (error) {
+			console.error('Error updating todos from Loro:', error);
 		}
-
-		// Sort and update
-		todos = updatedTodos.sort((a, b) => b.createdAt - a.createdAt);
-
-		// Debug todo states
-		console.log('Updated todos:', todos);
 	}
 
 	// Add a new todo
@@ -158,15 +163,17 @@
 
 		todoList.push(todo);
 		newTodoText = '';
+
+		// Update UI immediately
 		updateTodosFromLoro();
 
 		// Save state and broadcast update
 		await saveToIndexedDB();
 		broadcastUpdate();
 
-		// Trigger server sync automatically
+		// Trigger server sync automatically with high priority
 		if (syncService) {
-			syncService.syncWithServer();
+			syncService.syncWithServer(true);
 			updateLastSyncTime();
 		}
 	}
@@ -205,14 +212,16 @@
 				// Insert the updated todo at the same position
 				todoList.insert(i, updatedTodo);
 
-				// Update UI and save
+				// Update UI immediately
 				updateTodosFromLoro();
+
+				// Save state and broadcast update
 				await saveToIndexedDB();
 				broadcastUpdate();
 
-				// Trigger server sync automatically
+				// Trigger server sync automatically with high priority
 				if (syncService) {
-					syncService.syncWithServer();
+					syncService.syncWithServer(true);
 					updateLastSyncTime();
 				}
 
@@ -235,14 +244,16 @@
 				// Delete the todo at this index
 				todoList.delete(i, 1); // Delete 1 element at index i
 
-				// Update UI and save
+				// Update UI immediately
 				updateTodosFromLoro();
+
+				// Save state and broadcast update
 				await saveToIndexedDB();
 				broadcastUpdate();
 
-				// Trigger server sync automatically
+				// Trigger server sync automatically with high priority
 				if (syncService) {
-					syncService.syncWithServer();
+					syncService.syncWithServer(true);
 					updateLastSyncTime();
 				}
 				break;
@@ -281,17 +292,30 @@
 			// Only update the sync time when we get a success status
 			if (event.status === 'success') {
 				updateLastSyncTime();
+				// Force UI update on successful sync
+				updateTodosFromLoro();
 			}
 		}
 
 		if (event.type === 'updates-received') {
 			lastUpdateReceived = event.timestamp;
 
-			// Force immediate UI update
-			updateTodosFromLoro();
+			// Check if this is an immediate update
+			const details = event.details as Record<string, unknown> | undefined;
+			const isImmediate = details?.immediate === true;
+
+			if (isImmediate) {
+				// Update UI immediately for high-priority updates
+				updateTodosFromLoro();
+				updateLastSyncTime();
+			} else {
+				// For regular updates, add a small delay to ensure Loro has processed the update
+				setTimeout(() => {
+					updateTodosFromLoro();
+				}, 20); // Reduced delay for faster response
+			}
 
 			// If this was a forced update, also update the sync time
-			const details = event.details as Record<string, unknown> | undefined;
 			if (details?.forceUpdate) {
 				updateLastSyncTime();
 			}
@@ -313,7 +337,7 @@
 			syncService = createLoroSyncService(TODO_DOC_ID, loroDoc, {
 				clientId,
 				autoStart: true, // Always auto-start
-				syncIntervalMs: 3000
+				syncIntervalMs: 1000 // Exactly 1 second sync interval
 			});
 
 			// Add event listener for sync events
@@ -321,6 +345,14 @@
 
 			console.log('Loro sync service initialized with client ID:', clientId);
 			updateLastSyncTime();
+
+			// Force an initial sync immediately
+			setTimeout(() => {
+				if (syncService) {
+					console.log('Forcing initial sync');
+					syncService.syncWithServer(true); // Use high priority for initial sync
+				}
+			}, 100);
 		} catch (err) {
 			console.error('Error setting up sync service:', err);
 			status = 'Error: Could not set up sync service';
