@@ -1,4 +1,46 @@
 <script>
+	import { onMount } from 'svelte';
+	import { invoke } from '@tauri-apps/api/core';
+	import { exists, BaseDirectory } from '@tauri-apps/plugin-fs';
+
+	// State for file operations
+	let filePath = '';
+	let fileContent = '';
+	let isLoading = false;
+	let error = '';
+
+	// Save hello world to JSON file
+	async function saveHelloWorld() {
+		try {
+			isLoading = true;
+			error = '';
+			filePath = await invoke('save_hello_world');
+			fileContent = '';
+			console.log('File saved at:', filePath);
+		} catch (err) {
+			console.error('Error saving file:', err);
+			error = `Error saving file: ${err}`;
+		} finally {
+			isLoading = false;
+		}
+	}
+
+	// Read hello world from JSON file
+	async function readHelloWorld() {
+		try {
+			isLoading = true;
+			error = '';
+			const result = await invoke('read_hello_world');
+			fileContent = JSON.stringify(result, null, 2);
+			console.log('File content:', result);
+		} catch (err) {
+			console.error('Error reading file:', err);
+			error = `Error reading file: ${err}`;
+		} finally {
+			isLoading = false;
+		}
+	}
+
 	// Seeds for data examples
 	const features = [
 		'Smart Home Automation',
@@ -8,6 +50,54 @@
 		'Voice Control'
 	];
 </script>
+
+<!-- File System Demo Section -->
+<section class="w-full bg-blue-950 px-4 py-8 text-white">
+	<div class="mx-auto max-w-4xl">
+		<div class="mb-8 rounded-xl border border-emerald-500/20 bg-blue-900/50 p-6 backdrop-blur-xl">
+			<h2 class="mb-4 text-2xl font-bold text-emerald-400">Tauri File System Demo</h2>
+
+			<div class="mb-6 flex flex-wrap gap-4">
+				<button
+					on:click={saveHelloWorld}
+					class="rounded-lg bg-emerald-500 px-4 py-2 font-medium text-black transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+					disabled={isLoading}
+				>
+					{isLoading ? 'Processing...' : 'Save Hello World JSON'}
+				</button>
+
+				<button
+					on:click={readHelloWorld}
+					class="rounded-lg bg-blue-700 px-4 py-2 font-medium text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+					disabled={isLoading}
+				>
+					{isLoading ? 'Processing...' : 'Read Hello World JSON'}
+				</button>
+			</div>
+
+			{#if error}
+				<div class="mb-4 rounded-lg border border-red-500/50 bg-red-900/50 p-3 text-red-300">
+					{error}
+				</div>
+			{/if}
+
+			{#if filePath}
+				<div class="mb-4 overflow-x-auto rounded-lg border border-blue-500/50 bg-blue-800/50 p-3">
+					<p class="font-mono text-sm">File saved at: {filePath}</p>
+				</div>
+			{/if}
+
+			{#if fileContent}
+				<div class="mt-4">
+					<h3 class="mb-2 text-lg font-semibold text-emerald-300">File Content:</h3>
+					<div class="overflow-x-auto rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+						<pre class="font-mono text-sm text-slate-300">{fileContent}</pre>
+					</div>
+				</div>
+			{/if}
+		</div>
+	</div>
+</section>
 
 <!-- Hero -->
 <section class="flex min-h-screen flex-col items-center justify-center bg-blue-950 p-8 pt-32">
