@@ -62,11 +62,8 @@
 		try {
 			if (loroDoc) {
 				await loroStorage.saveSnapshot(TODO_DOC_ID, loroDoc, TODO_DOC_TYPE);
-				console.log('Todo state saved to storage');
 			}
-		} catch (err) {
-			console.error('Error saving Loro state:', err);
-		}
+		} catch (err) {}
 	}
 
 	// Function to load Loro state from storage
@@ -75,7 +72,6 @@
 			if (loroDoc) {
 				const success = await loroStorage.loadSnapshot(TODO_DOC_ID, loroDoc);
 				if (success) {
-					console.log('Todo state loaded from storage');
 					return true;
 				}
 			}
@@ -103,8 +99,6 @@
 				updates: Array.from(updates),
 				updateId
 			});
-
-			console.log('Updates broadcast to other tabs');
 		} catch (err) {
 			console.error('Error broadcasting updates:', err);
 		}
@@ -118,22 +112,17 @@
 
 		// Skip if this is our own update
 		if (updateId === lastUpdateId) {
-			console.log('Skipping own update');
 			return;
 		}
 
 		if (type === 'loro-update' && updates) {
 			try {
-				console.log('Received updates from another tab');
-
 				// Apply the updates
 				const updatesArray = new Uint8Array(updates);
 				loroDoc.import(updatesArray);
 
 				// Update UI to reflect changes
 				updateTodosFromLoro();
-
-				console.log('Applied updates from another tab');
 			} catch (err) {
 				console.error('Error applying updates from another tab:', err);
 			}
@@ -147,7 +136,6 @@
 		try {
 			// Get the length of the list
 			const length = todoList.length;
-			console.log(`Updating UI from Loro, list length: ${length}`);
 
 			// Create a new array from the Loro List
 			const updatedTodos = [];
@@ -166,9 +154,6 @@
 
 			// Sort and update
 			todos = updatedTodos.sort((a, b) => b.createdAt - a.createdAt);
-
-			// Debug todo states
-			console.log('Updated todos:', todos);
 		} catch (error) {
 			console.error('Error updating todos from Loro:', error);
 		}
@@ -206,14 +191,6 @@
 	async function toggleTodo(id: string) {
 		if (!isLoroReady) return;
 
-		// Debug before toggle
-		console.log('Before toggle - todos:', [...todos]);
-
-		// Per Loro docs, we need to:
-		// 1. Find the item by index
-		// 2. Delete it
-		// 3. Insert the updated version
-
 		const length = todoList.length;
 
 		for (let i = 0; i < length; i++) {
@@ -226,9 +203,6 @@
 					completed: !todo.completed,
 					createdAt: todo.createdAt
 				};
-
-				console.log('Found todo at index', i, ':', todo);
-				console.log('Will update to:', updatedTodo);
 
 				// Delete the todo at this index
 				todoList.delete(i, 1);
@@ -249,8 +223,6 @@
 					updateLastSyncTime();
 				}
 
-				// Debug after toggle
-				console.log('After toggle - todos:', [...todos]);
 				break;
 			}
 		}
@@ -298,8 +270,6 @@
 
 			// Set up listener for updates from other tabs
 			broadcastChannel.addEventListener('message', handleReceivedUpdate);
-
-			console.log('BroadcastChannel set up for real-time tab synchronization');
 		} catch (err) {
 			console.error('Error setting up BroadcastChannel:', err);
 			status = 'Error: Could not set up cross-tab communication';
@@ -308,8 +278,6 @@
 
 	// Handle sync service events
 	function handleSyncEvent(event: SyncEvent) {
-		console.log('Sync event:', event);
-
 		if (event.type === 'status-change' && event.status) {
 			syncStatus = event.status;
 
@@ -424,10 +392,6 @@
 			(window as any).loroDoc = loroDoc;
 			(window as any).todoList = todoList;
 			(window as any).syncService = syncService;
-
-			// Log initial state
-			console.log('Initial todos:', todos);
-			console.log('Loro list length:', todoList.length);
 		} catch (error: unknown) {
 			const errorMessage = error instanceof Error ? error.message : String(error);
 			status = `Error: ${errorMessage}`;
@@ -439,14 +403,12 @@
 	onDestroy(() => {
 		if (broadcastChannel) {
 			broadcastChannel.close();
-			console.log('BroadcastChannel closed');
 		}
 
 		// We don't stop the sync service here as it's managed at the layout level
 		if (syncService && syncService._hasOurListener) {
 			syncService.removeEventListener(handleSyncEvent);
 			delete syncService._hasOurListener;
-			console.log('Removed sync event listener');
 		}
 	});
 

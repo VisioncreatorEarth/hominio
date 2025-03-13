@@ -77,7 +77,6 @@ export class LoroPGLiteStorage {
         const timestamp = new Date().toISOString();
         const logMessage = `${timestamp}: ${message}`;
         this.debugInfo.push(logMessage);
-        console.log(`[LoroPGLiteStorage Debug] ${logMessage}`);
     }
 
     /**
@@ -228,7 +227,6 @@ export class LoroPGLiteStorage {
      * Public initialize method - call this to initialize the storage
      */
     async initialize(): Promise<void> {
-        console.log("Public initialize method called");
         this.initAttempts = 0;
         try {
             // Check for existing databases first
@@ -236,11 +234,9 @@ export class LoroPGLiteStorage {
 
             // Then ensure initialization
             await this.ensureInitialized();
-            console.log(`Storage initialized with mode: ${this.storageMode}`);
 
             // Check database state after initialization for diagnostics
             const state = await this.checkDatabaseState();
-            console.log("Database state after initialization:", state);
 
             // Reset the error state on successful initialization
             this.lastInitError = null;

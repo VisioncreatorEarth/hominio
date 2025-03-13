@@ -7,7 +7,10 @@
 	import { LoroDoc } from 'loro-crdt';
 	import { generateUUID, generateShortUUID } from '$lib/utils/uuid';
 
+	// Enable prerendering for all pages
 	export const prerender = true;
+	// SSR turned off for Tauri app
+	export const ssr = false;
 
 	// Context keys
 	const LORO_STORAGE_KEY = 'loro-storage';
@@ -60,8 +63,6 @@
 		const currentPath = loroPGLiteStorage.getDbPath();
 		const currentDebugInfo = loroPGLiteStorage.getDebugInfo();
 
-		console.log('Current storage mode directly from loroPGLiteStorage:', currentMode);
-
 		// Only update if there's a change to prevent infinite loops
 		if (currentMode !== storageMode || currentPath !== dbPath) {
 			storageMode = currentMode;
@@ -74,7 +75,6 @@
 	// Initialize storage before setting context
 	async function initializeStorage() {
 		if (isInitializing) {
-			console.log('Storage initialization already in progress, skipping duplicate call');
 			return false;
 		}
 
@@ -82,15 +82,12 @@
 		initAttempts++;
 
 		try {
-			console.log(`Starting storage initialization (attempt ${initAttempts}/${MAX_INIT_ATTEMPTS})`);
-
 			// Direct call to initialize the storage system
 			await loroPGLiteStorage.initialize();
 
 			// Update storage state after initialization
 			updateStorageState();
 
-			console.log('Storage initialization complete with mode:', storageMode);
 			isInitializing = false;
 			return storageMode !== 'not-initialized';
 		} catch (error) {
@@ -141,7 +138,6 @@
 	// Initialize a sync service for a Loro document
 	function initSyncService(docId: string, loroDoc: LoroDoc): LoroSyncService {
 		const syncClientId = generateUUID();
-		console.log(`Creating sync service for ${docId} with client ${syncClientId}`);
 
 		// Create the sync service with auto-start
 		const syncService = createLoroSyncService(docId, loroDoc, {
@@ -152,8 +148,6 @@
 
 		// Set up event handler for sync status updates
 		syncService.addEventListener((event) => {
-			console.log('Layout received sync event:', event);
-
 			if (event.type === 'status-change' && event.status === 'success') {
 				updateLastSyncTime();
 			}
@@ -178,10 +172,6 @@
 	$effect(() => {
 		// Update active documents count when the registry changes
 		activeDocumentsCount = Object.keys(loroDocsRegistry).length;
-
-		// Debug logging
-		console.log('Active documents updated:', activeDocumentsCount);
-		console.log('Document registry currently contains:', Object.keys(loroDocsRegistry));
 	});
 
 	// Create the storage info object for context
@@ -219,9 +209,7 @@
 	// Perform immediate initialization before mounting
 	// This helps ensure storage is ready before child components need it
 	if (typeof window !== 'undefined') {
-		console.log('Running immediate initialization');
 		initializeStorage().then((success) => {
-			console.log('Immediate initialization result:', success);
 			// Force a UI update after initialization
 			updateStorageState();
 		});
@@ -235,7 +223,6 @@
 
 			// Try initialization again if it hasn't succeeded yet
 			if (storageMode === 'not-initialized') {
-				console.log('Storage not initialized during mount, retrying');
 				await initializeStorage();
 			}
 
@@ -256,9 +243,6 @@
 					initAttempts < MAX_INIT_ATTEMPTS &&
 					!isInitializing
 				) {
-					console.log(
-						`Retrying storage initialization (attempt ${initAttempts + 1}/${MAX_INIT_ATTEMPTS})`
-					);
 					initializeStorage();
 				}
 			};
