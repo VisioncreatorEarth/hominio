@@ -8,7 +8,13 @@ const config = {
 	preprocess: vitePreprocess(),
 
 	kit: {
-		adapter: adapter()
+		// Use adapter-static with a fallback page for SPAs
+		adapter: adapter({
+			// Configure fallback for client-side routing
+			fallback: 'index.html',
+			// Don't use strict mode to allow dynamic routes
+			strict: false
+		})
 	}
 };
 

@@ -4,6 +4,7 @@ import { defineConfig } from 'vite';
 import wasm from "vite-plugin-wasm";
 import topLevelAwait from "vite-plugin-top-level-await";
 import tauriShimPlugin from "./src/lib/utils/vite-plugin-tauri-shim";
+import pgliteAssetsPlugin from "./src/lib/utils/vite-plugin-pglite";
 
 export default defineConfig({
 	plugins: [
@@ -11,7 +12,8 @@ export default defineConfig({
 		sveltekit(),
 		wasm(),
 		topLevelAwait(),
-		tauriShimPlugin()
+		tauriShimPlugin(),
+		pgliteAssetsPlugin()
 	],
 	resolve: {
 		// Handle Tauri API as external module to avoid dev-time errors
@@ -30,11 +32,11 @@ export default defineConfig({
 	build: {
 		// Make sure Rollup correctly handles WASM files for PGlite
 		rollupOptions: {
-			output: {
-				manualChunks: {
-					pglite: ['@electric-sql/pglite']
-				}
-			},
+			// output: {
+			// 	manualChunks: {
+			// 		pglite: ['@electric-sql/pglite']
+			// 	}
+			// },
 			// Mark Tauri imports as external during build
 			external: [
 				'@tauri-apps/api',
@@ -42,8 +44,12 @@ export default defineConfig({
 				'@tauri-apps/api/fs',
 				'@tauri-apps/api/core'
 			]
-		}
+		},
+		// Ensure assets are copied
+		copyPublicDir: true
 	},
 	// Properly handle WASM files for PGlite
-	assetsInclude: ['**/*.wasm', '**/*.data']
+	assetsInclude: ['**/*.wasm', '**/*.data'],
+	// Configure public directory for static assets
+	publicDir: 'static'
 });
