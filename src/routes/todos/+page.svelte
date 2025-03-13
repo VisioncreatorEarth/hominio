@@ -1,14 +1,8 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount, onDestroy, getContext } from 'svelte';
 	import { LoroDoc } from 'loro-crdt';
-	import { loroStorage } from '$lib/stores/loroStorage';
-	import { loroPGLiteStorage } from '$lib/stores/loroPGLiteStorage';
-	import {
-		createLoroSyncService,
-		type LoroSyncService,
-		type SyncEvent,
-		type SyncStatus
-	} from '$lib/services/loroSyncService';
+	import type { SyncEvent, SyncStatus } from '$lib/services/loroSyncService';
+	import type { Writable } from 'svelte/store';
 
 	// Define Todo type
 	interface Todo {
@@ -23,29 +17,52 @@
 	const TODO_DOC_TYPE = 'todos';
 	const BROADCAST_CHANNEL = 'loro-todos-sync';
 
+	// Get services from context
+	const loroStorage = getContext('loro-storage');
+	const loroDocsRegistry = getContext('loro-docs') as Writable<
+		Record<
+			string,
+			{
+				doc: LoroDoc;
+				syncService: any;
+			}
+		>
+	>;
+	const syncServices = getContext('loro-sync-services') as {
+		createSyncService: (docId: string, loroDoc: LoroDoc) => any;
+	};
+	const storageInfo = getContext('storage-info') as Writable<{
+		mode: 'native' | 'indexeddb' | 'not-initialized';
+		path: string | null;
+		debugInfo: string[];
+		isInitialized: boolean;
+		error?: string;
+	}>;
+
 	let todos: Todo[] = [];
 	let newTodoText = '';
-	let loroDoc: any = null;
+	let loroDoc: LoroDoc | null = null;
 	let todoList: any = null;
 	let status = 'Initializing...';
 	let isLoroReady = false;
 	let broadcastChannel: BroadcastChannel | null = null;
 	let lastUpdateId: string | null = null;
-	let syncService: LoroSyncService | null = null;
+	let syncService: any = null;
 	let clientId = crypto.randomUUID().slice(0, 8); // Short client ID for display
 	let syncStatus: SyncStatus = 'idle'; // 'idle', 'syncing', 'success', 'error'
 	let lastSyncTime = '';
 	let lastUpdateReceived: number | null = null;
 	let connectedClients: string[] = [];
-	let storageMode: 'native' | 'indexeddb' | 'not-initialized' = 'not-initialized';
-	let dbPath: string | null = null;
-	let showDebugInfo = false; // Add this line to track debug info visibility
+	let showDebugInfo = false;
+	let debugInfo: string[] = [];
 
 	// Function to save Loro state using PGlite
 	async function saveToStorage() {
 		try {
-			await loroStorage.saveSnapshot(TODO_DOC_ID, loroDoc, TODO_DOC_TYPE);
-			console.log('Todo state saved to storage');
+			if (loroDoc) {
+				await loroStorage.saveSnapshot(TODO_DOC_ID, loroDoc, TODO_DOC_TYPE);
+				console.log('Todo state saved to storage');
+			}
 		} catch (err) {
 			console.error('Error saving Loro state:', err);
 		}
@@ -54,10 +71,12 @@
 	// Function to load Loro state from storage
 	async function loadFromStorage() {
 		try {
-			const success = await loroStorage.loadSnapshot(TODO_DOC_ID, loroDoc);
-			if (success) {
-				console.log('Todo state loaded from storage');
-				return true;
+			if (loroDoc) {
+				const success = await loroStorage.loadSnapshot(TODO_DOC_ID, loroDoc);
+				if (success) {
+					console.log('Todo state loaded from storage');
+					return true;
+				}
 			}
 		} catch (err) {
 			console.error('Error loading Loro state:', err);
@@ -332,37 +351,6 @@
 		}
 	}
 
-	// Initialize Loro Sync Service
-	function setupSyncService() {
-		if (!loroDoc || !isLoroReady) return;
-
-		try {
-			// Create a sync service with auto-start
-			syncService = createLoroSyncService(TODO_DOC_ID, loroDoc, {
-				clientId,
-				autoStart: true, // Always auto-start
-				syncIntervalMs: 1000 // Exactly 1 second sync interval
-			});
-
-			// Add event listener for sync events
-			syncService.addEventListener(handleSyncEvent);
-
-			console.log('Loro sync service initialized with client ID:', clientId);
-			updateLastSyncTime();
-
-			// Force an initial sync immediately
-			setTimeout(() => {
-				if (syncService) {
-					console.log('Forcing initial sync');
-					syncService.syncWithServer(true); // Use high priority for initial sync
-				}
-			}, 100);
-		} catch (err) {
-			console.error('Error setting up sync service:', err);
-			status = 'Error: Could not set up sync service';
-		}
-	}
-
 	// Helper function to format time
 	function formatTime(timestamp: number): string {
 		const date = new Date(timestamp);
@@ -377,31 +365,51 @@
 	// Initialize Loro on mount
 	onMount(async () => {
 		try {
-			// Create a new Loro document
-			loroDoc = new LoroDoc();
+			// Check if we already have this loro doc in registry
+			let existingDoc = false;
+			loroDocsRegistry.update((docs) => {
+				if (docs[TODO_DOC_ID]) {
+					loroDoc = docs[TODO_DOC_ID].doc;
+					syncService = docs[TODO_DOC_ID].syncService;
+					existingDoc = true;
+				}
+				return docs;
+			});
+
+			// If not in registry, create a new one
+			if (!existingDoc) {
+				// Create a new Loro document
+				loroDoc = new LoroDoc();
+
+				// Try to load saved state from storage
+				const loaded = await loadFromStorage();
+
+				// If nothing was loaded, save the initial empty state
+				if (!loaded) {
+					await saveToStorage();
+				}
+
+				// Register the doc in our global registry
+				loroDocsRegistry.update((docs) => {
+					docs[TODO_DOC_ID] = { doc: loroDoc, syncService: null };
+					return docs;
+				});
+
+				// Set up sync service
+				syncService = syncServices.createSyncService(TODO_DOC_ID, loroDoc);
+
+				// Add event listener for sync events
+				syncService.addEventListener(handleSyncEvent);
+			} else {
+				// If reusing an existing service, still add our event listener
+				if (syncService && !syncService._hasOurListener) {
+					syncService.addEventListener(handleSyncEvent);
+					syncService._hasOurListener = true;
+				}
+			}
 
 			// Create a list for todos
 			todoList = loroDoc.getList('todos');
-
-			// Debug available methods
-			console.log(
-				'Available methods on todoList:',
-				Object.getOwnPropertyNames(Object.getPrototypeOf(todoList))
-			);
-
-			// Try to load saved state from storage
-			const loaded = await loadFromStorage();
-
-			// Remove the welcome todo initialization
-			// We'll just save the empty state if nothing was loaded
-			if (!loaded) {
-				// Save the initial empty state
-				await saveToStorage();
-			}
-
-			// Get storage mode for display
-			storageMode = loroPGLiteStorage.getStorageMode();
-			dbPath = loroPGLiteStorage.getDbPath();
 
 			// Set up BroadcastChannel for real-time sync between tabs
 			setupBroadcastChannel();
@@ -411,17 +419,10 @@
 			isLoroReady = true;
 			status = 'Ready!';
 
-			// Set up sync service for cross-device synchronization
-			setupSyncService();
-
 			// Make available for debugging
 			(window as any).loroDoc = loroDoc;
-			(window as any).loroStorage = loroStorage;
+			(window as any).todoList = todoList;
 			(window as any).syncService = syncService;
-
-			// List the snapshot history for debugging
-			const snapshots = await loroStorage.listSnapshots(TODO_DOC_ID);
-			console.log('Snapshot history:', snapshots);
 
 			// Log initial state
 			console.log('Initial todos:', todos);
@@ -440,10 +441,11 @@
 			console.log('BroadcastChannel closed');
 		}
 
-		if (syncService) {
+		// We don't stop the sync service here as it's managed at the layout level
+		if (syncService && syncService._hasOurListener) {
 			syncService.removeEventListener(handleSyncEvent);
-			syncService.stopSync();
-			console.log('Sync service stopped');
+			delete syncService._hasOurListener;
+			console.log('Removed sync event listener');
 		}
 	});
 
@@ -451,82 +453,24 @@
 	function handleSubmit() {
 		addTodo();
 	}
+
+	// Get reactive values from the storage info store
+	$: ({ mode: storageMode, path: dbPath, debugInfo } = $storageInfo);
 </script>
 
-<div class="flex flex-col items-center py-20">
-	<div class="w-full max-w-2xl rounded-lg border border-emerald-500/20 bg-blue-950 p-6 shadow-lg">
-		<h1 class="mb-6 text-3xl font-bold text-emerald-400">Loro Todo App</h1>
+<div class="min-h-full bg-blue-950 text-emerald-100">
+	<div class="mx-auto max-w-4xl">
+		<h1 class="mb-6 text-3xl font-bold text-emerald-400">Todos</h1>
 
 		{#if !isLoroReady}
-			<div class="mb-6 rounded border border-emerald-500/10 bg-blue-900/50 p-4">
-				<p class="text-emerald-100">Loading... {status}</p>
+			<!-- Loading State -->
+			<div class="p-8 text-center">
+				<div
+					class="inline-block h-8 w-8 animate-spin rounded-full border-4 border-blue-800 border-t-emerald-500"
+				></div>
+				<p class="mt-4 text-emerald-200">{status}</p>
 			</div>
 		{:else}
-			<!-- Server Sync Status -->
-			<div class="mb-6 rounded-lg border border-emerald-500/20 bg-blue-900/30 p-4">
-				<div class="flex items-center justify-between">
-					<div>
-						<h2 class="mb-2 text-xl font-semibold text-emerald-400">Cross-Device Sync</h2>
-						<p class="text-sm text-emerald-100/70">
-							Client ID: <span class="font-mono">{clientId}</span>
-						</p>
-						<p class="mt-1 text-xs text-emerald-100/50">Auto-syncing enabled</p>
-					</div>
-				</div>
-			</div>
-
-			<!-- Storage Mode Indicator -->
-			<div class="mb-6 rounded-lg border border-emerald-500/20 bg-blue-900/30 p-4">
-				<div class="flex items-center justify-between">
-					<div>
-						<h2 class="mb-2 text-xl font-semibold text-emerald-400">Storage</h2>
-						{#if storageMode === 'native'}
-							<div class="mb-2 flex items-center">
-								<span class="mr-2 inline-block h-2 w-2 rounded-full bg-emerald-400"></span>
-								<p class="text-sm font-medium text-emerald-300">Native Filesystem Storage</p>
-							</div>
-							{#if dbPath}
-								<p class="font-mono text-xs text-emerald-100/50">{dbPath}</p>
-							{/if}
-						{:else if storageMode === 'indexeddb'}
-							<div class="mb-2 flex items-center">
-								<span class="mr-2 inline-block h-2 w-2 rounded-full bg-amber-400"></span>
-								<p class="text-sm font-medium text-amber-300">Browser IndexedDB Storage</p>
-							</div>
-							<p class="text-xs text-amber-100/50">
-								For persistent filesystem storage, run in Tauri desktop app
-							</p>
-						{:else}
-							<div class="mb-2 flex items-center">
-								<span class="mr-2 inline-block h-2 w-2 rounded-full bg-gray-400"></span>
-								<p class="text-sm font-medium text-gray-300">Storage Not Initialized</p>
-							</div>
-						{/if}
-
-						<!-- Debug Button -->
-						<button
-							on:click={() => (showDebugInfo = !showDebugInfo)}
-							class="mt-2 rounded bg-blue-800 px-2 py-1 text-xs text-emerald-300 hover:bg-blue-700"
-						>
-							{showDebugInfo ? 'Hide Debug Info' : 'Show Debug Info'}
-						</button>
-
-						<!-- Debug Information Section -->
-						{#if showDebugInfo && loroPGLiteStorage.getDebugInfo().length > 0}
-							<div
-								class="mt-2 max-h-48 overflow-y-auto rounded border border-blue-800 bg-blue-950 p-2"
-							>
-								<pre class="text-xs whitespace-pre-wrap text-amber-200">
-									<code>
-										{loroPGLiteStorage.getDebugInfo().join('\n')}
-									</code>
-								</pre>
-							</div>
-						{/if}
-					</div>
-				</div>
-			</div>
-
 			<!-- Add Todo Form -->
 			<form on:submit|preventDefault={handleSubmit} class="mb-6">
 				<div class="flex gap-2">

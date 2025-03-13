@@ -70,6 +70,21 @@ export class LoroPGLiteStorage {
     }
 
     /**
+     * Public initialize method - call this to initialize the storage
+     */
+    async initialize(): Promise<void> {
+        console.log("Public initialize method called");
+        try {
+            await this.ensureInitialized();
+            console.log(`Storage initialized with mode: ${this.storageMode}`);
+        } catch (error) {
+            console.error("Failed to initialize storage:", error);
+            this.storageMode = 'not-initialized';
+            throw error;
+        }
+    }
+
+    /**
      * Initialize the database connection and schema
      */
     private async ensureInitialized(): Promise<void> {
@@ -101,7 +116,7 @@ export class LoroPGLiteStorage {
         this.initializing = true;
 
         try {
-            await this.initialize();
+            await this._initialize();
         } catch (error) {
             this.addDebugInfo(`Initialization error: ${error}`);
             throw error;
@@ -113,7 +128,7 @@ export class LoroPGLiteStorage {
     /**
      * Main initialization with simplified logic
      */
-    private async initialize(): Promise<void> {
+    private async _initialize(): Promise<void> {
         try {
             this.addDebugInfo('Starting initialization');
 
