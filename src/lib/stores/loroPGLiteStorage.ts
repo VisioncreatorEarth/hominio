@@ -1,6 +1,7 @@
 import { PGlite } from '@electric-sql/pglite';
 import type { LoroDoc, VersionVector } from 'loro-crdt';
 import { invoke } from '@tauri-apps/api/core';
+import { generateUUID } from '$lib/utils/uuid';
 
 // Type definitions for versions and metadata
 type LoroVersion = VersionVector;
@@ -707,7 +708,7 @@ export class LoroPGLiteStorage {
 
         try {
             // Generate an update ID
-            const updateId = crypto.randomUUID();
+            const updateId = generateUUID();
 
             // Export incremental update
             const updateData = loroDoc.export({ mode: 'update', from: fromVersion });

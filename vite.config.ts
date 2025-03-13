@@ -17,6 +17,13 @@ export default defineConfig({
 		// Handle Tauri API as external module to avoid dev-time errors
 		conditions: ['browser']
 	},
+	server: {
+		host: '0.0.0.0',  // Listen on all network interfaces
+		port: 5173,       // Same port as in package.json
+		strictPort: true, // Fail if port is already in use
+		// Enable HTTPS for iOS if needed (comment out if not using HTTPS)
+		// https: true,
+	},
 	optimizeDeps: {
 		exclude: ['loro-crdt', '@electric-sql/pglite', '@tauri-apps/api']
 	},

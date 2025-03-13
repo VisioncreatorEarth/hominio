@@ -3,6 +3,7 @@
 	import { LoroDoc } from 'loro-crdt';
 	import type { SyncEvent, SyncStatus } from '$lib/services/loroSyncService';
 	import type { Writable } from 'svelte/store';
+	import { generateUUID, generateShortUUID } from '$lib/utils/uuid';
 
 	// Define Todo type
 	interface Todo {
@@ -48,7 +49,7 @@
 	let broadcastChannel: BroadcastChannel | null = null;
 	let lastUpdateId: string | null = null;
 	let syncService: any = null;
-	let clientId = crypto.randomUUID().slice(0, 8); // Short client ID for display
+	let clientId = generateShortUUID(); // Short client ID for display
 	let syncStatus: SyncStatus = 'idle'; // 'idle', 'syncing', 'success', 'error'
 	let lastSyncTime = '';
 	let lastUpdateReceived: number | null = null;
@@ -93,7 +94,7 @@
 			const updates = loroDoc.export({ mode: 'update' });
 
 			// Create a unique ID for this update to prevent applying our own updates
-			const updateId = crypto.randomUUID();
+			const updateId = generateUUID();
 			lastUpdateId = updateId;
 
 			// Broadcast the updates to other tabs
@@ -178,7 +179,7 @@
 		if (!newTodoText.trim() || !isLoroReady) return;
 
 		const todo: Todo = {
-			id: crypto.randomUUID(),
+			id: generateUUID(),
 			text: newTodoText,
 			completed: false,
 			createdAt: Date.now()

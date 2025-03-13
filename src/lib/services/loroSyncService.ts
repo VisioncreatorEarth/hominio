@@ -1,4 +1,5 @@
 import type { LoroDoc } from 'loro-crdt';
+import { generateUUID } from '$lib/utils/uuid';
 
 // Define sync status types
 export type SyncStatus = 'idle' | 'syncing' | 'success' | 'error';
@@ -52,7 +53,7 @@ export class LoroSyncService {
     } = {}) {
         this.docId = docId;
         this.loroDoc = loroDoc;
-        this.clientId = options.clientId || crypto.randomUUID();
+        this.clientId = options.clientId || generateUUID();
         this.syncIntervalTime = options.syncIntervalMs || 1000; // Default: sync every 1 second (more frequent)
 
         if (options.autoStart) {
@@ -508,7 +509,7 @@ export class LoroSyncService {
         }
 
         // Generate unique update ID
-        const updateId = crypto.randomUUID();
+        const updateId = generateUUID();
 
         // Send to server
         const response = await fetch('/api/sync', {

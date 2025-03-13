@@ -5,6 +5,7 @@
 	import { loroPGLiteStorage } from '$lib/stores/loroPGLiteStorage';
 	import { createLoroSyncService, type LoroSyncService } from '$lib/services/loroSyncService';
 	import { LoroDoc } from 'loro-crdt';
+	import { generateUUID, generateShortUUID } from '$lib/utils/uuid';
 
 	export const prerender = true;
 
@@ -24,7 +25,7 @@
 	let isInitializing = $state(false);
 	let initAttempts = $state(0);
 	let activeDocumentsCount = $state(0);
-	let clientId = $state(crypto.randomUUID().slice(0, 8));
+	let clientId = $state(generateShortUUID());
 	let lastSyncTime = $state('');
 	let isStorageInitialized = $state(false);
 	let isDetailsExpanded = $state(false);
@@ -33,6 +34,9 @@
 	let loroDocsRegistry = $state<
 		Record<string, { doc: LoroDoc; syncService: LoroSyncService | null }>
 	>({});
+
+	// Initialize sync service
+	let syncService: LoroSyncService | null = $state(null);
 
 	// Helper function to format time
 	function formatTime(timestamp: number): string {
@@ -136,7 +140,7 @@
 
 	// Initialize a sync service for a Loro document
 	function initSyncService(docId: string, loroDoc: LoroDoc): LoroSyncService {
-		const syncClientId = crypto.randomUUID();
+		const syncClientId = generateUUID();
 		console.log(`Creating sync service for ${docId} with client ${syncClientId}`);
 
 		// Create the sync service with auto-start
@@ -297,12 +301,6 @@
 						</a>
 					</div>
 					<nav class="ml-10 flex items-baseline space-x-4">
-						<a
-							href="/"
-							class="rounded-md px-3 py-2 text-sm font-medium text-emerald-100 transition-colors hover:bg-blue-950 hover:text-emerald-50"
-						>
-							Home
-						</a>
 						<a
 							href="/todos"
 							class="rounded-md px-3 py-2 text-sm font-medium text-emerald-100 transition-colors hover:bg-blue-950 hover:text-emerald-50"
