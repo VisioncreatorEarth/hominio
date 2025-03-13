@@ -106,9 +106,6 @@ export class LoroSyncService {
             }
         }
 
-        // Log status changes for debugging
-        console.log(`Sync status change: ${this.currentStatus} -> ${status}`, details);
-
         this.currentStatus = status;
         this.emitEvent({
             type: 'status-change',
@@ -145,15 +142,12 @@ export class LoroSyncService {
             // Check if we haven't synced successfully in a while (3x the interval)
             const timeSinceLastSync = Date.now() - this.lastSuccessfulSync;
             if (timeSinceLastSync > this.syncIntervalTime * 3) {
-                console.warn(`No successful sync in ${timeSinceLastSync}ms, forcing sync`);
                 // Force a sync if it's been too long
                 this.forceSyncWithServer();
             } else {
                 this.syncWithServer();
             }
         }, this.syncIntervalTime);
-
-        console.log(`Started Loro sync for document ${this.docId} with client ${this.clientId}`);
     }
 
     /**
@@ -177,7 +171,6 @@ export class LoroSyncService {
         // Stop long polling
         this.stopLongPolling();
 
-        console.log(`Stopped Loro sync for document ${this.docId}`);
         this.updateStatus('idle');
     }
 
@@ -213,7 +206,6 @@ export class LoroSyncService {
         if (!this.longPollActive) return;
 
         const pollStartTime = Date.now();
-        console.log(`[${new Date(pollStartTime).toISOString()}] Starting new long poll cycle`);
 
         try {
             // Create a new abort controller for this request
@@ -221,8 +213,6 @@ export class LoroSyncService {
 
             // Build the URL with query parameters
             const url = `/api/sync?docId=${encodeURIComponent(this.docId)}&clientId=${encodeURIComponent(this.clientId)}&lastSync=${this.lastSyncTime}&longPoll=true`;
-
-            console.log(`Starting long poll: ${url}`);
 
             // Make the long polling request
             const response = await fetch(url, {
@@ -235,23 +225,17 @@ export class LoroSyncService {
                 }
             });
 
-            const pollEndTime = Date.now();
-            const pollDuration = pollEndTime - pollStartTime;
-            console.log(`[${new Date(pollEndTime).toISOString()}] Long poll completed after ${pollDuration}ms`);
-
             if (!response.ok) {
                 throw new Error(`Long polling failed: ${response.status} ${response.statusText}`);
             }
 
             const data = await response.json();
-            console.log('Long poll response:', data);
 
             // Update last sync time
             this.lastSyncTime = data.timestamp;
 
             // If updates are available, sync now
             if (data.type === 'updates-available') {
-                console.log('Long polling detected updates, syncing now');
                 this.pendingUpdates = true;
 
                 // Emit event immediately to update UI
@@ -277,7 +261,6 @@ export class LoroSyncService {
                     : Math.max(0, 1000 - (Date.now() - pollStartTime)); // Otherwise ensure at least 1 second between polls
 
                 if (waitTime > 0) {
-                    console.log(`Waiting ${waitTime}ms before starting next poll cycle${data.rateLimit ? ' (rate limited)' : ''}`);
                     await new Promise(resolve => setTimeout(resolve, waitTime));
                 }
 
@@ -287,11 +270,9 @@ export class LoroSyncService {
         } catch (error) {
             // If aborted, this is expected behavior when stopping
             if (error instanceof DOMException && error.name === 'AbortError') {
-                console.log('Long polling aborted');
                 return;
             }
 
-            console.error('Error in long polling:', error);
             this.updateStatus('error', { source: 'long-poll', error });
 
             // Increment retry count
@@ -299,7 +280,6 @@ export class LoroSyncService {
 
             // Exponential backoff for retries, but with a shorter initial delay
             const backoffTime = Math.min(1000 * Math.pow(1.5, this.retryCount - 1), 10000);
-            console.log(`Long polling retry ${this.retryCount} in ${backoffTime}ms`);
 
             // Wait a bit before retrying to avoid hammering the server
             setTimeout(() => {
@@ -316,7 +296,6 @@ export class LoroSyncService {
     private async registerWithServer(): Promise<void> {
         try {
             const url = `/api/sync?docId=${encodeURIComponent(this.docId)}&clientId=${encodeURIComponent(this.clientId)}`;
-            console.log(`Registering with server: ${url}`);
 
             const response = await fetch(url);
 
@@ -325,13 +304,11 @@ export class LoroSyncService {
             }
 
             const data = await response.json();
-            console.log(`Registered with sync server: ${this.docId}`, data);
 
             // Start from current server time
             this.lastSyncTime = data.serverTime;
             this.lastSuccessfulSync = Date.now();
         } catch (error) {
-            console.error('Error registering with sync server:', error);
             this.updateStatus('error', { source: 'register', error });
 
             // Retry registration after a delay
@@ -350,7 +327,6 @@ export class LoroSyncService {
         // If already syncing and not high priority, wait for the current sync to complete
         if (this.isSyncing && !highPriority) {
             if (this.syncPromise) {
-                console.log('Sync already in progress, waiting for it to complete');
                 return this.syncPromise;
             }
             return;
@@ -358,7 +334,6 @@ export class LoroSyncService {
 
         // If high priority, cancel any existing sync
         if (highPriority && this.isSyncing) {
-            console.log('High priority sync requested, cancelling existing sync');
             this.isSyncing = false;
         }
 
@@ -382,7 +357,6 @@ export class LoroSyncService {
      */
     private async _doSync(highPriority: boolean = false): Promise<void> {
         const syncStartTime = Date.now();
-        console.log(`Starting sync at ${new Date(syncStartTime).toISOString()}, highPriority: ${highPriority}`);
 
         try {
             // 1. Get updates from server
@@ -408,8 +382,6 @@ export class LoroSyncService {
                 }
             });
 
-            console.log(`Sync completed successfully in ${Date.now() - syncStartTime}ms`);
-
             // Reset status to idle after a delay (shorter for high priority syncs)
             if (this._statusResetTimeout) {
                 clearTimeout(this._statusResetTimeout);
@@ -422,7 +394,6 @@ export class LoroSyncService {
                 this._statusResetTimeout = undefined;
             }, highPriority ? 1000 : 3000);
         } catch (error) {
-            console.error('Error during sync:', error);
             this.updateStatus('error', { error });
 
             // Reset status to idle after a short delay
@@ -441,7 +412,6 @@ export class LoroSyncService {
             if (this.pendingUpdates) {
                 setTimeout(() => {
                     if (this.pendingUpdates) {
-                        console.log('Retrying sync due to pending updates');
                         this.forceSyncWithServer();
                     }
                 }, highPriority ? 500 : 1500);
@@ -455,41 +425,27 @@ export class LoroSyncService {
      * Pull updates from the server and apply them
      */
     private async pullUpdates(): Promise<void> {
-        const pullStartTime = Date.now();
-        console.log(`Starting pull updates at ${new Date(pullStartTime).toISOString()}`);
+        // Get available updates since last sync
+        const url = `/api/sync?docId=${encodeURIComponent(this.docId)}&clientId=${encodeURIComponent(this.clientId)}&lastSync=${this.lastSyncTime}`;
+        const response = await fetch(url);
 
-        try {
-            // Get available updates since last sync
-            const url = `/api/sync?docId=${encodeURIComponent(this.docId)}&clientId=${encodeURIComponent(this.clientId)}&lastSync=${this.lastSyncTime}`;
-            const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Failed to pull updates: ${response.status} ${response.statusText}`);
+        }
 
-            if (!response.ok) {
-                throw new Error(`Failed to pull updates: ${response.status} ${response.statusText}`);
-            }
+        const data = await response.json();
 
-            const data = await response.json();
-            console.log('Pull updates response:', data);
+        // Update last sync time
+        this.lastSyncTime = data.serverTime;
 
-            // Update last sync time
-            this.lastSyncTime = data.serverTime;
+        // No updates available
+        if (!data.updates || data.updates.length === 0) {
+            return;
+        }
 
-            // No updates available
-            if (!data.updates || data.updates.length === 0) {
-                console.log('No updates to pull');
-                return;
-            }
-
-            console.log(`Found ${data.updates.length} updates to pull`);
-
-            // Fetch and apply each update
-            for (const updateInfo of data.updates) {
-                await this.fetchAndApplyUpdate(updateInfo.updateId);
-            }
-
-            console.log(`Pull updates completed in ${Date.now() - pullStartTime}ms`);
-        } catch (error) {
-            console.error('Error pulling updates:', error);
-            throw error; // Re-throw to be handled by syncWithServer
+        // Fetch and apply each update
+        for (const updateInfo of data.updates) {
+            await this.fetchAndApplyUpdate(updateInfo.updateId);
         }
     }
 
@@ -497,105 +453,82 @@ export class LoroSyncService {
      * Fetch a specific update by ID and apply it
      */
     private async fetchAndApplyUpdate(updateId: string): Promise<void> {
-        console.log(`Fetching update: ${updateId}`);
+        // Request the specific update
+        const response = await fetch('/api/sync', {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'Cache-Control': 'no-cache'
+            },
+            body: JSON.stringify({
+                docId: this.docId,
+                updateId
+            })
+        });
 
-        try {
-            // Request the specific update
-            const response = await fetch('/api/sync', {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Cache-Control': 'no-cache'
-                },
-                body: JSON.stringify({
-                    docId: this.docId,
-                    updateId
-                })
-            });
-
-            if (!response.ok) {
-                throw new Error(`Failed to fetch update: ${response.status} ${response.statusText}`);
-            }
-
-            const updateData = await response.json();
-            console.log(`Received update data for ${updateId}:`, updateData);
-
-            if (!updateData.updates) {
-                throw new Error('Update data missing');
-            }
-
-            // Convert updates array back to Uint8Array
-            const updatesArray = new Uint8Array(updateData.updates);
-
-            // Apply the update to our local Loro doc
-            console.log(`Applying update ${updateId} to local doc`);
-            this.loroDoc.import(updatesArray);
-            console.log(`Applied update ${updateId} from client ${updateData.clientId}`);
-
-            // Emit event for received updates - force immediate UI update
-            this.emitEvent({
-                type: 'updates-received',
-                timestamp: Date.now(),
-                details: {
-                    updateId,
-                    clientId: updateData.clientId,
-                    forceUpdate: true,
-                    immediate: true
-                }
-            });
-        } catch (error) {
-            console.error(`Error applying update ${updateId}:`, error);
-            throw error;
+        if (!response.ok) {
+            throw new Error(`Failed to fetch update: ${response.status} ${response.statusText}`);
         }
+
+        const updateData = await response.json();
+
+        if (!updateData.updates) {
+            throw new Error('Update data missing');
+        }
+
+        // Convert updates array back to Uint8Array
+        const updatesArray = new Uint8Array(updateData.updates);
+
+        // Apply the update to our local Loro doc
+        this.loroDoc.import(updatesArray);
+
+        // Emit event for received updates - force immediate UI update
+        this.emitEvent({
+            type: 'updates-received',
+            timestamp: Date.now(),
+            details: {
+                updateId,
+                clientId: updateData.clientId,
+                forceUpdate: true,
+                immediate: true
+            }
+        });
     }
 
     /**
      * Push local updates to the server
      */
     private async pushUpdates(): Promise<void> {
-        const pushStartTime = Date.now();
-        console.log(`Starting push updates at ${new Date(pushStartTime).toISOString()}`);
+        // Export updates
+        const updates = this.loroDoc.export({ mode: 'update' });
 
-        try {
-            // Export updates
-            const updates = this.loroDoc.export({ mode: 'update' });
-            console.log(`Exported ${updates.length} bytes of updates`);
-
-            // Skip if no updates
-            if (updates.length === 0) {
-                console.log('No updates to push');
-                return;
-            }
-
-            // Generate unique update ID
-            const updateId = crypto.randomUUID();
-            console.log(`Pushing updates with ID ${updateId}`);
-
-            // Send to server
-            const response = await fetch('/api/sync', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    docId: this.docId,
-                    clientId: this.clientId,
-                    updates: Array.from(updates),
-                    updateId
-                })
-            });
-
-            if (!response.ok) {
-                throw new Error(`Failed to push updates: ${response.status} ${response.statusText}`);
-            }
-
-            const result = await response.json();
-            console.log(`Pushed updates to server with ID ${updateId}`, result);
-            console.log(`Push updates completed in ${Date.now() - pushStartTime}ms`);
-        } catch (error) {
-            console.error('Error pushing updates:', error);
-            throw error;
+        // Skip if no updates
+        if (updates.length === 0) {
+            return;
         }
+
+        // Generate unique update ID
+        const updateId = crypto.randomUUID();
+
+        // Send to server
+        const response = await fetch('/api/sync', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                docId: this.docId,
+                clientId: this.clientId,
+                updates: Array.from(updates),
+                updateId
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`Failed to push updates: ${response.status} ${response.statusText}`);
+        }
+
+        await response.json();
     }
 
     /**

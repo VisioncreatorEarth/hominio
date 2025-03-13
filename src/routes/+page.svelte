@@ -24,7 +24,9 @@
 			HOMINIO
 		</h1>
 		<div class="space-y-16">
-			<p class="text-4xl font-light text-emerald-100/90">Your Data. Your Privacy. Your Life.</p>
+			<p class="text-4xl font-light text-emerald-100/90">
+				Own Your Data - Own Your Money - Own Your Life.
+			</p>
 
 			<div class="text-xl text-emerald-100/80">
 				A privacy-preserving data pod and AI organizer for your digital life

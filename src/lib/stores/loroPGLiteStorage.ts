@@ -27,7 +27,7 @@ export class LoroPGLiteStorage {
     private db: PGlite | null = null;
     private initialized = false;
     private initializing = false;
-    private dbName = 'loro_storage';
+    private dbName = 'hominio';
     private dbPath: string | null = null;
     private storageMode: 'native' | 'indexeddb' | 'not-initialized' = 'not-initialized';
     private debugInfo: string[] = [];
@@ -153,7 +153,7 @@ export class LoroPGLiteStorage {
 
                 // Set the database path
                 const hominioPath = '/Users/samuelandert/.hominio';
-                this.dbPath = `${hominioPath}/loro_storage.db`;
+                this.dbPath = `${hominioPath}/hominio.db`;
                 this.addDebugInfo(`Using .hominio directory: ${this.dbPath}`);
 
                 // Ensure directory exists

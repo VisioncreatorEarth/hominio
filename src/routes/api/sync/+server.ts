@@ -61,8 +61,6 @@ function notifyClientsOfUpdates(docId: string, excludeClientId?: string) {
                 continue;
             }
 
-            console.log(`Notifying client ${clientId} of updates to document ${docId}`);
-
             // Resolve the long-polling promise to send updates to the client
             poll.resolver({
                 type: 'updates-available',
@@ -126,7 +124,6 @@ export const GET: RequestHandler = async ({ url }) => {
         if (timeSinceLastNotify < MIN_NOTIFICATION_INTERVAL) {
             // If we recently notified this client, just return no-updates
             // This prevents creating a long poll that would be immediately resolved
-            console.log(`Rate limiting poll for client ${clientId}, last notified ${timeSinceLastNotify}ms ago`);
             return json({
                 type: 'no-updates',
                 docId,
@@ -268,8 +265,7 @@ export const POST: RequestHandler = async ({ request }) => {
             success: true,
             timestamp
         });
-    } catch (error) {
-        console.error('Error processing sync update:', error);
+    } catch {
         return new Response(JSON.stringify({ error: 'Failed to process update' }), {
             status: 500,
             headers: { 'Content-Type': 'application/json' }
@@ -312,8 +308,7 @@ export const PUT: RequestHandler = async ({ request }) => {
             status: 404,
             headers: { 'Content-Type': 'application/json' }
         });
-    } catch (error) {
-        console.error('Error fetching specific update:', error);
+    } catch {
         return new Response(JSON.stringify({ error: 'Failed to fetch update' }), {
             status: 500,
             headers: { 'Content-Type': 'application/json' }

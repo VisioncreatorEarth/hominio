@@ -535,13 +535,5 @@
 				{/if}
 			</div>
 		{/if}
-
-		<!-- Footer -->
-		<div class="mt-8 text-sm text-emerald-100/60">
-			<p>This is a local-first app powered by Loro CRDT with SQL-based storage.</p>
-			<p class="mt-1">
-				Your todos are saved in your browser using PGlite (PostgreSQL in the browser).
-			</p>
-		</div>
 	</div>
 </div>
