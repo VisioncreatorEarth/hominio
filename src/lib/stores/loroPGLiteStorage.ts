@@ -129,9 +129,12 @@ export class LoroPGLiteStorage {
             // Check if Tauri is available
             try {
                 this.addDebugInfo('Checking if Tauri is available...');
-                const savedPath = await invoke('save_hello_world');
+                // Use test_fs_access instead of save_hello_world to check Tauri availability
+                const homePath = '/Users/samuelandert/.hominio';
+                const fsResult = await invoke<{ exists: boolean; is_writable: boolean }>('test_fs_access', { path: homePath });
                 this.tauriAvailable = true;
-                this.addDebugInfo(`Tauri is available! Hello world saved at: ${savedPath}`);
+                this.addDebugInfo(`Tauri is available! Filesystem access at: ${homePath}`);
+                this.addDebugInfo(`Filesystem test results: exists=${fsResult.exists}, writable=${fsResult.is_writable}`);
 
                 // Set the database path
                 const hominioPath = '/Users/samuelandert/.hominio';

@@ -4,67 +4,12 @@ use std::path::PathBuf;
 use tauri::Manager;
 
 #[derive(Serialize, Deserialize)]
-struct HelloWorld {
-    message: String,
-}
-
-#[derive(Serialize, Deserialize)]
 struct FileSystemInfo {
     path: String,
     exists: bool,
     is_writable: bool,
     created: bool,
     test_file_path: Option<String>,
-}
-
-#[tauri::command]
-fn save_hello_world(app_handle: tauri::AppHandle) -> Result<String, String> {
-    // Create the app data directory path manually
-    let app_data_dir = get_app_data_dir(&app_handle)
-        .ok_or_else(|| "Failed to get app data dir".to_string())?;
-    
-    let file_path = app_data_dir.join("hello_world.json");
-    
-    // Create directory if it doesn't exist
-    if !app_data_dir.exists() {
-        fs::create_dir_all(&app_data_dir)
-            .map_err(|e| format!("Failed to create app data directory: {}", e))?;
-    }
-    
-    // Create sample data
-    let data = HelloWorld {
-        message: "Hello, World!".to_string(),
-    };
-    
-    // Serialize and save to file
-    let json_content = serde_json::to_string_pretty(&data)
-        .map_err(|e| format!("Failed to serialize data: {}", e))?;
-    
-    fs::write(&file_path, json_content)
-        .map_err(|e| format!("Failed to write file: {}", e))?;
-    
-    Ok(file_path.to_string_lossy().to_string())
-}
-
-#[tauri::command]
-fn read_hello_world(app_handle: tauri::AppHandle) -> Result<HelloWorld, String> {
-    // Create the app data directory path manually
-    let app_data_dir = get_app_data_dir(&app_handle)
-        .ok_or_else(|| "Failed to get app data dir".to_string())?;
-    
-    let file_path = app_data_dir.join("hello_world.json");
-    
-    if !file_path.exists() {
-        return Err("File does not exist".to_string());
-    }
-    
-    let content = fs::read_to_string(&file_path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
-    
-    let data: HelloWorld = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse JSON: {}", e))?;
-    
-    Ok(data)
 }
 
 // New function to test filesystem access at any specified path
@@ -238,8 +183,6 @@ pub fn run() {
     })
     .plugin(tauri_plugin_fs::init())
     .invoke_handler(tauri::generate_handler![
-        save_hello_world, 
-        read_hello_world,
         test_fs_access,
         get_app_directories,
         get_app_dir_path,
