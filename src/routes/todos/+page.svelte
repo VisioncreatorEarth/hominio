@@ -39,6 +39,7 @@
 	let connectedClients: string[] = [];
 	let storageMode: 'native' | 'indexeddb' | 'not-initialized' = 'not-initialized';
 	let dbPath: string | null = null;
+	let showDebugInfo = false; // Add this line to track debug info visibility
 
 	// Function to save Loro state using PGlite
 	async function saveToStorage() {
@@ -505,6 +506,27 @@
 							<div class="mb-2 flex items-center">
 								<span class="mr-2 inline-block h-2 w-2 rounded-full bg-gray-400"></span>
 								<p class="text-sm font-medium text-gray-300">Storage Not Initialized</p>
+							</div>
+						{/if}
+
+						<!-- Debug Button -->
+						<button
+							on:click={() => (showDebugInfo = !showDebugInfo)}
+							class="mt-2 rounded bg-blue-800 px-2 py-1 text-xs text-emerald-300 hover:bg-blue-700"
+						>
+							{showDebugInfo ? 'Hide Debug Info' : 'Show Debug Info'}
+						</button>
+
+						<!-- Debug Information Section -->
+						{#if showDebugInfo && loroPGLiteStorage.getDebugInfo().length > 0}
+							<div
+								class="mt-2 max-h-48 overflow-y-auto rounded border border-blue-800 bg-blue-950 p-2"
+							>
+								<pre class="text-xs whitespace-pre-wrap text-amber-200">
+									<code>
+										{loroPGLiteStorage.getDebugInfo().join('\n')}
+									</code>
+								</pre>
 							</div>
 						{/if}
 					</div>

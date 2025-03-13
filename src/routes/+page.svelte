@@ -10,6 +10,10 @@
 	let error = '';
 	let isNativeFileSystemAvailable = false;
 	let lastChecked = null;
+	let customPath = '';
+	let fsTestResult = null;
+	let availableDirectories = [];
+	let selectedDirectory = '';
 
 	// Helper function to check if running in Tauri
 	function isTauri() {
@@ -30,6 +34,18 @@
 			lastChecked = new Date();
 			console.log('Native filesystem is available', savedPath);
 			isLoading = false;
+
+			// If we have filesystem access, get available directories
+			try {
+				availableDirectories = await invoke('get_app_directories');
+				console.log('Available directories:', availableDirectories);
+				if (availableDirectories.length > 0) {
+					selectedDirectory = availableDirectories[0];
+				}
+			} catch (err) {
+				console.error('Failed to get app directories:', err);
+			}
+
 			return true;
 		} catch (err) {
 			console.error('Native filesystem check failed:', err);
@@ -69,6 +85,33 @@
 		} catch (err) {
 			console.error('Error reading file:', err);
 			error = `Error reading file: ${err}`;
+		} finally {
+			isLoading = false;
+		}
+	}
+
+	// Test filesystem access at a custom path
+	async function testFsAccess() {
+		try {
+			isLoading = true;
+			error = '';
+			fsTestResult = null;
+
+			// Use either the custom path or selected directory
+			const testPath = customPath.trim() || selectedDirectory;
+
+			if (!testPath) {
+				error = 'Please enter a path or select a directory';
+				isLoading = false;
+				return;
+			}
+
+			fsTestResult = await invoke('test_fs_access', { path: testPath });
+			console.log('Filesystem test result:', fsTestResult);
+		} catch (err) {
+			console.error('Error testing filesystem access:', err);
+			error = `Error testing filesystem: ${err}`;
+			fsTestResult = null;
 		} finally {
 			isLoading = false;
 		}
@@ -139,6 +182,107 @@
 						</div>
 					</div>
 				{/if}
+
+				<!-- Enhanced filesystem testing for PGlite preparation -->
+				<div class="mt-8 border-t border-emerald-500/20 pt-6">
+					<h3 class="mb-4 text-xl font-semibold text-emerald-400">PGlite Filesystem Access Test</h3>
+
+					<!-- Available directories -->
+					{#if availableDirectories.length > 0}
+						<div class="mb-4">
+							<label class="mb-2 block text-emerald-300">Select a directory to test:</label>
+							<select
+								bind:value={selectedDirectory}
+								class="w-full rounded border border-blue-800 bg-blue-900/70 p-2 text-emerald-100 focus:border-emerald-500 focus:outline-none"
+							>
+								{#each availableDirectories as dir}
+									<option value={dir}>{dir}</option>
+								{/each}
+							</select>
+						</div>
+					{/if}
+
+					<!-- Custom path input -->
+					<div class="mb-4">
+						<label class="mb-2 block text-emerald-300">Or enter a custom directory path:</label>
+						<input
+							type="text"
+							bind:value={customPath}
+							placeholder="/path/to/directory"
+							class="w-full rounded border border-blue-800 bg-blue-900/70 p-2 text-emerald-100 placeholder-emerald-100/50 focus:border-emerald-500 focus:outline-none"
+						/>
+					</div>
+
+					<button
+						on:click={testFsAccess}
+						class="rounded-lg bg-blue-700 px-4 py-2 font-medium text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+						disabled={isLoading}
+					>
+						{isLoading ? 'Testing...' : 'Test Filesystem Access'}
+					</button>
+
+					{#if fsTestResult}
+						<div class="mt-4 rounded-lg border border-emerald-500/30 bg-blue-900/30 p-4">
+							<h4 class="mb-2 font-semibold text-emerald-300">Test Results:</h4>
+							<ul class="space-y-2 text-sm">
+								<li>
+									<span class="font-medium text-emerald-200">Path tested:</span>
+									<span class="ml-2 font-mono text-emerald-100">{fsTestResult.path}</span>
+								</li>
+								<li>
+									<span class="font-medium text-emerald-200">Exists:</span>
+									<span class="ml-2">
+										{#if fsTestResult.exists}
+											<span class="text-emerald-400">Yes</span>
+										{:else}
+											<span class="text-amber-400">No</span>
+										{/if}
+									</span>
+								</li>
+								<li>
+									<span class="font-medium text-emerald-200">Created:</span>
+									<span class="ml-2">
+										{#if fsTestResult.created}
+											<span class="text-emerald-400">Yes (directory was created)</span>
+										{:else}
+											<span class="text-emerald-100">No (directory already existed)</span>
+										{/if}
+									</span>
+								</li>
+								<li>
+									<span class="font-medium text-emerald-200">Is writable:</span>
+									<span class="ml-2">
+										{#if fsTestResult.is_writable}
+											<span class="text-emerald-400">Yes</span>
+										{:else}
+											<span class="text-red-400">No</span>
+										{/if}
+									</span>
+								</li>
+								{#if fsTestResult.test_file_path}
+									<li>
+										<span class="font-medium text-emerald-200">Test file created at:</span>
+										<span class="ml-2 font-mono text-xs text-emerald-100"
+											>{fsTestResult.test_file_path}</span
+										>
+									</li>
+								{/if}
+							</ul>
+
+							<div class="mt-4 rounded border border-emerald-500/20 bg-emerald-500/10 p-3">
+								<p class="text-sm text-emerald-200">
+									{#if fsTestResult.is_writable}
+										<span class="font-semibold">✓ Success!</span> This location is suitable for PGlite
+										database storage.
+									{:else}
+										<span class="font-semibold text-amber-400">✗ Warning:</span> This location is not
+										writable and cannot be used for PGlite database storage.
+									{/if}
+								</p>
+							</div>
+						</div>
+					{/if}
+				</div>
 
 				{#if lastChecked}
 					<div class="mt-4 text-xs text-emerald-200/50">
