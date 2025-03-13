@@ -181,6 +181,48 @@ fn create_directory(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/**
+ * Read text content from a file
+ */
+#[tauri::command]
+fn read_text_file(path: String) -> Result<String, String> {
+    let path_buf = PathBuf::from(&path);
+    
+    // Check if file exists
+    if !path_buf.exists() {
+        return Err(format!("File does not exist: {}", path));
+    }
+    
+    // Read file content
+    match fs::read_to_string(&path_buf) {
+        Ok(content) => Ok(content),
+        Err(e) => Err(format!("Failed to read file: {}", e))
+    }
+}
+
+/**
+ * Write text content to a file
+ */
+#[tauri::command]
+fn write_text_file(path: String, contents: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    
+    // Ensure parent directory exists
+    if let Some(parent) = path_buf.parent() {
+        if !parent.exists() {
+            if let Err(e) = fs::create_dir_all(parent) {
+                return Err(format!("Failed to create parent directories: {}", e));
+            }
+        }
+    }
+    
+    // Write content to file
+    match fs::write(&path_buf, contents) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("Failed to write file: {}", e))
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -201,7 +243,9 @@ pub fn run() {
         test_fs_access,
         get_app_directories,
         get_app_dir_path,
-        create_directory
+        create_directory,
+        read_text_file,
+        write_text_file
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

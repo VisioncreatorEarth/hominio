@@ -392,16 +392,10 @@
 			// Try to load saved state from storage
 			const loaded = await loadFromStorage();
 
-			if (!loaded && todoList.length === 0) {
-				// Add a welcome todo if empty
-				todoList.push({
-					id: crypto.randomUUID(),
-					text: 'Welcome to Loro Todo! This is a local-first app with SQL-based storage.',
-					completed: false,
-					createdAt: Date.now()
-				});
-
-				// Save the initial state
+			// Remove the welcome todo initialization
+			// We'll just save the empty state if nothing was loaded
+			if (!loaded) {
+				// Save the initial empty state
 				await saveToStorage();
 			}
 

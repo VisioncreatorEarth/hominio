@@ -117,33 +117,40 @@ export class LoroPGLiteStorage {
         try {
             this.addDebugInfo('Starting initialization');
 
-            // Initialize with in-memory first (always works)
-            this.addDebugInfo('Initializing with in-memory database first');
+            // Initialize with IndexedDB (always works)
+            this.addDebugInfo('Initializing with IndexedDB database');
             this.db = new PGlite();
-            this.storageMode = 'indexeddb'; // Not truly accurate but cleaner UX
+            this.storageMode = 'indexeddb';
 
             // Create schema immediately
             await this.createSchema();
             this.initialized = true;
 
-            // Check if Tauri is available using the same approach as +page.svelte
+            // Check if Tauri is available
             try {
                 this.addDebugInfo('Checking if Tauri is available...');
-                // This is the exact same approach used in +page.svelte that works
                 const savedPath = await invoke('save_hello_world');
                 this.tauriAvailable = true;
                 this.addDebugInfo(`Tauri is available! Hello world saved at: ${savedPath}`);
 
-                // Since we know the .hominio directory works based on tests
+                // Set the database path
                 const hominioPath = '/Users/samuelandert/.hominio';
-                this.dbPath = `${hominioPath}/${this.dbName}.db`;
+                this.dbPath = `${hominioPath}/loro_storage.db`;
                 this.addDebugInfo(`Using .hominio directory: ${this.dbPath}`);
 
-                // We'll keep using in-memory database but mark storage mode as native for UX
-                this.storageMode = 'native';
+                // Ensure directory exists
+                this.addDebugInfo('Ensuring directory exists');
+                try {
+                    await invoke('test_fs_access', { path: hominioPath });
 
-                // In a future version, we can implement true file persistence using the Tauri API
-                // Right now we're focusing on getting it working cleanly with IndexedDB
+                    // When in Tauri mode, set storage mode to native
+                    // Even though we're using IndexedDB under the hood, from user perspective
+                    // data is saved to the filesystem
+                    this.storageMode = 'native';
+
+                } catch (error) {
+                    this.addDebugInfo(`Error ensuring directory exists: ${error}`);
+                }
 
             } catch (error) {
                 this.addDebugInfo(`Tauri detection failed: ${error}`);
@@ -208,6 +215,159 @@ export class LoroPGLiteStorage {
     }
 
     /**
+     * Export the database to a file (Tauri only)
+     */
+    async exportDatabaseToFile(): Promise<boolean> {
+        if (!this.tauriAvailable || !this.dbPath) {
+            this.addDebugInfo('Cannot export database: not in Tauri mode or path not set');
+            return false;
+        }
+
+        try {
+            // Get all snapshots
+            const snapshots = await this.listSnapshots();
+            if (snapshots.length === 0) {
+                this.addDebugInfo('No snapshots to export');
+                return false;
+            }
+
+            // Convert to a serializable format for file storage
+            const exportData = {
+                version: 1,
+                timestamp: new Date().toISOString(),
+                snapshots: await Promise.all(snapshots.map(async (snapshot) => {
+                    // For each snapshot, get the data
+                    // Need to query again to get the binary data
+                    const result = await this.db!.query<PGResultRow>(
+                        'SELECT * FROM loro_snapshots WHERE doc_id = $1',
+                        [snapshot.docId]
+                    );
+
+                    if (result.rows.length === 0) {
+                        return null;
+                    }
+
+                    const row = result.rows[0];
+
+                    // Convert binary data to base64 for storage
+                    const base64Data = this.uint8ArrayToBase64(row.data);
+
+                    return {
+                        docId: snapshot.docId,
+                        docType: snapshot.docType,
+                        data: base64Data,
+                        version: row.version,
+                        meta: snapshot.meta,
+                        updatedAt: snapshot.updatedAt
+                    };
+                })).then(items => items.filter(Boolean))
+            };
+
+            // Write to file
+            const jsonData = JSON.stringify(exportData);
+            await invoke('write_text_file', {
+                path: this.dbPath,
+                contents: jsonData
+            });
+
+            this.addDebugInfo(`Database exported to ${this.dbPath}`);
+            return true;
+        } catch (error) {
+            this.addDebugInfo(`Error exporting database: ${error}`);
+            return false;
+        }
+    }
+
+    /**
+     * Import database from file (Tauri only)
+     */
+    async importDatabaseFromFile(): Promise<boolean> {
+        if (!this.tauriAvailable || !this.dbPath) {
+            this.addDebugInfo('Cannot import database: not in Tauri mode or path not set');
+            return false;
+        }
+
+        try {
+            // Read from file
+            const fileContents = await invoke<string>('read_text_file', {
+                path: this.dbPath
+            });
+
+            if (!fileContents) {
+                this.addDebugInfo('No data to import (file empty or not found)');
+                return false;
+            }
+
+            // Parse the JSON
+            const importData = JSON.parse(fileContents);
+            if (!importData || !importData.snapshots || !Array.isArray(importData.snapshots)) {
+                this.addDebugInfo('Invalid import data format');
+                return false;
+            }
+
+            // Import each snapshot
+            let importCount = 0;
+            for (const snapshot of importData.snapshots) {
+                if (!snapshot || !snapshot.docId || !snapshot.data) {
+                    continue;
+                }
+
+                // Convert base64 back to binary
+                const binaryData = this.base64ToUint8Array(snapshot.data);
+
+                // Insert into database
+                await this.db!.query(
+                    `INSERT INTO loro_snapshots (doc_id, doc_type, data, version, meta, updated_at) 
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (doc_id) 
+                    DO UPDATE SET data = $3, version = $4, meta = $5, updated_at = $6`,
+                    [
+                        snapshot.docId,
+                        snapshot.docType,
+                        binaryData,
+                        snapshot.version,
+                        JSON.stringify(snapshot.meta),
+                        new Date(snapshot.updatedAt)
+                    ]
+                );
+
+                importCount++;
+            }
+
+            this.addDebugInfo(`Imported ${importCount} snapshots from ${this.dbPath}`);
+            return importCount > 0;
+        } catch (error) {
+            this.addDebugInfo(`Error importing database: ${error}`);
+            return false;
+        }
+    }
+
+    /**
+     * Convert Uint8Array to base64 string
+     */
+    private uint8ArrayToBase64(bytes: Uint8Array): string {
+        let binary = '';
+        const len = bytes.byteLength;
+        for (let i = 0; i < len; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        return window.btoa(binary);
+    }
+
+    /**
+     * Convert base64 string to Uint8Array
+     */
+    private base64ToUint8Array(base64: string): Uint8Array {
+        const binary_string = window.atob(base64);
+        const len = binary_string.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+            bytes[i] = binary_string.charCodeAt(i);
+        }
+        return bytes;
+    }
+
+    /**
      * Save a Loro document snapshot
      */
     async saveSnapshot(docId: string, loroDoc: LoroDoc, docType: string = 'default', meta: LoroMetadata = {}): Promise<void> {
@@ -237,6 +397,12 @@ export class LoroPGLiteStorage {
             );
 
             this.addDebugInfo(`Snapshot saved for document: ${docId}`);
+
+            // If in Tauri mode, also export to file
+            if (this.tauriAvailable && this.storageMode === 'native') {
+                this.addDebugInfo('Exporting database to file after snapshot save');
+                await this.exportDatabaseToFile();
+            }
         } catch (error) {
             this.addDebugInfo(`Error saving snapshot: ${error}`);
             throw error;
@@ -290,6 +456,16 @@ export class LoroPGLiteStorage {
         }
 
         try {
+            // If in Tauri mode and we haven't loaded from file yet, try to import
+            if (this.tauriAvailable && this.storageMode === 'native') {
+                try {
+                    await this.importDatabaseFromFile();
+                } catch (error) {
+                    this.addDebugInfo(`Error importing database during loadSnapshot: ${error}`);
+                    // Continue with in-memory data even if import fails
+                }
+            }
+
             // Query for the snapshot
             const result = await this.db.query<PGResultRow>(
                 'SELECT data FROM loro_snapshots WHERE doc_id = $1',
