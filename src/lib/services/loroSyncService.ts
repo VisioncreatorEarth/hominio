@@ -36,6 +36,7 @@ export class LoroSyncService {
     private lastSuccessfulSync: number = 0;
     private syncPromise: Promise<void> | null = null;
     private pendingUpdates: boolean = false;
+    private logEnabled: boolean = true; // Enable logging by default
 
     // Store timeout ID for status reset
     private _statusResetTimeout: number | undefined = undefined;
@@ -56,8 +57,30 @@ export class LoroSyncService {
         this.clientId = options.clientId || generateUUID();
         this.syncIntervalTime = options.syncIntervalMs || 1000; // Default: sync every 1 second (more frequent)
 
+        this.log(`LoroSyncService created for document: ${docId}`);
+        this.log(`Client ID: ${this.clientId}`);
+        this.log(`Sync interval: ${this.syncIntervalTime}ms`);
+
         if (options.autoStart) {
             this.startSync();
+        }
+    }
+
+    /**
+     * Internal logging function
+     */
+    private log(message: string): void {
+        if (this.logEnabled) {
+            console.log(`LoroSyncService [${this.docId}]: ${message}`);
+        }
+    }
+
+    /**
+     * Internal error logging function
+     */
+    private logError(message: string, error?: Error | unknown): void {
+        if (this.logEnabled) {
+            console.error(`LoroSyncService [${this.docId}] ERROR: ${message}`, error);
         }
     }
 
@@ -66,6 +89,7 @@ export class LoroSyncService {
      */
     public addEventListener(listener: SyncEventListener): void {
         this.eventListeners.push(listener);
+        this.log(`Event listener added (total: ${this.eventListeners.length})`);
     }
 
     /**
@@ -73,17 +97,19 @@ export class LoroSyncService {
      */
     public removeEventListener(listener: SyncEventListener): void {
         this.eventListeners = this.eventListeners.filter(l => l !== listener);
+        this.log(`Event listener removed (remaining: ${this.eventListeners.length})`);
     }
 
     /**
      * Emit an event to all listeners
      */
     private emitEvent(event: SyncEvent): void {
+        this.log(`Emitting event: ${event.type}${event.status ? `, status: ${event.status}` : ''}`);
         for (const listener of this.eventListeners) {
             try {
                 listener(event);
             } catch (error) {
-                console.error('Error in sync event listener:', error);
+                this.logError('Error in sync event listener:', error);
             }
         }
     }
@@ -107,6 +133,7 @@ export class LoroSyncService {
             }
         }
 
+        this.log(`Status changing from ${this.currentStatus} to ${status}`);
         this.currentStatus = status;
         this.emitEvent({
             type: 'status-change',
@@ -127,34 +154,43 @@ export class LoroSyncService {
      * Start the automatic synchronization
      */
     public startSync(): void {
+        this.log(`Starting sync service`);
         if (this.syncInterval) {
+            this.log('Stopping existing sync before starting new one');
             this.stopSync(); // Stop any existing interval
         }
 
         // Register with the server
+        this.log('Registering with server');
         this.registerWithServer();
 
         // Start long polling for updates
+        this.log('Starting long polling');
         this.startLongPolling();
 
         // Also set a backup interval for regular syncs
         // This ensures we still sync even if long polling fails
+        this.log(`Setting up sync interval with ${this.syncIntervalTime}ms period`);
         this.syncInterval = window.setInterval(() => {
             // Check if we haven't synced successfully in a while (3x the interval)
             const timeSinceLastSync = Date.now() - this.lastSuccessfulSync;
             if (timeSinceLastSync > this.syncIntervalTime * 3) {
                 // Force a sync if it's been too long
+                this.log(`No successful sync in ${timeSinceLastSync}ms, forcing sync`);
                 this.forceSyncWithServer();
             } else {
                 this.syncWithServer();
             }
         }, this.syncIntervalTime);
+
+        this.log('Sync service started successfully');
     }
 
     /**
      * Force a sync even if one is in progress
      */
     private forceSyncWithServer(): void {
+        this.log('Forcing sync with server (overriding in-progress sync)');
         // Reset the syncing flag to force a new sync
         this.isSyncing = false;
         this.syncWithServer();
@@ -164,6 +200,7 @@ export class LoroSyncService {
      * Stop the automatic synchronization
      */
     public stopSync(): void {
+        this.log('Stopping sync service');
         if (this.syncInterval) {
             clearInterval(this.syncInterval);
             this.syncInterval = null;
@@ -173,14 +210,19 @@ export class LoroSyncService {
         this.stopLongPolling();
 
         this.updateStatus('idle');
+        this.log('Sync service stopped');
     }
 
     /**
      * Start long polling for updates
      */
     private startLongPolling(): void {
-        if (this.longPollActive) return;
+        if (this.longPollActive) {
+            this.log('Long polling already active, not starting again');
+            return;
+        }
 
+        this.log('Starting long polling for updates');
         this.longPollActive = true;
         this.abortController = new AbortController();
 
@@ -192,6 +234,7 @@ export class LoroSyncService {
      * Stop long polling
      */
     private stopLongPolling(): void {
+        this.log('Stopping long polling');
         this.longPollActive = false;
 
         if (this.abortController) {
@@ -204,9 +247,14 @@ export class LoroSyncService {
      * Long polling loop to receive real-time updates
      */
     private async longPollLoop(): Promise<void> {
-        if (!this.longPollActive) return;
+        if (!this.longPollActive) {
+            this.log('Long polling inactive, exiting loop');
+            return;
+        }
 
         const pollStartTime = Date.now();
+        this.log('Starting long poll request');
+        let responseData: Record<string, any> | null = null;
 
         try {
             // Create a new abort controller for this request
@@ -214,40 +262,54 @@ export class LoroSyncService {
 
             // Build the URL with query parameters
             const url = `/api/sync?docId=${encodeURIComponent(this.docId)}&clientId=${encodeURIComponent(this.clientId)}&lastSync=${this.lastSyncTime}&longPoll=true`;
+            this.log(`Long poll URL: ${url}`);
 
             // Make the long polling request
-            const response = await fetch(url, {
-                signal: this.abortController.signal,
-                // Add cache control to prevent caching of long poll requests
-                headers: {
-                    'Cache-Control': 'no-cache, no-store, must-revalidate',
-                    'Pragma': 'no-cache',
-                    'Expires': '0'
-                }
-            });
-
-            if (!response.ok) {
-                throw new Error(`Long polling failed: ${response.status} ${response.statusText}`);
-            }
-
-            const data = await response.json();
-
-            // Update last sync time
-            this.lastSyncTime = data.timestamp;
-
-            // If updates are available, sync now
-            if (data.type === 'updates-available') {
-                this.pendingUpdates = true;
-
-                // Emit event immediately to update UI
-                this.emitEvent({
-                    type: 'updates-received',
-                    timestamp: Date.now(),
-                    details: { source: 'long-poll', forceUpdate: true }
+            try {
+                this.log('Sending long poll request');
+                const response = await fetch(url, {
+                    signal: this.abortController.signal,
+                    // Add cache control to prevent caching of long poll requests
+                    headers: {
+                        'Cache-Control': 'no-cache, no-store, must-revalidate',
+                        'Pragma': 'no-cache',
+                        'Expires': '0'
+                    }
                 });
 
-                // Sync with server with high priority
-                await this.syncWithServer(true);
+                if (!response.ok) {
+                    this.logError(`Long poll response not OK: ${response.status} ${response.statusText}`);
+                    throw new Error(`Long polling failed: ${response.status} ${response.statusText}`);
+                }
+
+                this.log('Long poll response received successfully');
+                responseData = await response.json();
+                this.log(`Long poll response data: ${JSON.stringify(responseData)}`);
+
+                // Update last sync time
+                this.lastSyncTime = responseData.timestamp;
+
+                // If updates are available, sync now
+                if (responseData.type === 'updates-available') {
+                    this.log('Updates available, marking pending');
+                    this.pendingUpdates = true;
+
+                    // Emit event immediately to update UI
+                    this.emitEvent({
+                        type: 'updates-received',
+                        timestamp: Date.now(),
+                        details: { source: 'long-poll', forceUpdate: true }
+                    });
+
+                    // Sync with server with high priority
+                    this.log('Starting high-priority sync due to updates');
+                    await this.syncWithServer(true);
+                } else {
+                    this.log('No updates in long poll response');
+                }
+            } catch (fetchError) {
+                this.logError('Error during long poll fetch:', fetchError);
+                throw fetchError;
             }
 
             // Reset retry count on successful poll
@@ -257,23 +319,28 @@ export class LoroSyncService {
             if (this.longPollActive) {
                 // Calculate how long to wait before the next poll
                 // If we got a rate limit response, wait the full interval
-                const waitTime = data.rateLimit
+                const waitTime = responseData?.rateLimit
                     ? 1000 // Wait full second if rate limited
                     : Math.max(0, 1000 - (Date.now() - pollStartTime)); // Otherwise ensure at least 1 second between polls
 
                 if (waitTime > 0) {
+                    this.log(`Waiting ${waitTime}ms before next long poll`);
                     await new Promise(resolve => setTimeout(resolve, waitTime));
                 }
 
                 // Start the next poll
                 this.longPollLoop();
+            } else {
+                this.log('Long polling deactivated, not continuing loop');
             }
         } catch (error) {
             // If aborted, this is expected behavior when stopping
             if (error instanceof DOMException && error.name === 'AbortError') {
+                this.log('Long poll aborted (expected during shutdown)');
                 return;
             }
 
+            this.logError('Long polling error:', error);
             this.updateStatus('error', { source: 'long-poll', error });
 
             // Increment retry count
@@ -281,11 +348,15 @@ export class LoroSyncService {
 
             // Exponential backoff for retries, but with a shorter initial delay
             const backoffTime = Math.min(1000 * Math.pow(1.5, this.retryCount - 1), 10000);
+            this.log(`Retry ${this.retryCount} scheduled in ${backoffTime}ms`);
 
             // Wait a bit before retrying to avoid hammering the server
             setTimeout(() => {
                 if (this.longPollActive) {
+                    this.log(`Retrying long poll after backoff (attempt ${this.retryCount})`);
                     this.longPollLoop();
+                } else {
+                    this.log('Long polling deactivated during backoff, not continuing');
                 }
             }, backoffTime);
         }
@@ -297,25 +368,40 @@ export class LoroSyncService {
     private async registerWithServer(): Promise<void> {
         try {
             const url = `/api/sync?docId=${encodeURIComponent(this.docId)}&clientId=${encodeURIComponent(this.clientId)}`;
+            this.log(`Registering with server: ${url}`);
 
-            const response = await fetch(url);
+            try {
+                const response = await fetch(url);
 
-            if (!response.ok) {
-                throw new Error(`Failed to register: ${response.status} ${response.statusText}`);
+                if (!response.ok) {
+                    this.logError(`Registration response not OK: ${response.status} ${response.statusText}`);
+                    throw new Error(`Failed to register: ${response.status} ${response.statusText}`);
+                }
+
+                this.log('Registration response received');
+                const data = await response.json();
+                this.log(`Registration data: ${JSON.stringify(data)}`);
+
+                // Start from current server time
+                this.lastSyncTime = data.serverTime;
+                this.lastSuccessfulSync = Date.now();
+                this.log(`Registered successfully, server time: ${new Date(data.serverTime).toISOString()}`);
+            } catch (fetchError) {
+                this.logError('Error fetching during registration:', fetchError);
+                throw fetchError;
             }
-
-            const data = await response.json();
-
-            // Start from current server time
-            this.lastSyncTime = data.serverTime;
-            this.lastSuccessfulSync = Date.now();
         } catch (error) {
+            this.logError('Registration error:', error);
             this.updateStatus('error', { source: 'register', error });
 
             // Retry registration after a delay
+            this.log('Scheduling registration retry in 5s');
             setTimeout(() => {
                 if (this.syncInterval) {  // Only retry if we're still supposed to be syncing
+                    this.log('Retrying registration');
                     this.registerWithServer();
+                } else {
+                    this.log('Sync no longer active, skipping registration retry');
                 }
             }, 5000);
         }
@@ -325,8 +411,11 @@ export class LoroSyncService {
      * Manually trigger a sync with the server
      */
     public async syncWithServer(highPriority: boolean = false): Promise<void> {
+        this.log(`Sync requested (priority: ${highPriority ? 'high' : 'normal'})`);
+
         // If already syncing and not high priority, wait for the current sync to complete
         if (this.isSyncing && !highPriority) {
+            this.log('Already syncing and not high priority, waiting for current sync');
             if (this.syncPromise) {
                 return this.syncPromise;
             }
@@ -335,17 +424,22 @@ export class LoroSyncService {
 
         // If high priority, cancel any existing sync
         if (highPriority && this.isSyncing) {
+            this.log('High priority sync, canceling existing sync');
             this.isSyncing = false;
         }
 
         this.isSyncing = true;
         this.updateStatus('syncing');
+        this.log('Sync started');
 
         // Create a promise that we can return to callers
         this.syncPromise = this._doSync(highPriority);
 
         try {
             await this.syncPromise;
+            this.log('Sync completed successfully');
+        } catch (error) {
+            this.logError('Sync failed:', error);
         } finally {
             this.syncPromise = null;
         }

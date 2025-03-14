@@ -77,6 +77,8 @@ export class LoroPGLiteStorage {
         const timestamp = new Date().toISOString();
         const logMessage = `${timestamp}: ${message}`;
         this.debugInfo.push(logMessage);
+        // Also log to console for visibility during development
+        console.log(`PGLite: ${message}`);
     }
 
     /**
@@ -84,7 +86,9 @@ export class LoroPGLiteStorage {
      * This checks for the __TAURI__ global object which is only present in Tauri apps
      */
     private isTauriEnvironment(): boolean {
-        return typeof window !== 'undefined' && '__TAURI__' in window;
+        const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
+        this.addDebugInfo(`Tauri environment check: ${isTauri ? 'YES' : 'NO'}`);
+        return isTauri;
     }
 
     /**
@@ -176,25 +180,26 @@ export class LoroPGLiteStorage {
         if (this.initialized && this.db) {
             try {
                 this.addDebugInfo('Checking database tables...');
-                const schemaCheck = await this.db.query("SELECT name FROM sqlite_master WHERE type='table'");
+                // Don't query sqlite_master directly as it may not exist in PGLite
+                // Try to query our known tables instead
+                try {
+                    // First try if our table exists by querying it directly
+                    const countResult = await this.db.query("SELECT COUNT(*) as count FROM loro_snapshots");
+                    const count = (countResult.rows[0] as { count: number }).count;
+                    result.tablesFound.push('loro_snapshots');
+                    result.documentCount = count;
+                    this.addDebugInfo(`Found loro_snapshots table with ${count} documents`);
+                } catch (tableError) {
+                    this.addDebugInfo(`loro_snapshots table not found: ${tableError}`);
+                }
 
-                this.addDebugInfo(`Found ${schemaCheck.rows.length} tables in the database`);
-
-                for (const row of schemaCheck.rows) {
-                    const tableName = (row as { name: string }).name;
-                    result.tablesFound.push(tableName);
-                    this.addDebugInfo(`Found table: ${tableName}`);
-
-                    // If it's the loro_snapshots table, count documents
-                    if (tableName === 'loro_snapshots') {
-                        try {
-                            const countResult = await this.db.query("SELECT COUNT(*) as count FROM loro_snapshots");
-                            result.documentCount = (countResult.rows[0] as { count: number }).count;
-                            this.addDebugInfo(`Found ${result.documentCount} documents in loro_snapshots table`);
-                        } catch (countError) {
-                            this.addDebugInfo(`Error counting documents: ${countError}`);
-                        }
-                    }
+                // Try updates table too
+                try {
+                    await this.db.query("SELECT COUNT(*) as count FROM loro_updates");
+                    result.tablesFound.push('loro_updates');
+                    this.addDebugInfo(`Found loro_updates table`);
+                } catch (tableError) {
+                    this.addDebugInfo(`loro_updates table not found: ${tableError}`);
                 }
             } catch (error) {
                 this.addDebugInfo(`Error checking database schema: ${error}`);
@@ -235,8 +240,8 @@ export class LoroPGLiteStorage {
             // Then ensure initialization
             await this.ensureInitialized();
 
-            // Check database state after initialization for diagnostics
-            const state = await this.checkDatabaseState();
+            // Check database state after initialization for diagnostics - for debugging purposes
+            await this.checkDatabaseState();
 
             // Reset the error state on successful initialization
             this.lastInitError = null;
@@ -330,17 +335,28 @@ export class LoroPGLiteStorage {
             this.addDebugInfo(`Using database URL: ${dbUrl}`);
 
             // Initialize PGlite with IndexedDB
-            this.db = new PGlite(dbUrl, {
-                relaxedDurability: false // Disable relaxed durability for better data safety
-            });
+            try {
+                this.addDebugInfo('Creating new PGLite instance');
+                this.db = new PGlite(dbUrl, {
+                    relaxedDurability: false // Disable relaxed durability for better data safety
+                });
+                this.addDebugInfo('PGLite instance created successfully');
+            } catch (pgLiteError) {
+                this.addDebugInfo(`ERROR creating PGLite instance: ${pgLiteError}`);
+                throw pgLiteError;
+            }
 
             try {
                 // Test the connection
+                this.addDebugInfo('Testing PGLite connection with SELECT 1');
                 await this.db.exec("SELECT 1 AS test");
                 this.addDebugInfo('IndexedDB connection test successful');
 
                 // Create schema immediately
+                this.addDebugInfo('Creating database schema');
                 await this.createSchema();
+                this.addDebugInfo('Schema created successfully');
+
                 this.storageMode = 'indexeddb';
                 this.initialized = true;
 
@@ -359,7 +375,18 @@ export class LoroPGLiteStorage {
                 // Use test_fs_access instead of save_hello_world to check Tauri availability
                 const homePath = '/Users/samuelandert/.hominio';
                 try {
+                    this.addDebugInfo(`Testing Tauri FS access at path: ${homePath}`);
+
+                    // Check if we have the invoke function
+                    if (typeof invoke !== 'function') {
+                        this.addDebugInfo('Tauri invoke function not available');
+                        throw new Error('Tauri invoke function not available');
+                    }
+
+                    this.addDebugInfo('Calling Tauri test_fs_access function');
                     const fsResult = await invoke<{ exists: boolean; is_writable: boolean }>('test_fs_access', { path: homePath });
+                    this.addDebugInfo(`Tauri FS access result: ${JSON.stringify(fsResult)}`);
+
                     this.tauriAvailable = true;
                     this.addDebugInfo(`Tauri is available! Filesystem access at: ${homePath}`);
                     this.addDebugInfo(`Filesystem test results: exists=${fsResult.exists}, writable=${fsResult.is_writable}`);
@@ -374,6 +401,7 @@ export class LoroPGLiteStorage {
                     this.addDebugInfo('Switched to native storage mode for Tauri');
                 } catch (tauriError) {
                     this.addDebugInfo(`Tauri detection failed: ${tauriError}`);
+                    this.addDebugInfo('Continuing with IndexedDB storage');
                     this.tauriAvailable = false;
                 }
             } catch (error) {
