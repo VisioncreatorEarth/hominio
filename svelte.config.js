@@ -11,7 +11,7 @@ const config = {
 		// Use adapter-static with a fallback page for SPAs
 		adapter: adapter({
 			// Configure fallback for client-side routing
-			fallback: 'index.html',
+			fallback: 'app.html',
 			// Don't use strict mode to allow dynamic routes
 			strict: false
 		})

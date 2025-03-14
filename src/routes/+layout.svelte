@@ -7,11 +7,6 @@
 	import { LoroDoc } from 'loro-crdt';
 	import { generateUUID, generateShortUUID } from '$lib/utils/uuid';
 
-	// Enable prerendering for all pages
-	export const prerender = true;
-	// SSR turned off for Tauri app
-	export const ssr = false;
-
 	// Context keys
 	const LORO_STORAGE_KEY = 'loro-storage';
 	const LORO_DOCS_KEY = 'loro-docs';
