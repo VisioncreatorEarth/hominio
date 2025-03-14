@@ -53,12 +53,19 @@
 			.map((arg) => (typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)))
 			.join(' ');
 
-		// Only capture logs relevant to Loro or storage
+		// Only capture logs relevant to Loro or storage, but filter out the frequent sync status messages
 		if (
-			message.includes('loro') ||
-			message.includes('sync') ||
-			message.includes('storage') ||
-			message.includes('PGLite')
+			(message.includes('loro') ||
+				message.includes('sync') ||
+				message.includes('storage') ||
+				message.includes('PGLite')) &&
+			// Skip the frequent sync status changes and long poll messages
+			!message.includes('Status changing from success to syncing') &&
+			!message.includes('Status changing from syncing to success') &&
+			!message.includes('Long poll URL:') &&
+			!message.includes('Sync status for hominio-todos: syncing') &&
+			!message.includes('Sync status for hominio-todos: success') &&
+			!message.includes('Sync completed for hominio-todos')
 		) {
 			addDebugLog('Log', message);
 		}
@@ -71,10 +78,17 @@
 			.join(' ');
 
 		if (
-			message.includes('loro') ||
-			message.includes('sync') ||
-			message.includes('storage') ||
-			message.includes('PGLite')
+			(message.includes('loro') ||
+				message.includes('sync') ||
+				message.includes('storage') ||
+				message.includes('PGLite')) &&
+			// Skip the frequent sync status messages
+			!message.includes('Status changing from success to syncing') &&
+			!message.includes('Status changing from syncing to success') &&
+			!message.includes('Long poll URL:') &&
+			!message.includes('Sync status for hominio-todos: syncing') &&
+			!message.includes('Sync status for hominio-todos: success') &&
+			!message.includes('Sync completed for hominio-todos')
 		) {
 			addDebugLog('Info', message);
 		}
@@ -87,10 +101,17 @@
 			.join(' ');
 
 		if (
-			message.includes('loro') ||
-			message.includes('sync') ||
-			message.includes('storage') ||
-			message.includes('PGLite')
+			(message.includes('loro') ||
+				message.includes('sync') ||
+				message.includes('storage') ||
+				message.includes('PGLite')) &&
+			// Skip the frequent sync status messages
+			!message.includes('Status changing from success to syncing') &&
+			!message.includes('Status changing from syncing to success') &&
+			!message.includes('Long poll URL:') &&
+			!message.includes('Sync status for hominio-todos: syncing') &&
+			!message.includes('Sync status for hominio-todos: success') &&
+			!message.includes('Sync completed for hominio-todos')
 		) {
 			addDebugLog('Warn', message);
 		}
@@ -150,6 +171,17 @@
 
 		// Only update if there's a change to prevent infinite loops
 		if (currentMode !== storageMode || currentPath !== dbPath) {
+			// Only log when the state actually changes
+			if (currentMode !== storageMode) {
+				addDebugLog('Storage', `Storage mode changed: ${storageMode} → ${currentMode}`);
+			}
+			if (currentPath !== dbPath) {
+				addDebugLog(
+					'Storage',
+					`Storage path changed: ${dbPath || 'none'} → ${currentPath || 'none'}`
+				);
+			}
+
 			storageMode = currentMode;
 			dbPath = currentPath;
 
@@ -157,11 +189,17 @@
 			if (currentDebugInfo && currentDebugInfo.length > 0) {
 				const uniqueNewLogs = currentDebugInfo.filter((log) => !debugInfo.includes(log));
 				if (uniqueNewLogs.length > 0) {
+					addDebugLog('Storage', `Adding ${uniqueNewLogs.length} new logs from PGLite`);
 					debugInfo = [...debugInfo, ...uniqueNewLogs].slice(-MAX_DEBUG_LOGS);
 				}
 			}
 
 			isStorageInitialized = currentMode !== 'not-initialized';
+
+			// Log initialization status changes
+			if (isStorageInitialized && currentMode !== 'not-initialized') {
+				addDebugLog('Storage', `Storage is now initialized using ${currentMode} mode`);
+			}
 		}
 	}
 
@@ -245,30 +283,29 @@
 			`Initializing sync service for document ${docId} with client ID ${syncClientId.substring(0, 8)}...`
 		);
 
-		// Create the sync service with auto-start
+		// Create the sync service with auto-start and longer sync interval
 		const syncService = createLoroSyncService(docId, loroDoc, {
 			clientId: syncClientId,
 			autoStart: true,
-			syncIntervalMs: 1000
+			syncIntervalMs: 5000 // Less frequent sync attempts (5 seconds)
 		});
 
 		// Set up event handler for sync status updates
 		syncService.addEventListener((event) => {
+			// Only log error events and updates-received events
+			// Skip the frequent success/syncing status changes and sync-complete events
 			if (event.type === 'status-change') {
-				const statusMsg = `Sync status for ${docId}: ${event.status}`;
-				addDebugLog('Sync', statusMsg);
-
-				if (event.status === 'success') {
-					updateLastSyncTime();
-				} else if (event.status === 'error') {
-					// Handle error status through the status-change event
+				// Only log errors, not the routine success/syncing status changes
+				if (event.status === 'error') {
 					addDebugLog('Sync', `Sync error for ${docId}: ${event.status}`);
+				} else {
+					// Just update the UI without logging for success status
+					if (event.status === 'success') {
+						updateLastSyncTime();
+					}
 				}
 			}
-			if (event.type === 'sync-complete') {
-				addDebugLog('Sync', `Sync completed for ${docId}`);
-				updateLastSyncTime();
-			}
+			// Only log when actual updates are received, not routine sync completions
 			if (event.type === 'updates-received') {
 				addDebugLog('Sync', `Updates received for ${docId}`);
 			}
@@ -366,8 +403,8 @@
 			}
 		};
 
-		// Poll for storage state changes
-		const interval = setInterval(checkStorage, 500);
+		// Poll for storage state changes - reduce frequency to avoid log clutter
+		const interval = setInterval(checkStorage, 3000); // Changed from 500ms to 3000ms (3 seconds)
 
 		// Return a cleanup function
 		return () => {
