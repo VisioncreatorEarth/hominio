@@ -1,9 +1,8 @@
 <script lang="ts">
 	import { onMount, onDestroy, getContext } from 'svelte';
 	import { LoroDoc } from 'loro-crdt';
-	import type { SyncEvent, SyncStatus } from '$lib/services/loroSyncService';
+	import { generateUUID } from '$lib/utils/uuid';
 	import type { Writable } from 'svelte/store';
-	import { generateUUID, generateShortUUID } from '$lib/utils/uuid';
 
 	// Define Todo type
 	interface Todo {
@@ -13,57 +12,51 @@
 		createdAt: number;
 	}
 
+	// Type definitions for context values
+	interface StorageService {
+		saveSnapshot: (docId: string, loroDoc: LoroDoc, docType: string, meta?: any) => Promise<void>;
+		loadSnapshot: (docId: string, loroDoc: LoroDoc) => Promise<boolean>;
+	}
+
+	interface LoroDocsRegistry {
+		update: (
+			fn: (docs: Record<string, { doc: LoroDoc }>) => Record<string, { doc: LoroDoc }>
+		) => void;
+	}
+
+	interface StorageInfo {
+		mode: 'native' | 'indexeddb' | 'not-initialized';
+		path: string | null;
+		isInitialized: boolean;
+		clientId: string;
+	}
+
 	// Constants
 	const TODO_DOC_ID = 'hominio-todos';
 	const TODO_DOC_TYPE = 'todos';
-	const BROADCAST_CHANNEL = 'loro-todos-sync';
 
 	// Get services from context
-	const loroStorage = getContext('loro-storage');
-	const loroDocsRegistry = getContext('loro-docs') as Writable<
-		Record<
-			string,
-			{
-				doc: LoroDoc;
-				syncService: any;
-			}
-		>
-	>;
-	const syncServices = getContext('loro-sync-services') as {
-		createSyncService: (docId: string, loroDoc: LoroDoc) => any;
-	};
-	const storageInfo = getContext('storage-info') as Writable<{
-		mode: 'native' | 'indexeddb' | 'not-initialized';
-		path: string | null;
-		debugInfo: string[];
-		isInitialized: boolean;
-		error?: string;
-	}>;
+	const loroStorage = getContext<StorageService>('loro-storage');
+	const loroDocsRegistry = getContext<LoroDocsRegistry>('loro-docs');
+	const storageInfo = getContext<Writable<StorageInfo>>('storage-info');
 
+	// State variables
 	let todos: Todo[] = [];
 	let newTodoText = '';
 	let loroDoc: LoroDoc | null = null;
 	let todoList: any = null;
 	let status = 'Initializing...';
 	let isLoroReady = false;
-	let broadcastChannel: BroadcastChannel | null = null;
-	let lastUpdateId: string | null = null;
-	let syncService: any = null;
-	let clientId = generateShortUUID(); // Short client ID for display
-	let syncStatus: SyncStatus = 'idle'; // 'idle', 'syncing', 'success', 'error'
-	let lastSyncTime = '';
-	let lastUpdateReceived: number | null = null;
-	let connectedClients: string[] = [];
-	let showDebugInfo = false;
-	let debugInfo: string[] = [];
 
-	// Function to save Loro state using PGlite
+	// Function to save Loro state to storage
 	async function saveToStorage() {
 		try {
 			if (loroDoc) {
 				await loroStorage.saveSnapshot(TODO_DOC_ID, loroDoc, TODO_DOC_TYPE);
 			}
-		} catch (err) {}
+		} catch (err) {
+			console.error('Error saving to storage:', err);
+		}
 	}
 
 	// Function to load Loro state from storage
@@ -76,57 +69,9 @@
 				}
 			}
 		} catch (err) {
-			console.error('Error loading Loro state:', err);
+			console.error('Error loading from storage:', err);
 		}
 		return false;
-	}
-
-	// Function to broadcast updates to other tabs
-	function broadcastUpdate() {
-		if (!broadcastChannel || !loroDoc) return;
-
-		try {
-			// Export updates instead of a full snapshot for efficiency
-			const updates = loroDoc.export({ mode: 'update' });
-
-			// Create a unique ID for this update to prevent applying our own updates
-			const updateId = generateUUID();
-			lastUpdateId = updateId;
-
-			// Broadcast the updates to other tabs
-			broadcastChannel.postMessage({
-				type: 'loro-update',
-				updates: Array.from(updates),
-				updateId
-			});
-		} catch (err) {
-			console.error('Error broadcasting updates:', err);
-		}
-	}
-
-	// Function to handle updates from other tabs
-	function handleReceivedUpdate(event: MessageEvent) {
-		if (!loroDoc || !isLoroReady) return;
-
-		const { type, updates, updateId } = event.data;
-
-		// Skip if this is our own update
-		if (updateId === lastUpdateId) {
-			return;
-		}
-
-		if (type === 'loro-update' && updates) {
-			try {
-				// Apply the updates
-				const updatesArray = new Uint8Array(updates);
-				loroDoc.import(updatesArray);
-
-				// Update UI to reflect changes
-				updateTodosFromLoro();
-			} catch (err) {
-				console.error('Error applying updates from another tab:', err);
-			}
-		}
 	}
 
 	// Function to update the local todos array from Loro
@@ -176,15 +121,8 @@
 		// Update UI immediately
 		updateTodosFromLoro();
 
-		// Save state and broadcast update
+		// Save state
 		await saveToStorage();
-		broadcastUpdate();
-
-		// Trigger server sync automatically with high priority
-		if (syncService) {
-			syncService.syncWithServer(true);
-			updateLastSyncTime();
-		}
 	}
 
 	// Toggle todo completion status
@@ -213,16 +151,8 @@
 				// Update UI immediately
 				updateTodosFromLoro();
 
-				// Save state and broadcast update
+				// Save state
 				await saveToStorage();
-				broadcastUpdate();
-
-				// Trigger server sync automatically with high priority
-				if (syncService) {
-					syncService.syncWithServer(true);
-					updateLastSyncTime();
-				}
-
 				break;
 			}
 		}
@@ -238,97 +168,16 @@
 			const todo = todoList.get(i);
 			if (todo && todo.id === id) {
 				// Delete the todo at this index
-				todoList.delete(i, 1); // Delete 1 element at index i
+				todoList.delete(i, 1);
 
 				// Update UI immediately
 				updateTodosFromLoro();
 
-				// Save state and broadcast update
+				// Save state
 				await saveToStorage();
-				broadcastUpdate();
-
-				// Trigger server sync automatically with high priority
-				if (syncService) {
-					syncService.syncWithServer(true);
-					updateLastSyncTime();
-				}
 				break;
 			}
 		}
-	}
-
-	// Setup BroadcastChannel for cross-tab communication
-	function setupBroadcastChannel() {
-		try {
-			// Close any existing channel
-			if (broadcastChannel) {
-				broadcastChannel.close();
-			}
-
-			// Create a new channel
-			broadcastChannel = new BroadcastChannel(BROADCAST_CHANNEL);
-
-			// Set up listener for updates from other tabs
-			broadcastChannel.addEventListener('message', handleReceivedUpdate);
-		} catch (err) {
-			console.error('Error setting up BroadcastChannel:', err);
-			status = 'Error: Could not set up cross-tab communication';
-		}
-	}
-
-	// Handle sync service events
-	function handleSyncEvent(event: SyncEvent) {
-		if (event.type === 'status-change' && event.status) {
-			syncStatus = event.status;
-
-			// Only update the sync time when we get a success status
-			if (event.status === 'success') {
-				updateLastSyncTime();
-				// Force UI update on successful sync
-				updateTodosFromLoro();
-			}
-		}
-
-		if (event.type === 'updates-received') {
-			lastUpdateReceived = event.timestamp;
-
-			// Check if this is an immediate update
-			const details = event.details as Record<string, unknown> | undefined;
-			const isImmediate = details?.immediate === true;
-
-			if (isImmediate) {
-				// Update UI immediately for high-priority updates
-				updateTodosFromLoro();
-				updateLastSyncTime();
-			} else {
-				// For regular updates, add a small delay to ensure Loro has processed the update
-				setTimeout(() => {
-					updateTodosFromLoro();
-				}, 20); // Reduced delay for faster response
-			}
-
-			// If this was a forced update, also update the sync time
-			if (details?.forceUpdate) {
-				updateLastSyncTime();
-			}
-		}
-
-		if (event.type === 'sync-complete') {
-			// Update the UI immediately after sync completes
-			updateTodosFromLoro();
-			updateLastSyncTime();
-		}
-	}
-
-	// Helper function to format time
-	function formatTime(timestamp: number): string {
-		const date = new Date(timestamp);
-		return date.toLocaleTimeString();
-	}
-
-	// Update last sync time
-	function updateLastSyncTime() {
-		lastSyncTime = formatTime(Date.now());
 	}
 
 	// Initialize Loro on mount
@@ -339,7 +188,6 @@
 			loroDocsRegistry.update((docs) => {
 				if (docs[TODO_DOC_ID]) {
 					loroDoc = docs[TODO_DOC_ID].doc;
-					syncService = docs[TODO_DOC_ID].syncService;
 					existingDoc = true;
 				}
 				return docs;
@@ -360,28 +208,17 @@
 
 				// Register the doc in our global registry
 				loroDocsRegistry.update((docs) => {
-					docs[TODO_DOC_ID] = { doc: loroDoc, syncService: null };
+					if (loroDoc) {
+						docs[TODO_DOC_ID] = { doc: loroDoc };
+					}
 					return docs;
 				});
-
-				// Set up sync service
-				syncService = syncServices.createSyncService(TODO_DOC_ID, loroDoc);
-
-				// Add event listener for sync events
-				syncService.addEventListener(handleSyncEvent);
-			} else {
-				// If reusing an existing service, still add our event listener
-				if (syncService && !syncService._hasOurListener) {
-					syncService.addEventListener(handleSyncEvent);
-					syncService._hasOurListener = true;
-				}
 			}
 
 			// Create a list for todos
-			todoList = loroDoc.getList('todos');
-
-			// Set up BroadcastChannel for real-time sync between tabs
-			setupBroadcastChannel();
+			if (loroDoc) {
+				todoList = loroDoc.getList('todos');
+			}
 
 			// Update UI
 			updateTodosFromLoro();
@@ -391,24 +228,10 @@
 			// Make available for debugging
 			(window as any).loroDoc = loroDoc;
 			(window as any).todoList = todoList;
-			(window as any).syncService = syncService;
 		} catch (error: unknown) {
 			const errorMessage = error instanceof Error ? error.message : String(error);
 			status = `Error: ${errorMessage}`;
 			console.error('Loro initialization error:', error);
-		}
-	});
-
-	// Clean up on component destruction
-	onDestroy(() => {
-		if (broadcastChannel) {
-			broadcastChannel.close();
-		}
-
-		// We don't stop the sync service here as it's managed at the layout level
-		if (syncService && syncService._hasOurListener) {
-			syncService.removeEventListener(handleSyncEvent);
-			delete syncService._hasOurListener;
 		}
 	});
 
@@ -418,7 +241,7 @@
 	}
 
 	// Get reactive values from the storage info store
-	$: ({ mode: storageMode, path: dbPath, debugInfo } = $storageInfo);
+	$: ({ mode: storageMode, path: dbPath } = $storageInfo);
 </script>
 
 <div class="min-h-full bg-blue-950 text-emerald-100">

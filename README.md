@@ -1,5 +1,10 @@
 # sv
 
+to use MCP browser debugging tools.
+````
+npx @agentdeskai/browser-tools-server@1.2.0"
+````
+
 Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
 
 ## Creating a project
