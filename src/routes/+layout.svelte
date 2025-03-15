@@ -18,8 +18,6 @@
 	const MAX_INIT_ATTEMPTS = 5;
 
 	// Global state - use let for variables we need to update
-	let storageMode = $state('not-initialized' as 'native' | 'indexeddb' | 'not-initialized');
-	let dbPath = $state<string | null>(null);
 	let isInitializing = $state(false);
 	let initAttempts = $state(0);
 	let activeDocumentsCount = $state(0);
@@ -43,31 +41,17 @@
 			await loroPGLiteStorage.initialize();
 
 			// Update storage state after initialization
-			updateStorageState();
+			isStorageInitialized = true;
 
 			isInitializing = false;
-			return storageMode !== 'not-initialized';
+			return true;
 		} catch (error) {
 			// Update state with error information
-			storageMode = 'not-initialized';
-			dbPath = null;
 			isStorageInitialized = false;
+			console.error('Storage initialization failed:', error);
 
 			isInitializing = false;
 			return false;
-		}
-	}
-
-	// Directly check current storage state from PGLite
-	function updateStorageState() {
-		const currentMode = loroPGLiteStorage.getStorageMode();
-		const currentPath = loroPGLiteStorage.getDbPath();
-
-		// Only update if there's a change to prevent infinite loops
-		if (currentMode !== storageMode || currentPath !== dbPath) {
-			storageMode = currentMode;
-			dbPath = currentPath;
-			isStorageInitialized = currentMode !== 'not-initialized';
 		}
 	}
 
@@ -111,8 +95,6 @@
 	// Create the storage info object for context
 	function getStorageInfo() {
 		return {
-			mode: storageMode,
-			path: dbPath,
 			isInitialized: isStorageInitialized,
 			clientId
 		};
@@ -139,19 +121,13 @@
 	// Perform immediate initialization before mounting
 	// This helps ensure storage is ready before child components need it
 	if (typeof window !== 'undefined') {
-		initializeStorage().then((success) => {
-			// Force a UI update after initialization
-			updateStorageState();
-		});
+		initializeStorage();
 	}
 
 	// Initialize on mount
 	onMount(() => {
-		// First, check if storage is already initialized
-		updateStorageState();
-
-		// Try initialization again if it hasn't succeeded yet
-		if (storageMode === 'not-initialized') {
+		// If storage isn't initialized yet, try again
+		if (!isStorageInitialized) {
 			initializeStorage().catch((error) => {
 				console.error('Failed to initialize Loro storage:', error);
 			});
@@ -161,22 +137,16 @@
 		(window as any).loroStorage = loroStorage;
 		(window as any).loroDocsRegistry = loroDocsRegistry;
 
-		// Setup polling for storage state
-		const checkStorage = () => {
-			updateStorageState();
-
+		// Setup polling to retry initialization if needed
+		const checkStorageStatus = () => {
 			// Retry initialization if needed
-			if (
-				storageMode === 'not-initialized' &&
-				initAttempts < MAX_INIT_ATTEMPTS &&
-				!isInitializing
-			) {
+			if (!isStorageInitialized && initAttempts < MAX_INIT_ATTEMPTS && !isInitializing) {
 				initializeStorage();
 			}
 		};
 
 		// Poll for storage state changes
-		const interval = setInterval(checkStorage, 3000);
+		const interval = setInterval(checkStorageStatus, 3000);
 
 		// Return a cleanup function
 		return () => {
@@ -223,7 +193,7 @@
 							class={`inline-block h-2 w-2 rounded-full ${isStorageInitialized ? 'bg-emerald-400' : 'bg-red-400'}`}
 						></span>
 						<span class="text-xs text-emerald-300">
-							{storageMode !== 'not-initialized' ? `${storageMode} Storage` : 'Storage Not Ready'}
+							{isStorageInitialized ? 'Storage Ready' : 'Initializing Storage...'}
 						</span>
 					</div>
 				</div>

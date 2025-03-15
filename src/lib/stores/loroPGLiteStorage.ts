@@ -1,6 +1,5 @@
 import { PGlite } from '@electric-sql/pglite';
 import type { LoroDoc, VersionVector } from 'loro-crdt';
-import { invoke } from '@tauri-apps/api/core';
 import { generateUUID } from '$lib/utils/uuid';
 
 // Type definitions for versions and metadata
@@ -20,7 +19,7 @@ interface PGResultRow {
 }
 
 /**
- * LoroPGLiteStorage - A storage adapter for Loro that uses PGlite
+ * LoroPGLiteStorage - A storage adapter for Loro that uses PGlite with IndexedDB
  * Provides persistent SQL-based storage for Loro documents with support
  * for both snapshots and incremental updates
  */
@@ -29,31 +28,13 @@ export class LoroPGLiteStorage {
     private initialized = false;
     private initializing = false;
     private dbName = 'hominio.db';
-    private dbPath: string | null = null;
-    private storageMode: 'native' | 'indexeddb' | 'not-initialized' = 'not-initialized';
     private debugInfo: string[] = [];
-    private tauriAvailable = false;
     private lastInitError: string | null = null;
     private initAttempts = 0;
     private maxInitAttempts = 5;
 
     constructor() {
         this.addDebugInfo('Constructor called');
-        // No localStorage dependency - simpler initialization
-    }
-
-    /**
-     * Get the current storage mode
-     */
-    getStorageMode(): 'native' | 'indexeddb' | 'not-initialized' {
-        return this.storageMode;
-    }
-
-    /**
-     * Get the database path
-     */
-    getDbPath(): string | null {
-        return this.dbPath;
     }
 
     /**
@@ -79,16 +60,6 @@ export class LoroPGLiteStorage {
         this.debugInfo.push(logMessage);
         // Also log to console for visibility during development
         console.log(`PGLite: ${message}`);
-    }
-
-    /**
-     * Helper method to check if we're running in a real Tauri environment
-     * This checks for the __TAURI__ global object which is only present in Tauri apps
-     */
-    private isTauriEnvironment(): boolean {
-        const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
-        this.addDebugInfo(`Tauri environment check: ${isTauri ? 'YES' : 'NO'}`);
-        return isTauri;
     }
 
     /**
@@ -141,7 +112,6 @@ export class LoroPGLiteStorage {
      */
     async checkDatabaseState(): Promise<{
         indexedDBDatabases: string[];
-        storageMode: string;
         initialized: boolean;
         tablesFound: string[];
         documentCount: number;
@@ -151,7 +121,6 @@ export class LoroPGLiteStorage {
     }> {
         const result = {
             indexedDBDatabases: [] as string[],
-            storageMode: this.storageMode,
             initialized: this.initialized,
             tablesFound: [] as string[],
             documentCount: 0,
@@ -180,8 +149,7 @@ export class LoroPGLiteStorage {
         if (this.initialized && this.db) {
             try {
                 this.addDebugInfo('Checking database tables...');
-                // Don't query sqlite_master directly as it may not exist in PGLite
-                // Try to query our known tables instead
+                // Try to query our known tables
                 try {
                     // First try if our table exists by querying it directly
                     const countResult = await this.db.query("SELECT COUNT(*) as count FROM loro_snapshots");
@@ -218,7 +186,6 @@ export class LoroPGLiteStorage {
         }
 
         this.addDebugInfo(`Database state check complete: ${JSON.stringify({
-            storageMode: result.storageMode,
             initialized: result.initialized,
             tablesCount: result.tablesFound.length,
             documentCount: result.documentCount,
@@ -240,14 +207,13 @@ export class LoroPGLiteStorage {
             // Then ensure initialization
             await this.ensureInitialized();
 
-            // Check database state after initialization for diagnostics - for debugging purposes
+            // Check database state after initialization for diagnostics
             await this.checkDatabaseState();
 
             // Reset the error state on successful initialization
             this.lastInitError = null;
         } catch (error) {
             console.error("Failed to initialize storage:", error);
-            this.storageMode = 'not-initialized';
             this.lastInitError = error instanceof Error ? error.message : String(error);
             throw error;
         }
@@ -325,10 +291,7 @@ export class LoroPGLiteStorage {
      */
     private async _initialize(): Promise<void> {
         try {
-            this.addDebugInfo('Starting initialization');
-
-            // === PHASE 1: First initialize with IndexedDB (always works) ===
-            this.addDebugInfo('Initializing with IndexedDB database');
+            this.addDebugInfo('Starting initialization with IndexedDB database');
 
             // Format for IndexedDB persistence is 'idb://dbname'
             const dbUrl = `idb://${this.dbName}`;
@@ -357,67 +320,23 @@ export class LoroPGLiteStorage {
                 await this.createSchema();
                 this.addDebugInfo('Schema created successfully');
 
-                this.storageMode = 'indexeddb';
                 this.initialized = true;
-
                 this.addDebugInfo('IndexedDB storage initialized successfully');
             } catch (indexedDBError) {
                 this.addDebugInfo(`IndexedDB initialization failed: ${indexedDBError}`);
                 this.db = null;
-                this.storageMode = 'not-initialized';
                 this.initialized = false;
                 throw new Error(`Failed to initialize IndexedDB storage: ${indexedDBError}`);
             }
 
-            // === PHASE 2: Check if Tauri is available and switch if possible ===
-            try {
-                this.addDebugInfo('Checking if Tauri is available...');
-                // Use test_fs_access instead of save_hello_world to check Tauri availability
-                const homePath = '/Users/samuelandert/.hominio';
-                try {
-                    this.addDebugInfo(`Testing Tauri FS access at path: ${homePath}`);
-
-                    // Check if we have the invoke function
-                    if (typeof invoke !== 'function') {
-                        this.addDebugInfo('Tauri invoke function not available');
-                        throw new Error('Tauri invoke function not available');
-                    }
-
-                    this.addDebugInfo('Calling Tauri test_fs_access function');
-                    const fsResult = await invoke<{ exists: boolean; is_writable: boolean }>('test_fs_access', { path: homePath });
-                    this.addDebugInfo(`Tauri FS access result: ${JSON.stringify(fsResult)}`);
-
-                    this.tauriAvailable = true;
-                    this.addDebugInfo(`Tauri is available! Filesystem access at: ${homePath}`);
-                    this.addDebugInfo(`Filesystem test results: exists=${fsResult.exists}, writable=${fsResult.is_writable}`);
-
-                    // Set the database path - do NOT use resolve() which can cause issues
-                    this.dbPath = `${homePath}/hominio.db`;
-                    this.addDebugInfo(`Using db path: ${this.dbPath}`);
-
-                    // When in Tauri mode, set storage mode to native
-                    // This indicates to the app that data is saved natively
-                    this.storageMode = 'native';
-                    this.addDebugInfo('Switched to native storage mode for Tauri');
-                } catch (tauriError) {
-                    this.addDebugInfo(`Tauri detection failed: ${tauriError}`);
-                    this.addDebugInfo('Continuing with IndexedDB storage');
-                    this.tauriAvailable = false;
-                }
-            } catch (error) {
-                this.addDebugInfo(`Error during Tauri detection: ${error}`);
-                this.tauriAvailable = false;
-            }
-
-            // Register cleanup handlers regardless of mode
+            // Register cleanup handlers
             this.registerCleanupHandlers();
 
-            this.addDebugInfo(`Initialization complete. Storage mode: ${this.storageMode}`);
+            this.addDebugInfo('Initialization complete');
 
         } catch (error) {
             // This catches any errors not handled in the inner try-catch blocks
             this.addDebugInfo(`Critical initialization error: ${error}`);
-            this.storageMode = 'not-initialized';
             this.initialized = false;
             this.db = null;
             throw error;
@@ -433,8 +352,8 @@ export class LoroPGLiteStorage {
             window.addEventListener('beforeunload', () => {
                 this.addDebugInfo('Page unloading, performing cleanup');
 
-                // If using IndexedDB, try to force a sync
-                if (this.db && this.storageMode === 'indexeddb') {
+                // Try to force a sync
+                if (this.db) {
                     try {
                         // Execute a simple query to ensure any pending writes are flushed
                         // This won't actually wait for the promise to resolve due to beforeunload,
@@ -499,159 +418,6 @@ export class LoroPGLiteStorage {
     }
 
     /**
-     * Export the database to a file (Tauri only)
-     */
-    async exportDatabaseToFile(): Promise<boolean> {
-        if (!this.tauriAvailable || !this.dbPath) {
-            this.addDebugInfo('Cannot export database: not in Tauri mode or path not set');
-            return false;
-        }
-
-        try {
-            // Get all snapshots
-            const snapshots = await this.listSnapshots();
-            if (snapshots.length === 0) {
-                this.addDebugInfo('No snapshots to export');
-                return false;
-            }
-
-            // Convert to a serializable format for file storage
-            const exportData = {
-                version: 1,
-                timestamp: new Date().toISOString(),
-                snapshots: await Promise.all(snapshots.map(async (snapshot) => {
-                    // For each snapshot, get the data
-                    // Need to query again to get the binary data
-                    const result = await this.db!.query<PGResultRow>(
-                        'SELECT * FROM loro_snapshots WHERE doc_id = $1',
-                        [snapshot.docId]
-                    );
-
-                    if (result.rows.length === 0) {
-                        return null;
-                    }
-
-                    const row = result.rows[0];
-
-                    // Convert binary data to base64 for storage
-                    const base64Data = this.uint8ArrayToBase64(row.data);
-
-                    return {
-                        docId: snapshot.docId,
-                        docType: snapshot.docType,
-                        data: base64Data,
-                        version: row.version,
-                        meta: snapshot.meta,
-                        updatedAt: snapshot.updatedAt
-                    };
-                })).then(items => items.filter(Boolean))
-            };
-
-            // Write to file
-            const jsonData = JSON.stringify(exportData);
-            await invoke('write_text_file', {
-                path: this.dbPath,
-                contents: jsonData
-            });
-
-            this.addDebugInfo(`Database exported to ${this.dbPath}`);
-            return true;
-        } catch (error) {
-            this.addDebugInfo(`Error exporting database: ${error}`);
-            return false;
-        }
-    }
-
-    /**
-     * Import database from file (Tauri only)
-     */
-    async importDatabaseFromFile(): Promise<boolean> {
-        if (!this.tauriAvailable || !this.dbPath) {
-            this.addDebugInfo('Cannot import database: not in Tauri mode or path not set');
-            return false;
-        }
-
-        try {
-            // Read from file
-            const fileContents = await invoke<string>('read_text_file', {
-                path: this.dbPath
-            });
-
-            if (!fileContents) {
-                this.addDebugInfo('No data to import (file empty or not found)');
-                return false;
-            }
-
-            // Parse the JSON
-            const importData = JSON.parse(fileContents);
-            if (!importData || !importData.snapshots || !Array.isArray(importData.snapshots)) {
-                this.addDebugInfo('Invalid import data format');
-                return false;
-            }
-
-            // Import each snapshot
-            let importCount = 0;
-            for (const snapshot of importData.snapshots) {
-                if (!snapshot || !snapshot.docId || !snapshot.data) {
-                    continue;
-                }
-
-                // Convert base64 back to binary
-                const binaryData = this.base64ToUint8Array(snapshot.data);
-
-                // Insert into database
-                await this.db!.query(
-                    `INSERT INTO loro_snapshots (doc_id, doc_type, data, version, meta, updated_at) 
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                    ON CONFLICT (doc_id) 
-                    DO UPDATE SET data = $3, version = $4, meta = $5, updated_at = $6`,
-                    [
-                        snapshot.docId,
-                        snapshot.docType,
-                        binaryData,
-                        snapshot.version,
-                        JSON.stringify(snapshot.meta),
-                        new Date(snapshot.updatedAt)
-                    ]
-                );
-
-                importCount++;
-            }
-
-            this.addDebugInfo(`Imported ${importCount} snapshots from ${this.dbPath}`);
-            return importCount > 0;
-        } catch (error) {
-            this.addDebugInfo(`Error importing database: ${error}`);
-            return false;
-        }
-    }
-
-    /**
-     * Convert Uint8Array to base64 string
-     */
-    private uint8ArrayToBase64(bytes: Uint8Array): string {
-        let binary = '';
-        const len = bytes.byteLength;
-        for (let i = 0; i < len; i++) {
-            binary += String.fromCharCode(bytes[i]);
-        }
-        return window.btoa(binary);
-    }
-
-    /**
-     * Convert base64 string to Uint8Array
-     */
-    private base64ToUint8Array(base64: string): Uint8Array {
-        const binary_string = window.atob(base64);
-        const len = binary_string.length;
-        const bytes = new Uint8Array(len);
-        for (let i = 0; i < len; i++) {
-            bytes[i] = binary_string.charCodeAt(i);
-        }
-        return bytes;
-    }
-
-    /**
      * Save a Loro document snapshot
      */
     async saveSnapshot(docId: string, loroDoc: LoroDoc, docType: string = 'default', meta: LoroMetadata = {}): Promise<void> {
@@ -696,23 +462,15 @@ export class LoroPGLiteStorage {
                     const dataLength = (verifyResult.rows[0] as { data_length: number }).data_length;
                     this.addDebugInfo(`Verified snapshot saved for ${docId}: ${dataLength} bytes in database`);
 
-                    // Force a checkpoint/flush if we're using IndexedDB
-                    if (this.storageMode === 'indexeddb') {
-                        // Execute a simple PRAGMA to encourage flushing to disk
-                        await this.db.exec("PRAGMA wal_checkpoint(FULL)");
-                        this.addDebugInfo('Executed checkpoint to flush data');
-                    }
+                    // Force a checkpoint/flush
+                    // Execute a simple PRAGMA to encourage flushing to disk
+                    await this.db.exec("PRAGMA wal_checkpoint(FULL)");
+                    this.addDebugInfo('Executed checkpoint to flush data');
                 } else {
                     this.addDebugInfo(`WARNING: Verification failed - snapshot for ${docId} not found after save!`);
                 }
             } catch (verifyError) {
                 this.addDebugInfo(`Error verifying snapshot: ${verifyError}`);
-            }
-
-            // If in Tauri mode, also export to file
-            if (this.tauriAvailable && this.storageMode === 'native') {
-                this.addDebugInfo('Exporting database to file after snapshot save');
-                await this.exportDatabaseToFile();
             }
         } catch (error) {
             this.addDebugInfo(`Error saving snapshot: ${error}`);
@@ -767,16 +525,6 @@ export class LoroPGLiteStorage {
         }
 
         try {
-            // If in Tauri mode and we haven't loaded from file yet, try to import
-            if (this.tauriAvailable && this.storageMode === 'native') {
-                try {
-                    await this.importDatabaseFromFile();
-                } catch (error) {
-                    this.addDebugInfo(`Error importing database during loadSnapshot: ${error}`);
-                    // Continue with in-memory data even if import fails
-                }
-            }
-
             // Query for the snapshot
             const result = await this.db.query<PGResultRow>(
                 'SELECT data FROM loro_snapshots WHERE doc_id = $1',
@@ -997,10 +745,7 @@ export class LoroPGLiteStorage {
         const initialState = await this.checkDatabaseState();
 
         // If we're already initialized and working, nothing to fix
-        if (initialState.initialized &&
-            (initialState.storageMode === 'native' || initialState.storageMode === 'indexeddb') &&
-            initialState.tablesFound.length > 0) {
-
+        if (initialState.initialized && initialState.tablesFound.length > 0) {
             this.addDebugInfo('Database appears to be working correctly, no fixes needed');
             actions.push('Database is already working correctly');
             return { fixed: true, actions, state: initialState };
@@ -1069,9 +814,7 @@ export class LoroPGLiteStorage {
             // Check if it worked
             const finalState = await this.checkDatabaseState();
 
-            if (finalState.initialized &&
-                (finalState.storageMode === 'native' || finalState.storageMode === 'indexeddb')) {
-
+            if (finalState.initialized) {
                 this.addDebugInfo('Successfully fixed database issues');
                 actions.push('Successfully fixed database issues');
                 fixed = true;
@@ -1088,32 +831,6 @@ export class LoroPGLiteStorage {
             // Final state check
             const finalState = await this.checkDatabaseState();
             return { fixed: false, actions, state: finalState };
-        }
-    }
-
-    /**
-     * Force use of IndexedDB storage, bypassing Tauri detection
-     * This can be useful for debugging or if there are persistent problems with Tauri
-     */
-    async forceIndexedDBMode(): Promise<void> {
-        this.addDebugInfo('Forcing IndexedDB mode and bypassing Tauri detection');
-
-        // Reset state
-        this.initialized = false;
-        this.initializing = false;
-        this.tauriAvailable = false;
-        this.dbPath = null;  // Clear the database path
-        this.db = null;
-        this.storageMode = 'not-initialized';
-        this.initAttempts = 0;
-
-        // Attempt initialization with IndexedDB only
-        try {
-            await this.initialize();
-            this.addDebugInfo('Successfully forced IndexedDB mode');
-        } catch (error) {
-            this.addDebugInfo(`Failed to force IndexedDB mode: ${error}`);
-            throw error;
         }
     }
 }
