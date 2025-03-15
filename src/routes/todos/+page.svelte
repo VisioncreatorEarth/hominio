@@ -1,8 +1,16 @@
 <script lang="ts">
 	import { onMount, onDestroy, getContext } from 'svelte';
-	import { LoroDoc } from 'loro-crdt';
+	import { LoroDoc, type Container, type LoroList } from 'loro-crdt';
 	import { generateUUID } from '$lib/utils/uuid';
 	import type { Writable } from 'svelte/store';
+
+	// Constants for document IDs
+	const GENESIS_UUID = '00000000-0000-0000-0000-000000000000';
+	const ROOT_REGISTRY_DOC_ID = GENESIS_UUID;
+	const ROOT_REGISTRY_TITLE = 'o.homin.io';
+	const TODO_DOC_UUID = generateUUID(); // Generate a UUID for the todos document
+	const TODO_DOC_TITLE = 'My Todos';
+	const TODO_DOC_TYPE = 'todos';
 
 	// Define Todo type
 	interface Todo {
@@ -31,9 +39,15 @@
 		clientId: string;
 	}
 
-	// Constants
-	const TODO_DOC_ID = 'hominio-todos';
-	const TODO_DOC_TYPE = 'todos';
+	// Registry document entry type
+	interface RegistryDocEntry {
+		uuid: string;
+		docType: string;
+		title: string;
+		createdAt: number;
+		currentSnapshotId: string;
+		meta?: Record<string, unknown>;
+	}
 
 	// Get services from context
 	const loroStorage = getContext<StorageService>('loro-storage');
@@ -44,36 +58,131 @@
 	let todos: Todo[] = [];
 	let newTodoText = '';
 	let loroDoc: LoroDoc | null = null;
-	let todoList: any = null;
+	let registryDoc: LoroDoc | null = null;
+	let todoList: LoroList<Todo> | null = null;
 	let status = 'Initializing...';
 	let isLoroReady = false;
+	let isRegistryReady = false;
+	let todoDocId = TODO_DOC_UUID; // Default to the generated UUID
 
 	// Function to save Loro state to storage
-	async function saveToStorage() {
+	async function saveToStorage(docId: string, doc: LoroDoc, docType: string, meta?: any) {
 		try {
-			if (loroDoc) {
-				await loroStorage.saveSnapshot(TODO_DOC_ID, loroDoc, TODO_DOC_TYPE);
-				// Note: Thanks to the syncservice hook, this snapshot will automatically
-				// be synchronized to the server via the /agent/resources/docs/snapshots endpoint
-			}
+			await loroStorage.saveSnapshot(docId, doc, docType, meta);
 		} catch (err) {
-			console.error('Error saving to storage:', err);
+			console.error(`Error saving doc ${docId} to storage:`, err);
 		}
 	}
 
-	// Function to load Loro state from storage
-	async function loadFromStorage() {
+	// Function to load Loro document from storage
+	async function loadFromStorage(docId: string, doc: LoroDoc): Promise<boolean> {
 		try {
-			if (loroDoc) {
-				const success = await loroStorage.loadSnapshot(TODO_DOC_ID, loroDoc);
-				if (success) {
-					return true;
-				}
-			}
+			const success = await loroStorage.loadSnapshot(docId, doc);
+			return success;
 		} catch (err) {
-			console.error('Error loading from storage:', err);
+			console.error(`Error loading doc ${docId} from storage:`, err);
+			return false;
 		}
-		return false;
+	}
+
+	// Get or create the registry document
+	async function getOrCreateRegistry(): Promise<LoroDoc> {
+		// Check if we already have this loro doc in registry
+		let existingRegistryDoc = false;
+		let registry: LoroDoc = new LoroDoc();
+
+		loroDocsRegistry.update((docs) => {
+			if (docs[ROOT_REGISTRY_DOC_ID]) {
+				registry = docs[ROOT_REGISTRY_DOC_ID].doc;
+				existingRegistryDoc = true;
+			}
+			return docs;
+		});
+
+		// If not in registry, create a new one
+		if (!existingRegistryDoc) {
+			// Try to load saved state from storage
+			const loaded = await loadFromStorage(ROOT_REGISTRY_DOC_ID, registry);
+
+			// If nothing was loaded, initialize the registry
+			if (!loaded) {
+				// Create documents map
+				registry.getMap('documents');
+
+				// Save initial state with special metadata for the registry
+				await saveToStorage(ROOT_REGISTRY_DOC_ID, registry, 'dao', {
+					title: ROOT_REGISTRY_TITLE
+				});
+			}
+
+			// Register the doc in our global registry
+			loroDocsRegistry.update((docs) => {
+				docs[ROOT_REGISTRY_DOC_ID] = { doc: registry };
+				return docs;
+			});
+		}
+
+		return registry;
+	}
+
+	// Get or create a document through the registry
+	async function getOrCreateDocument(
+		uuid: string,
+		docType: string,
+		title: string
+	): Promise<LoroDoc> {
+		// Ensure registry is initialized
+		if (!registryDoc) {
+			throw new Error('Registry document not initialized');
+		}
+
+		// Get documents map from registry
+		const docsMap = registryDoc.getMap('documents');
+
+		// Check if document entry exists in registry
+		let docEntry = docsMap.get(uuid) as RegistryDocEntry | undefined;
+
+		// Create a new Loro document
+		const doc = new LoroDoc();
+
+		if (docEntry) {
+			// Document exists in registry, try to load it
+			const loaded = await loadFromStorage(uuid, doc);
+			if (!loaded) {
+				console.warn(`Document ${uuid} found in registry but could not be loaded`);
+			}
+
+			// Use the existing todoDocId from the registry
+			todoDocId = docEntry.uuid;
+		} else {
+			// Document doesn't exist in registry, create a new one
+
+			// Save initial empty document with metadata
+			await saveToStorage(uuid, doc, docType, { title });
+
+			// Create a new entry in the registry
+			docEntry = {
+				uuid,
+				docType,
+				title,
+				createdAt: Date.now(),
+				currentSnapshotId: generateUUID() // This is just a placeholder
+			};
+
+			// Update registry
+			docsMap.set(uuid, docEntry);
+
+			// Save updated registry
+			await saveToStorage(ROOT_REGISTRY_DOC_ID, registryDoc, 'dao');
+		}
+
+		// Register in our in-memory registry
+		loroDocsRegistry.update((docs) => {
+			docs[uuid] = { doc };
+			return docs;
+		});
+
+		return doc;
 	}
 
 	// Function to update the local todos array from Loro
@@ -82,11 +191,16 @@
 
 		try {
 			// Get the length of the list
-			const length = todoList.length;
+			const len = todoList.length;
+
+			if (typeof len !== 'number') {
+				console.error('todoList.length is not a number, it is:', typeof len);
+				return;
+			}
 
 			// Create a new array from the Loro List
 			const updatedTodos = [];
-			for (let i = 0; i < length; i++) {
+			for (let i = 0; i < len; i++) {
 				const todo = todoList.get(i);
 				if (todo) {
 					// Make sure we properly handle all properties
@@ -117,23 +231,26 @@
 			createdAt: Date.now()
 		};
 
-		todoList.push(todo);
+		todoList?.push(todo);
 		newTodoText = '';
 
 		// Update UI immediately
 		updateTodosFromLoro();
 
 		// Save state
-		await saveToStorage();
+		if (loroDoc) {
+			await saveToStorage(todoDocId, loroDoc, TODO_DOC_TYPE, { title: TODO_DOC_TITLE });
+		}
 	}
 
 	// Toggle todo completion status
 	async function toggleTodo(id: string) {
-		if (!isLoroReady) return;
+		if (!isLoroReady || !todoList) return;
 
-		const length = todoList.length;
+		const len = todoList.length;
+		if (typeof len !== 'number') return;
 
-		for (let i = 0; i < length; i++) {
+		for (let i = 0; i < len; i++) {
 			const todo = todoList.get(i);
 			if (todo && todo.id === id) {
 				// Create updated todo with toggled completed status
@@ -154,7 +271,9 @@
 				updateTodosFromLoro();
 
 				// Save state
-				await saveToStorage();
+				if (loroDoc) {
+					await saveToStorage(todoDocId, loroDoc, TODO_DOC_TYPE, { title: TODO_DOC_TITLE });
+				}
 				break;
 			}
 		}
@@ -162,11 +281,13 @@
 
 	// Delete a todo
 	async function deleteTodo(id: string) {
-		if (!isLoroReady) return;
+		if (!isLoroReady || !todoList) return;
 
 		// Find the todo in the Loro list by iterating through it
-		const length = todoList.length;
-		for (let i = 0; i < length; i++) {
+		const len = todoList.length;
+		if (typeof len !== 'number') return;
+
+		for (let i = 0; i < len; i++) {
 			const todo = todoList.get(i);
 			if (todo && todo.id === id) {
 				// Delete the todo at this index
@@ -176,51 +297,51 @@
 				updateTodosFromLoro();
 
 				// Save state
-				await saveToStorage();
+				if (loroDoc) {
+					await saveToStorage(todoDocId, loroDoc, TODO_DOC_TYPE, { title: TODO_DOC_TITLE });
+				}
 				break;
 			}
 		}
 	}
 
+	// Find existing todo doc in registry
+	async function findExistingTodoDoc(): Promise<string | null> {
+		if (!registryDoc) return null;
+
+		const docsMap = registryDoc.getMap('documents');
+		const keys = docsMap.keys();
+
+		for (const key of keys) {
+			const entry = docsMap.get(key) as RegistryDocEntry | undefined;
+			if (entry && entry.docType === 'todos') {
+				return entry.uuid;
+			}
+		}
+
+		return null;
+	}
+
 	// Initialize Loro on mount
 	onMount(async () => {
 		try {
-			// Check if we already have this loro doc in registry
-			let existingDoc = false;
-			loroDocsRegistry.update((docs) => {
-				if (docs[TODO_DOC_ID]) {
-					loroDoc = docs[TODO_DOC_ID].doc;
-					existingDoc = true;
-				}
-				return docs;
-			});
+			// First, initialize the registry document
+			status = 'Initializing registry...';
+			registryDoc = await getOrCreateRegistry();
+			isRegistryReady = true;
 
-			// If not in registry, create a new one
-			if (!existingDoc) {
-				// Create a new Loro document
-				loroDoc = new LoroDoc();
-
-				// Try to load saved state from storage
-				const loaded = await loadFromStorage();
-
-				// If nothing was loaded, save the initial empty state
-				if (!loaded) {
-					await saveToStorage();
-				}
-
-				// Register the doc in our global registry
-				loroDocsRegistry.update((docs) => {
-					if (loroDoc) {
-						docs[TODO_DOC_ID] = { doc: loroDoc };
-					}
-					return docs;
-				});
+			// Try to find an existing todo document in the registry
+			const existingTodoDoc = await findExistingTodoDoc();
+			if (existingTodoDoc) {
+				todoDocId = existingTodoDoc;
 			}
 
-			// Create a list for todos
-			if (loroDoc) {
-				todoList = loroDoc.getList('todos');
-			}
+			// Now get or create the todos document through the registry
+			status = 'Loading todos document...';
+			loroDoc = await getOrCreateDocument(todoDocId, TODO_DOC_TYPE, TODO_DOC_TITLE);
+
+			// Get the todos list from the document
+			todoList = loroDoc.getList('todos') as LoroList<Todo>;
 
 			// Update UI
 			updateTodosFromLoro();
@@ -228,6 +349,7 @@
 			status = 'Ready!';
 
 			// Make available for debugging
+			(window as any).registryDoc = registryDoc;
 			(window as any).loroDoc = loroDoc;
 			(window as any).todoList = todoList;
 		} catch (error: unknown) {
@@ -280,6 +402,8 @@
 			<!-- Debug information -->
 			<div class="mb-4 text-xs text-emerald-100/40">
 				<p>Total todos: {todos.length}</p>
+				<p>Registry status: {isRegistryReady ? 'Loaded' : 'Not loaded'}</p>
+				<p>Document UUID: {todoDocId}</p>
 			</div>
 
 			<!-- Todo List -->

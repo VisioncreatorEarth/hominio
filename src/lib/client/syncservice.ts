@@ -1,13 +1,42 @@
-import type { LoroDoc } from 'loro-crdt';
+import type { LoroDoc, VersionVector } from 'loro-crdt';
 import { hominio } from './hominio';
 
 // Interface for the snapshot data we'll send to the server
 interface SnapshotData {
     docId: string;
     docType: string;
+    binaryData: Uint8Array | string; // Can be Uint8Array or base64 string
+    versionVector?: VersionVector;
     timestamp: number;
     meta?: Record<string, unknown>;
     clientId?: string;
+}
+
+// Interface for update data we'll send to the server
+interface UpdateData {
+    docId: string;
+    binaryData: Uint8Array | string; // Can be Uint8Array or base64 string
+    fromVersion: VersionVector;
+    toVersion: VersionVector;
+    timestamp: number;
+    clientId?: string;
+}
+
+// Server response type
+interface ServerResponse {
+    status: string;
+    [key: string]: any;
+}
+
+/**
+ * Convert Uint8Array to base64 string for safe transport
+ */
+function arrayBufferToBase64(buffer: Uint8Array): string {
+    // Use the browser's built-in btoa function with a workaround for Uint8Array
+    const binary = Array.from(new Uint8Array(buffer))
+        .map(byte => String.fromCharCode(byte))
+        .join('');
+    return btoa(binary);
 }
 
 /**
@@ -27,24 +56,80 @@ export async function syncSnapshot(
     try {
         console.log(`Syncing snapshot for ${docId} to server...`);
 
+        // Create the binary snapshot
+        const binaryData = loroDoc.export({ mode: 'snapshot' });
+
+        // Convert binary data to base64 string for safer transport
+        const base64Data = arrayBufferToBase64(binaryData);
+
+        // Get the version vector
+        const versionVector = loroDoc.version();
+
         // Create snapshot payload
         const snapshotData: SnapshotData = {
             docId,
             docType,
+            binaryData: base64Data,
+            versionVector,
             timestamp: Date.now(),
             meta,
             clientId: window.__CLIENT_ID // We'll get this from global context if available
         };
 
-        // The Eden client types don't fully match our endpoint structure
-        // This is expected since the endpoint was just created
+        // Call the new endpoint
         // @ts-expect-error - The Eden client doesn't know about our new endpoint yet
-        const response = await hominio.agent.resources.docs.snapshots.post(snapshotData);
+        const response: ServerResponse = await hominio.agent.snapshots.post(snapshotData);
 
         console.log('Snapshot sync response:', response);
-        return response.status === 200;
+        return response.status === 'success';
     } catch (error) {
         console.error('Error syncing snapshot to server:', error);
+        return false;
+    }
+}
+
+/**
+ * Send an incremental update to the server
+ * 
+ * @param docId The document ID
+ * @param loroDoc The Loro document
+ * @param fromVersion The previous version vector
+ */
+export async function syncUpdate(
+    docId: string,
+    loroDoc: LoroDoc,
+    fromVersion: VersionVector
+): Promise<boolean> {
+    try {
+        console.log(`Syncing update for ${docId} to server...`);
+
+        // Get current version
+        const toVersion = loroDoc.version();
+
+        // Get the binary update
+        const binaryData = loroDoc.exportFrom(fromVersion);
+
+        // Convert binary data to base64 string for safer transport
+        const base64Data = arrayBufferToBase64(binaryData);
+
+        // Create update payload
+        const updateData: UpdateData = {
+            docId,
+            binaryData: base64Data,
+            fromVersion,
+            toVersion,
+            timestamp: Date.now(),
+            clientId: window.__CLIENT_ID
+        };
+
+        // Call the update endpoint
+        // @ts-expect-error - The Eden client doesn't know about our new endpoint yet
+        const response: ServerResponse = await hominio.agent.updates.post(updateData);
+
+        console.log('Update sync response:', response);
+        return response.status === 'success';
+    } catch (error) {
+        console.error('Error syncing update to server:', error);
         return false;
     }
 }
