@@ -5,7 +5,7 @@ import { hominio } from './hominio';
 interface SnapshotData {
     docId: string;
     docType: string;
-    binaryData: Uint8Array | string; // Can be Uint8Array or base64 string
+    binaryData: string; // Base64 encoded binary data
     versionVector?: VersionVector;
     timestamp: number;
     meta?: Record<string, unknown>;
@@ -15,17 +15,11 @@ interface SnapshotData {
 // Interface for update data we'll send to the server
 interface UpdateData {
     docId: string;
-    binaryData: Uint8Array | string; // Can be Uint8Array or base64 string
+    binaryData: string; // Base64 encoded binary data
     fromVersion: VersionVector;
     toVersion: VersionVector;
     timestamp: number;
     clientId?: string;
-}
-
-// Server response type
-interface ServerResponse {
-    status: string;
-    [key: string]: any;
 }
 
 /**
@@ -42,10 +36,11 @@ function arrayBufferToBase64(buffer: Uint8Array): string {
 /**
  * Send a snapshot to the server
  * 
- * @param docId The document ID
+ * @param docId The document ID (UUID)
  * @param loroDoc The Loro document
  * @param docType The document type
  * @param meta Optional metadata
+ * @returns Promise<boolean> True if the snapshot was successfully synced
  */
 export async function syncSnapshot(
     docId: string,
@@ -76,12 +71,12 @@ export async function syncSnapshot(
             clientId: window.__CLIENT_ID // We'll get this from global context if available
         };
 
-        // Call the new endpoint
-        // @ts-expect-error - The Eden client doesn't know about our new endpoint yet
-        const response: ServerResponse = await hominio.agent.snapshots.post(snapshotData);
+        // Call the snapshots endpoint with the new route (without .index)
+        // @ts-expect-error - Eden type mismatch but this works
+        const response = await hominio.agent.resources.docs.snapshots.post(snapshotData);
 
         console.log('Snapshot sync response:', response);
-        return response.status === 'success';
+        return response.data && response.data.status === 'success';
     } catch (error) {
         console.error('Error syncing snapshot to server:', error);
         return false;
@@ -91,9 +86,10 @@ export async function syncSnapshot(
 /**
  * Send an incremental update to the server
  * 
- * @param docId The document ID
+ * @param docId The document ID (UUID)
  * @param loroDoc The Loro document
  * @param fromVersion The previous version vector
+ * @returns Promise<boolean> True if the update was successfully synced
  */
 export async function syncUpdate(
     docId: string,
@@ -122,12 +118,12 @@ export async function syncUpdate(
             clientId: window.__CLIENT_ID
         };
 
-        // Call the update endpoint
-        // @ts-expect-error - The Eden client doesn't know about our new endpoint yet
-        const response: ServerResponse = await hominio.agent.updates.post(updateData);
+        // Call the update endpoint with the new route (without .index)
+        // @ts-expect-error - Eden type mismatch but this works
+        const response = await hominio.agent.resources.docs.snapshots.updates.post(updateData);
 
         console.log('Update sync response:', response);
-        return response.status === 'success';
+        return response.data && response.data.status === 'success';
     } catch (error) {
         console.error('Error syncing update to server:', error);
         return false;

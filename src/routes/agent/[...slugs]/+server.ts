@@ -81,15 +81,68 @@ async function initializeDb() {
         `);
 
         console.log('Server-side PGLite initialized with in-memory database');
+
+        // Check if the genesis root registry exists, if not create it
+        await initializeRootRegistry();
     } catch (error) {
         console.error('Failed to initialize server-side PGLite:', error);
     }
 }
 
-// Initialize the database immediately
-initializeDb();
+// Initialize the registry document if it doesn't exist yet
+async function initializeRootRegistry() {
+    try {
+        // Check if the registry document exists
+        const registryExists = await db.query(
+            `SELECT EXISTS(SELECT 1 FROM loro_snapshots WHERE doc_id = $1) as exists`,
+            [ROOT_REGISTRY_DOC_ID]
+        );
 
-// Get or create the registry document's latest snapshot
+        if (registryExists.rows.length > 0) {
+            const row = registryExists.rows[0] as Record<string, unknown>;
+            if (row.exists) {
+                console.log('Root registry document already exists');
+                return;
+            }
+        }
+
+        // Create a placeholder "empty" registry document
+        // In a real app, this would be an actual Loro snapshot
+        const snapshotId = crypto.randomUUID();
+        const placeholderData = Buffer.from(JSON.stringify({
+            version: 1,
+            documents: {},
+            meta: {
+                title: ROOT_REGISTRY_TITLE,
+                createdAt: Date.now()
+            }
+        }));
+
+        // Insert the genesis document
+        await db.query(
+            `INSERT INTO loro_snapshots (
+                snapshot_id, doc_id, binary_data, snapshot_type, 
+                title, doc_type, created_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [
+                snapshotId,
+                ROOT_REGISTRY_DOC_ID,
+                placeholderData,
+                'full',
+                ROOT_REGISTRY_TITLE,
+                'dao',
+                new Date()
+            ]
+        );
+
+        console.log(`Initialized root registry document with ID: ${ROOT_REGISTRY_DOC_ID}`);
+    } catch (error) {
+        console.error('Failed to initialize root registry:', error);
+    }
+}
+
+// Get the registry document's latest snapshot
 async function getLatestRegistrySnapshot(): Promise<RegistrySnapshotResponse> {
     try {
         const result = await db.query(
@@ -117,18 +170,22 @@ async function getLatestRegistrySnapshot(): Promise<RegistrySnapshotResponse> {
     }
 }
 
+// Initialize the database immediately
+initializeDb();
+
 // Following Elysia's official SvelteKit integration guidance:
 // For server placed in src/routes/agent/[...slugs]/+server.ts
 // We need to set prefix as /agent
 const app = new Elysia({ prefix: '/agent' })
     // Root endpoint - will be accessible at /agent
-    // Access pattern will be hominio.agent.get()
     .get('/', () => {
         return {
-            message: 'Hello from agent',
+            message: 'Hominio Agent API',
+            version: '1.0.0',
             timestamp: new Date().toISOString()
         }
     })
+
     // Health endpoint - will be accessible at /agent/health
     .get('/health', async () => {
         // Get database stats
@@ -195,236 +252,212 @@ const app = new Elysia({ prefix: '/agent' })
             database: dbStats
         }
     })
-    // Registry endpoints
-    .get('/registry', async () => {
-        const registrySnapshot = await getLatestRegistrySnapshot();
 
-        return {
-            status: registrySnapshot.exists ? 'success' : 'not_found',
-            registryId: ROOT_REGISTRY_DOC_ID,
-            registryTitle: ROOT_REGISTRY_TITLE,
-            exists: registrySnapshot.exists,
-            snapshotId: registrySnapshot.snapshotId,
-            timestamp: new Date().toISOString()
-        };
-    })
-    // New endpoint for document snapshots
-    .post('/snapshots', async ({ body }) => {
-        console.log('Received document snapshot for storage');
+    // Resource endpoints
+    .group('/resources', app => app
+        .group('/docs', app => app
+            // Get all documents including the root registry
+            .get('/', async () => {
+                try {
+                    // Get the registry document first
+                    const registrySnapshot = await getLatestRegistrySnapshot();
 
-        try {
-            // Type cast the body to our expected interface
-            const snapshotData = body as SnapshotData;
-            const { docId, docType, binaryData, versionVector, timestamp, meta, clientId } = snapshotData;
+                    // Then get all documents
+                    const result = await db.query(
+                        `SELECT doc_id, 
+                          MAX(title) as title,
+                          MAX(doc_type) as doc_type,
+                          COUNT(snapshot_id) as snapshot_count,
+                          MAX(created_at) as last_updated
+                        FROM loro_snapshots
+                        GROUP BY doc_id
+                        ORDER BY doc_id`
+                    );
 
-            // Determine if this is the root registry document
-            const isRootRegistry = docId === ROOT_REGISTRY_DOC_ID;
+                    return {
+                        status: 'success',
+                        documents: result.rows,
+                        registry: {
+                            id: ROOT_REGISTRY_DOC_ID,
+                            title: ROOT_REGISTRY_TITLE,
+                            exists: registrySnapshot.exists,
+                            snapshotId: registrySnapshot.snapshotId,
+                        },
+                        genesisUuid: GENESIS_UUID,
+                        timestamp: new Date().toISOString()
+                    }
+                } catch (error) {
+                    console.error('Error retrieving document list:', error);
 
-            // Generate a unique ID for this snapshot
-            const snapshotId = crypto.randomUUID();
-
-            // Convert base64 to buffer
-            const binaryBuffer = base64ToBuffer(binaryData);
-
-            // Add optional title if provided in metadata
-            const title = isRootRegistry
-                ? ROOT_REGISTRY_TITLE
-                : (meta?.title as string) || docType;
-
-            // Insert the snapshot into the database
-            await db.query(
-                `INSERT INTO loro_snapshots (
-                    snapshot_id, doc_id, binary_data, snapshot_type, 
-                    version_vector, client_id, title, doc_type, created_at
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-                [
-                    snapshotId,
-                    docId,
-                    binaryBuffer,
-                    'full', // Assuming full snapshot by default
-                    versionVector ? JSON.stringify(versionVector) : null,
-                    clientId || null,
-                    title,
-                    isRootRegistry ? 'dao' : docType,
-                    new Date(timestamp)
-                ]
-            );
-
-            console.log(`Snapshot stored with ID: ${snapshotId} for document: ${docId}`);
-
-            // Return a success response
-            return {
-                status: 'success',
-                received: true,
-                stored: true,
-                snapshotId,
-                docId,
-                timestamp: new Date().toISOString()
-            }
-        } catch (error) {
-            console.error('Error storing snapshot:', error);
-
-            // Return an error response
-            return {
-                status: 'error',
-                received: true,
-                stored: false,
-                error: String(error),
-                timestamp: new Date().toISOString()
-            }
-        }
-    })
-    // Add endpoint for storing incremental updates
-    .post('/updates', async ({ body }) => {
-        console.log('Received document update');
-
-        try {
-            // Generate a unique ID for this update
-            const updateId = crypto.randomUUID();
-            const updateData = body as UpdateData;
-            const { docId, binaryData, fromVersion, toVersion, clientId, timestamp } = updateData;
-
-            // Convert base64 to buffer
-            const binaryBuffer = base64ToBuffer(binaryData);
-
-            // Insert the update into the database
-            await db.query(
-                `INSERT INTO loro_updates (
-                    update_id, doc_id, binary_data, from_version, 
-                    to_version, client_id, created_at
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-                [
-                    updateId,
-                    docId,
-                    binaryBuffer,
-                    JSON.stringify(fromVersion),
-                    JSON.stringify(toVersion),
-                    clientId || null,
-                    new Date(timestamp)
-                ]
-            );
-
-            return {
-                status: 'success',
-                updateId,
-                docId,
-                timestamp: new Date().toISOString()
-            }
-        } catch (error) {
-            console.error('Error storing update:', error);
-
-            return {
-                status: 'error',
-                received: true,
-                stored: false,
-                error: String(error),
-                timestamp: new Date().toISOString()
-            }
-        }
-    })
-    // Add endpoint to retrieve latest snapshot for a document
-    .get('/snapshots/:docId/latest', async ({ params }) => {
-        try {
-            const { docId } = params;
-
-            // Query the database for the latest snapshot matching the document ID
-            const result = await db.query(
-                `SELECT snapshot_id, binary_data, snapshot_type, version_vector, title, doc_type, created_at
-                FROM loro_snapshots
-                WHERE doc_id = $1
-                ORDER BY created_at DESC
-                LIMIT 1`,
-                [docId]
-            );
-
-            if (result.rows.length === 0) {
-                return {
-                    status: 'not_found',
-                    docId,
-                    timestamp: new Date().toISOString()
+                    return {
+                        status: 'error',
+                        error: String(error),
+                        timestamp: new Date().toISOString()
+                    }
                 }
-            }
+            })
 
-            return {
-                status: 'success',
-                docId,
-                snapshot: result.rows[0],
-                timestamp: new Date().toISOString()
-            }
-        } catch (error) {
-            console.error('Error retrieving latest snapshot:', error);
+            // Handle all snapshot operations
+            .group('/snapshots', app => app
+                // POST to store a snapshot
+                .post('/', async ({ body }) => {
+                    console.log('Received document snapshot for storage');
 
-            return {
-                status: 'error',
-                error: String(error),
-                timestamp: new Date().toISOString()
-            }
-        }
-    })
-    // Add endpoint to retrieve all snapshots for a document
-    .get('/snapshots/:docId', async ({ params }) => {
-        try {
-            const { docId } = params;
+                    try {
+                        // Type cast the body to our expected interface
+                        const snapshotData = body as SnapshotData;
+                        const { docId, docType, binaryData, versionVector, timestamp, meta, clientId } = snapshotData;
 
-            // Query the database for snapshots matching the document ID
-            const result = await db.query(
-                `SELECT snapshot_id, snapshot_type, version_vector, title, doc_type, created_at
-                FROM loro_snapshots
-                WHERE doc_id = $1
-                ORDER BY created_at DESC`,
-                [docId]
-            );
+                        // Determine if this is the root registry document
+                        const isRootRegistry = docId === ROOT_REGISTRY_DOC_ID;
 
-            return {
-                status: 'success',
-                docId,
-                snapshots: result.rows,
-                count: result.rows.length,
-                timestamp: new Date().toISOString()
-            }
-        } catch (error) {
-            console.error('Error retrieving snapshots:', error);
+                        // Generate a unique ID for this snapshot
+                        const snapshotId = crypto.randomUUID();
 
-            return {
-                status: 'error',
-                error: String(error),
-                timestamp: new Date().toISOString()
-            }
-        }
-    })
-    // Add endpoint to list all documents with snapshots
-    .get('/documents', async () => {
-        try {
-            // Query the database for unique documents with titles and types
-            const result = await db.query(
-                `SELECT doc_id, 
-                  MAX(title) as title,
-                  MAX(doc_type) as doc_type,
-                  COUNT(snapshot_id) as snapshot_count,
-                  MAX(created_at) as last_updated
-                FROM loro_snapshots
-                GROUP BY doc_id
-                ORDER BY doc_id`
-            );
+                        // Convert base64 to buffer
+                        const binaryBuffer = base64ToBuffer(binaryData);
 
-            return {
-                status: 'success',
-                documents: result.rows,
-                count: result.rows.length,
-                timestamp: new Date().toISOString()
-            }
-        } catch (error) {
-            console.error('Error retrieving document list:', error);
+                        // Add optional title if provided in metadata
+                        const title = isRootRegistry
+                            ? ROOT_REGISTRY_TITLE
+                            : (meta?.title as string) || docType;
 
-            return {
-                status: 'error',
-                error: String(error),
-                timestamp: new Date().toISOString()
-            }
-        }
-    });
+                        // Insert the snapshot into the database
+                        await db.query(
+                            `INSERT INTO loro_snapshots (
+                                snapshot_id, doc_id, binary_data, snapshot_type, 
+                                version_vector, client_id, title, doc_type, created_at
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+                            [
+                                snapshotId,
+                                docId,
+                                binaryBuffer,
+                                'full', // Assuming full snapshot by default
+                                versionVector ? JSON.stringify(versionVector) : null,
+                                clientId || null,
+                                title,
+                                isRootRegistry ? 'dao' : docType,
+                                new Date(timestamp)
+                            ]
+                        );
+
+                        console.log(`Snapshot stored with ID: ${snapshotId} for document: ${docId}`);
+
+                        // Return a success response
+                        return {
+                            status: 'success',
+                            received: true,
+                            stored: true,
+                            snapshotId,
+                            docId,
+                            timestamp: new Date().toISOString()
+                        }
+                    } catch (error) {
+                        console.error('Error storing snapshot:', error);
+
+                        // Return an error response
+                        return {
+                            status: 'error',
+                            received: true,
+                            stored: false,
+                            error: String(error),
+                            timestamp: new Date().toISOString()
+                        }
+                    }
+                })
+
+                // POST to store an update
+                .post('/updates', async ({ body }) => {
+                    console.log('Received document update');
+
+                    try {
+                        // Generate a unique ID for this update
+                        const updateId = crypto.randomUUID();
+                        const updateData = body as UpdateData;
+                        const { docId, binaryData, fromVersion, toVersion, clientId, timestamp } = updateData;
+
+                        // Convert base64 to buffer
+                        const binaryBuffer = base64ToBuffer(binaryData);
+
+                        // Insert the update into the database
+                        await db.query(
+                            `INSERT INTO loro_updates (
+                                update_id, doc_id, binary_data, from_version, 
+                                to_version, client_id, created_at
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                            [
+                                updateId,
+                                docId,
+                                binaryBuffer,
+                                JSON.stringify(fromVersion),
+                                JSON.stringify(toVersion),
+                                clientId || null,
+                                new Date(timestamp)
+                            ]
+                        );
+
+                        return {
+                            status: 'success',
+                            updateId,
+                            docId,
+                            timestamp: new Date().toISOString()
+                        }
+                    } catch (error) {
+                        console.error('Error storing update:', error);
+
+                        return {
+                            status: 'error',
+                            received: true,
+                            stored: false,
+                            error: String(error),
+                            timestamp: new Date().toISOString()
+                        }
+                    }
+                })
+
+                // GET all snapshots for a document
+                .get('/:docId', async ({ params }) => {
+                    try {
+                        const { docId } = params;
+
+                        // Query the database for snapshots matching the document ID
+                        const result = await db.query(
+                            `SELECT 
+                              snapshot_id,
+                              doc_id,
+                              doc_type,
+                              snapshot_type,
+                              version_vector,
+                              title,
+                              created_at
+                            FROM loro_snapshots
+                            WHERE doc_id = $1
+                            ORDER BY created_at DESC`,
+                            [docId]
+                        );
+
+                        return {
+                            status: 'success',
+                            docId,
+                            snapshots: result.rows,
+                            count: result.rows.length,
+                            timestamp: new Date().toISOString()
+                        }
+                    } catch (error) {
+                        console.error('Error retrieving snapshots:', error);
+
+                        return {
+                            status: 'error',
+                            error: String(error),
+                            timestamp: new Date().toISOString()
+                        }
+                    }
+                })
+            )
+        )
+    );
 
 // Export the app type for Eden client
 export type App = typeof app;

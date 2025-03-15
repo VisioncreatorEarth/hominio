@@ -1,10 +1,16 @@
+<!-- 
+  Todos page - Creates, manages and syncs todo lists
+  using Loro CRDT with server sync
+-->
 <script lang="ts">
 	import { onMount, onDestroy, getContext } from 'svelte';
 	import { LoroDoc, type Container, type LoroList } from 'loro-crdt';
 	import { generateUUID } from '$lib/utils/uuid';
 	import type { Writable } from 'svelte/store';
+	import { hominio } from '$lib/client/hominio';
 
-	// Constants for document IDs
+	// Constants for document IDs - GENESIS_UUID is now defined on the server
+	// just hardcode for client use
 	const GENESIS_UUID = '00000000-0000-0000-0000-000000000000';
 	const ROOT_REGISTRY_DOC_ID = GENESIS_UUID;
 	const ROOT_REGISTRY_TITLE = 'o.homin.io';
@@ -87,6 +93,18 @@
 
 	// Get or create the registry document
 	async function getOrCreateRegistry(): Promise<LoroDoc> {
+		// First check if the server has registry documents
+		try {
+			// @ts-expect-error - Eden type mismatch but this works
+			const serverResponse = await hominio.agent.resources.docs.get();
+			if (serverResponse.data && serverResponse.data.status === 'success') {
+				console.log('Server registry:', serverResponse.data.registry);
+				// We just need to confirm the server has the registry initialized
+			}
+		} catch (error) {
+			console.warn('Could not fetch server registry, using local only', error);
+		}
+
 		// Check if we already have this loro doc in registry
 		let existingRegistryDoc = false;
 		let registry: LoroDoc = new LoroDoc();
@@ -365,7 +383,7 @@
 	}
 
 	// Get reactive values from the storage info store
-	$: ({ mode: storageMode, path: dbPath } = $storageInfo);
+	$: ({ isInitialized: storageInitialized, clientId } = $storageInfo);
 </script>
 
 <div class="min-h-full bg-blue-950 text-emerald-100">
@@ -404,6 +422,7 @@
 				<p>Total todos: {todos.length}</p>
 				<p>Registry status: {isRegistryReady ? 'Loaded' : 'Not loaded'}</p>
 				<p>Document UUID: {todoDocId}</p>
+				<p>Client ID: {clientId}</p>
 			</div>
 
 			<!-- Todo List -->
