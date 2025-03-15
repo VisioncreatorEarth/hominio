@@ -5,13 +5,28 @@ import { loroPGLiteStorage } from './loroPGLiteStorage';
 type LoroVersion = VersionVector;
 type LoroMetadata = Record<string, unknown>;
 
+// Type for snapshot saved callback
+type SnapshotSavedCallback = (docId: string, loroDoc: LoroDoc, docType: string, meta: LoroMetadata) => void;
+
 /**
  * LoroStorage - A storage adapter for Loro that uses PGlite
  * Provides persistent storage for Loro documents with version history
  */
 export class LoroStorage {
+    // Private array to store snapshot saved callbacks
+    private _snapshotSavedCallbacks: SnapshotSavedCallback[] = [];
+
     constructor() {
         console.log('LoroStorage initialized with PGlite backend');
+    }
+
+    /**
+     * Register a callback to be called when a snapshot is saved
+     * @param callback Function to call when a snapshot is saved
+     */
+    onSnapshotSaved(callback: SnapshotSavedCallback): void {
+        this._snapshotSavedCallbacks.push(callback);
+        console.log('Snapshot saved callback registered');
     }
 
     /**
@@ -29,9 +44,26 @@ export class LoroStorage {
             // Also store the current version for incremental updates
             // We store this in memory for now, but in a real application you'd want to persist this
             this._storeLastVersion(docId, loroDoc.version());
+
+            // Notify callbacks
+            this._notifySnapshotSaved(docId, loroDoc, docType, meta);
         } catch (error) {
             console.error('Error saving Loro snapshot:', error);
             throw error;
+        }
+    }
+
+    /**
+     * Notify all registered callbacks that a snapshot was saved
+     */
+    private _notifySnapshotSaved(docId: string, loroDoc: LoroDoc, docType: string, meta: LoroMetadata): void {
+        // Call each registered callback
+        for (const callback of this._snapshotSavedCallbacks) {
+            try {
+                callback(docId, loroDoc, docType, meta);
+            } catch (error) {
+                console.error('Error in snapshot saved callback:', error);
+            }
         }
     }
 

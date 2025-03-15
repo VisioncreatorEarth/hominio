@@ -5,6 +5,7 @@
 	import { loroPGLiteStorage } from '$lib/stores/loroPGLiteStorage';
 	import { LoroDoc } from 'loro-crdt';
 	import { generateUUID, generateShortUUID } from '$lib/utils/uuid';
+	import { registerSnapshotHook } from '$lib/client/syncservice';
 
 	// Disable Server-Side Rendering since Tauri is client-only
 	export const ssr = false;
@@ -42,6 +43,14 @@
 
 			// Update storage state after initialization
 			isStorageInitialized = true;
+
+			// Register the snapshot hook for server synchronization
+			registerSnapshotHook(loroStorage);
+
+			// Set the client ID for the sync service
+			if (typeof window !== 'undefined') {
+				window.__CLIENT_ID = clientId;
+			}
 
 			isInitializing = false;
 			return true;
@@ -183,6 +192,12 @@
 								class="rounded-md px-3 py-2 text-sm font-medium text-emerald-100 transition-colors hover:bg-blue-950 hover:text-emerald-50"
 							>
 								Todos
+							</a>
+							<a
+								href="/server"
+								class="rounded-md px-3 py-2 text-sm font-medium text-emerald-100 transition-colors hover:bg-blue-950 hover:text-emerald-50"
+							>
+								Server
 							</a>
 						</nav>
 					</div>

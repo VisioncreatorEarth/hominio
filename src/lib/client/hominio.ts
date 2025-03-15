@@ -28,4 +28,4 @@ export const hominio = client;
 // 
 // Future endpoints:
 // - hominio.agent.chat.* for chat endpoints
-// - hominio.agent.tools.* for tools endpoints 
+// - hominio.agent.resources.docs.* for resources endpoints etc

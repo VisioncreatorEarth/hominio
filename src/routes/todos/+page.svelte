@@ -53,6 +53,8 @@
 		try {
 			if (loroDoc) {
 				await loroStorage.saveSnapshot(TODO_DOC_ID, loroDoc, TODO_DOC_TYPE);
+				// Note: Thanks to the syncservice hook, this snapshot will automatically
+				// be synchronized to the server via the /agent/resources/docs/snapshots endpoint
 			}
 		} catch (err) {
 			console.error('Error saving to storage:', err);
