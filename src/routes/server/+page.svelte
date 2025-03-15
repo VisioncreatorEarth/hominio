@@ -50,6 +50,7 @@
 			error = null;
 
 			// Use the resources/docs endpoint - now without .index
+			// @ts-expect-error - Eden type mismatch but this works
 			const response = await hominio.agent.resources.docs.get();
 
 			// Check the data structure
@@ -191,7 +192,7 @@
 									? 'border-emerald-500 bg-emerald-900/30'
 									: 'border-blue-700 bg-blue-900/30'
 							}`}
-							on:click={() => fetchSnapshots(doc.doc_id)}
+							onclick={() => fetchSnapshots(doc.doc_id)}
 						>
 							{#if isRegistryDoc(doc.doc_id)}
 								<span class="text-xs font-semibold tracking-wide text-purple-300 uppercase"
@@ -216,7 +217,7 @@
 			</div>
 
 			<button
-				on:click={fetchDocuments}
+				onclick={fetchDocuments}
 				class="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-emerald-500"
 				disabled={loading}
 			>

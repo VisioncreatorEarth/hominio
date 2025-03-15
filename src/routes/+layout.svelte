@@ -118,8 +118,14 @@
 		loroDocsStore.set(loroDocsRegistry);
 	});
 
+	// Track individual state properties to ensure reactivity
 	$effect(() => {
-		storageInfoStore.set(getStorageInfo());
+		// Reference the state variables directly so they're tracked
+		const info = {
+			isInitialized: isStorageInitialized,
+			clientId
+		};
+		storageInfoStore.set(info);
 	});
 
 	// Set context for child components

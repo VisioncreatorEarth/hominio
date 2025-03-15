@@ -80,7 +80,7 @@ async function initializeDb() {
             CREATE INDEX IF NOT EXISTS idx_loro_updates_doc_id ON loro_updates(doc_id);
         `);
 
-        console.log('Server-side PGLite initialized with in-memory database');
+        // console.log('Server-side PGLite initialized with in-memory database');
 
         // Check if the genesis root registry exists, if not create it
         await initializeRootRegistry();
@@ -101,7 +101,7 @@ async function initializeRootRegistry() {
         if (registryExists.rows.length > 0) {
             const row = registryExists.rows[0] as Record<string, unknown>;
             if (row.exists) {
-                console.log('Root registry document already exists');
+                // console.log('Root registry document already exists');
                 return;
             }
         }
@@ -136,7 +136,7 @@ async function initializeRootRegistry() {
             ]
         );
 
-        console.log(`Initialized root registry document with ID: ${ROOT_REGISTRY_DOC_ID}`);
+        // console.log(`Initialized root registry document with ID: ${ROOT_REGISTRY_DOC_ID}`);
     } catch (error) {
         console.error('Failed to initialize root registry:', error);
     }
@@ -301,7 +301,7 @@ const app = new Elysia({ prefix: '/agent' })
             .group('/snapshots', app => app
                 // POST to store a snapshot
                 .post('/', async ({ body }) => {
-                    console.log('Received document snapshot for storage');
+                    // console.log('Received document snapshot for storage');
 
                     try {
                         // Type cast the body to our expected interface
@@ -342,7 +342,7 @@ const app = new Elysia({ prefix: '/agent' })
                             ]
                         );
 
-                        console.log(`Snapshot stored with ID: ${snapshotId} for document: ${docId}`);
+                        // console.log(`Snapshot stored with ID: ${snapshotId} for document: ${docId}`);
 
                         // Return a success response
                         return {
@@ -369,7 +369,7 @@ const app = new Elysia({ prefix: '/agent' })
 
                 // POST to store an update
                 .post('/updates', async ({ body }) => {
-                    console.log('Received document update');
+                    // console.log('Received document update');
 
                     try {
                         // Generate a unique ID for this update

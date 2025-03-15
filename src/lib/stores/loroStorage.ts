@@ -17,7 +17,7 @@ export class LoroStorage {
     private _snapshotSavedCallbacks: SnapshotSavedCallback[] = [];
 
     constructor() {
-        console.log('LoroStorage initialized with PGlite backend');
+        // console.log('LoroStorage initialized with PGlite backend');
     }
 
     /**
@@ -26,7 +26,7 @@ export class LoroStorage {
      */
     onSnapshotSaved(callback: SnapshotSavedCallback): void {
         this._snapshotSavedCallbacks.push(callback);
-        console.log('Snapshot saved callback registered');
+        // console.log('Snapshot saved callback registered');
     }
 
     /**
@@ -39,7 +39,7 @@ export class LoroStorage {
     async saveSnapshot(docId: string, loroDoc: LoroDoc, docType: string = 'default', meta: LoroMetadata = {}): Promise<void> {
         try {
             await loroPGLiteStorage.saveSnapshot(docId, loroDoc, docType, meta);
-            console.log(`Loro snapshot saved: ${docId}`);
+            // console.log(`Loro snapshot saved: ${docId}`);
 
             // Also store the current version for incremental updates
             // We store this in memory for now, but in a real application you'd want to persist this
@@ -79,7 +79,7 @@ export class LoroStorage {
             if (loaded) {
                 // Store the version after loading for incremental updates
                 this._storeLastVersion(docId, loroDoc.version());
-                console.log(`Loro snapshot loaded: ${docId}`);
+                // console.log(`Loro snapshot loaded: ${docId}`);
             }
             return loaded;
         } catch (error) {

@@ -49,7 +49,7 @@ export async function syncSnapshot(
     meta: Record<string, unknown> = {}
 ): Promise<boolean> {
     try {
-        console.log(`Syncing snapshot for ${docId} to server...`);
+        // console.log(`Syncing snapshot for ${docId} to server...`);
 
         // Create the binary snapshot
         const binaryData = loroDoc.export({ mode: 'snapshot' });
@@ -75,7 +75,7 @@ export async function syncSnapshot(
         // @ts-expect-error - Eden type mismatch but this works
         const response = await hominio.agent.resources.docs.snapshots.post(snapshotData);
 
-        console.log('Snapshot sync response:', response);
+        // console.log('Snapshot sync response:', response);
         return response.data && response.data.status === 'success';
     } catch (error) {
         console.error('Error syncing snapshot to server:', error);
@@ -97,7 +97,7 @@ export async function syncUpdate(
     fromVersion: VersionVector
 ): Promise<boolean> {
     try {
-        console.log(`Syncing update for ${docId} to server...`);
+        // console.log(`Syncing update for ${docId} to server...`);
 
         // Get current version
         const toVersion = loroDoc.version();
@@ -122,7 +122,7 @@ export async function syncUpdate(
         // @ts-expect-error - Eden type mismatch but this works
         const response = await hominio.agent.resources.docs.snapshots.updates.post(updateData);
 
-        console.log('Update sync response:', response);
+        // console.log('Update sync response:', response);
         return response.data && response.data.status === 'success';
     } catch (error) {
         console.error('Error syncing update to server:', error);
@@ -169,9 +169,9 @@ export function registerSnapshotHook(storage: unknown): void {
                     .catch(err => console.error('Error in snapshot hook:', err));
             }
         );
-        console.log('Snapshot hook registered with storage system');
+        // console.log('Snapshot hook registered with storage system');
     } else {
-        console.warn('Could not register snapshot hook - storage system not compatible');
+        // console.warn('Could not register snapshot hook - storage system not compatible');
     }
 }
 

@@ -58,8 +58,8 @@ export class LoroPGLiteStorage {
         const timestamp = new Date().toISOString();
         const logMessage = `${timestamp}: ${message}`;
         this.debugInfo.push(logMessage);
-        // Also log to console for visibility during development
-        console.log(`PGLite: ${message}`);
+        // Comment out console logging to reduce noise
+        // console.log(`PGLite: ${message}`);
     }
 
     /**

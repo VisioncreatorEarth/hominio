@@ -30,17 +30,17 @@ if (typeof window !== 'undefined') {
             ];
 
             // Log what we're doing
-            console.log(`PGlite looking for ${filename} in ${isProd ? 'production' : 'development'} mode`);
+            // console.log(`PGlite looking for ${filename} in ${isProd ? 'production' : 'development'} mode`);
 
             // In development, prioritize the public directory
             if (!isProd) {
-                console.log(`Trying location: ${possibleLocations[0]}`);
+                // console.log(`Trying location: ${possibleLocations[0]}`);
                 return possibleLocations[0];
             }
 
             // In production, we'll need to check if our custom location works
             // The actual check happens at runtime when PGlite tries to fetch the file
-            console.log(`Using location: ${possibleLocations[0]}`);
+            // console.log(`Using location: ${possibleLocations[0]}`);
             return possibleLocations[0];
         }
 
@@ -48,7 +48,7 @@ if (typeof window !== 'undefined') {
         return filename;
     };
 
-    console.log(`PGlite helper initialized in ${isProd ? 'production' : 'development'} mode`);
+    // console.log(`PGlite helper initialized in ${isProd ? 'production' : 'development'} mode`);
 
     // Mark as loaded
     pgliteLoaded.value = true;

@@ -98,11 +98,11 @@
 			// @ts-expect-error - Eden type mismatch but this works
 			const serverResponse = await hominio.agent.resources.docs.get();
 			if (serverResponse.data && serverResponse.data.status === 'success') {
-				console.log('Server registry:', serverResponse.data.registry);
+				// console.log('Server registry:', serverResponse.data.registry);
 				// We just need to confirm the server has the registry initialized
 			}
 		} catch (error) {
-			console.warn('Could not fetch server registry, using local only', error);
+			// console.warn('Could not fetch server registry, using local only', error);
 		}
 
 		// Check if we already have this loro doc in registry
@@ -167,7 +167,7 @@
 			// Document exists in registry, try to load it
 			const loaded = await loadFromStorage(uuid, doc);
 			if (!loaded) {
-				console.warn(`Document ${uuid} found in registry but could not be loaded`);
+				// console.warn(`Document ${uuid} found in registry but could not be loaded`);
 			}
 
 			// Use the existing todoDocId from the registry
@@ -378,7 +378,8 @@
 	});
 
 	// Handle form submission
-	function handleSubmit() {
+	function handleSubmit(event: Event) {
+		event.preventDefault();
 		addTodo();
 	}
 
@@ -400,7 +401,7 @@
 			</div>
 		{:else}
 			<!-- Add Todo Form -->
-			<form on:submit|preventDefault={handleSubmit} class="mb-6">
+			<form onsubmit={handleSubmit} class="mb-6">
 				<div class="flex gap-2">
 					<input
 						type="text"
@@ -438,7 +439,7 @@
 								<input
 									type="checkbox"
 									checked={todo.completed}
-									on:change={() => toggleTodo(todo.id)}
+									onchange={() => toggleTodo(todo.id)}
 									class="h-5 w-5 rounded border-blue-700 bg-blue-800 focus:ring-emerald-500"
 								/>
 								<span
@@ -455,7 +456,7 @@
 									{todo.completed ? 'Done' : 'Todo'}
 								</span>
 								<button
-									on:click={() => deleteTodo(todo.id)}
+									onclick={() => deleteTodo(todo.id)}
 									class="ml-2 rounded px-3 py-1 text-red-400 hover:bg-red-400/10 hover:text-red-300"
 								>
 									Delete

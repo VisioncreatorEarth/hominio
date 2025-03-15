@@ -87,7 +87,7 @@
 		if (docType === 'todos') {
 			window.location.href = '/todos';
 		} else {
-			console.log(`No specific route for document type: ${docType}`);
+			// console.log(`No specific route for document type: ${docType}`);
 		}
 	}
 
@@ -122,11 +122,11 @@
 			// @ts-expect-error - Eden type mismatch but this works
 			const response = await hominio.agent.resources.docs.get();
 			if (response.data && response.data.status === 'success') {
+				// Update our server documents list
 				serverDocuments = response.data.documents || [];
 			}
 		} catch (error) {
-			console.warn('Could not fetch server registry:', error);
-			// Non-fatal - we still use the local registry
+			// console.warn('Could not fetch server registry:', error);
 		}
 	}
 
@@ -166,7 +166,7 @@
 			loadDocumentsFromRegistry();
 		} else {
 			// Registry doesn't exist locally yet, use server data
-			console.log('Registry does not exist locally, relying on server data');
+			// console.log('Registry does not exist locally, relying on server data');
 		}
 	}
 
@@ -266,7 +266,7 @@
 				<div class="mb-4 flex items-center justify-between">
 					<h2 class="text-xl font-semibold text-emerald-300">Documents</h2>
 					<button
-						on:click={loadRegistry}
+						onclick={loadRegistry}
 						class="rounded bg-blue-600 px-3 py-1 text-sm font-medium text-white transition-colors hover:bg-blue-500"
 					>
 						Refresh
@@ -309,7 +309,7 @@
 
 										<div class="flex gap-2">
 											<button
-												on:click={() => toggleDocDetails(doc.doc_id)}
+												onclick={() => toggleDocDetails(doc.doc_id)}
 												class="rounded px-2 py-1 text-xs text-emerald-400 hover:bg-emerald-900/30"
 											>
 												{expandedDocs[doc.doc_id] ? 'Hide' : 'Details'}
@@ -317,7 +317,7 @@
 
 											{#if doc.doc_type === 'todos'}
 												<button
-													on:click={() => navigateToDoc(doc.doc_id, doc.doc_type)}
+													onclick={() => navigateToDoc(doc.doc_id, doc.doc_type)}
 													class="rounded bg-emerald-600/80 px-2 py-1 text-xs font-medium text-black hover:bg-emerald-500"
 												>
 													Open
@@ -377,7 +377,7 @@
 
 										<div class="flex gap-2">
 											<button
-												on:click={() => toggleDocDetails(doc.uuid)}
+												onclick={() => toggleDocDetails(doc.uuid)}
 												class="rounded px-2 py-1 text-xs text-emerald-400 hover:bg-emerald-900/30"
 											>
 												{expandedDocs[doc.uuid] ? 'Hide' : 'Details'}
@@ -385,7 +385,7 @@
 
 											{#if doc.docType === 'todos'}
 												<button
-													on:click={() => navigateToDoc(doc.uuid, doc.docType)}
+													onclick={() => navigateToDoc(doc.uuid, doc.docType)}
 													class="rounded bg-emerald-600/80 px-2 py-1 text-xs font-medium text-black hover:bg-emerald-500"
 												>
 													Open
