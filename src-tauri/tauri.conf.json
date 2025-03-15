@@ -13,10 +13,10 @@
     "windows": [
       {
         "title": "Hominio",
-        "width": 800,
-        "height": 600,
+        "width": 1280,
+        "height": 720,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": true
       }
     ],
     "security": {
@@ -40,13 +40,7 @@
       "exceptionDomain": "",
       "signingIdentity": null,
       "providerShortName": null
-    },
-    "resources": [
-      "../static/pglite-assets/*",
-      "../build/pglite-assets/*",
-      "../build/_app/immutable/assets/*.wasm",
-      "../build/_app/immutable/assets/*.data"
-    ]
+    }
   },
   "plugins": {
     "fs": {

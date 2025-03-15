@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev --host 0.0.0.0 --port 5173",
-    "build": "node scripts/prepare-assets.js && vite build",
-    "tauri": "node scripts/prepare-assets.js && tauri",
+    "build": "vite build",
+    "tauri": "tauri",
     "preview": "vite preview --host 0.0.0.0 --port 5173",
     "prepare": "svelte-kit sync || echo ''",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",

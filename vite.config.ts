@@ -32,11 +32,6 @@ export default defineConfig({
 	build: {
 		// Make sure Rollup correctly handles WASM files for PGlite
 		rollupOptions: {
-			// output: {
-			// 	manualChunks: {
-			// 		pglite: ['@electric-sql/pglite']
-			// 	}
-			// },
 			// Mark Tauri imports as external during build
 			external: [
 				'@tauri-apps/api',
