@@ -9,12 +9,12 @@ export const GENESIS_REGISTRY_NAME = '♾️';
 // The HUMAN Registry UUID - Owned by Hominio DAO
 export const HUMAN_REGISTRY_UUID = 'f8f7c5e4-d3a2-4b1c-9d0e-8f7c6b5a4d3e';
 export const HUMAN_REGISTRY_DOMAIN = 'homin.io';
-export const HUMAN_REGISTRY_NAME = 'HUMAN Registry';
+export const HUMAN_REGISTRY_NAME = 'HUMANS Registry';
 
 // The DAO Registry UUID - Owned by Hominio DAO
 export const DAO_REGISTRY_UUID = 'a1b2c3d4-e5f6-4708-b9c0-1234567890ab';
 export const DAO_REGISTRY_DOMAIN = 'o.homin.io';
-export const DAO_REGISTRY_NAME = 'DAO Registry';
+export const DAO_REGISTRY_NAME = 'DAOS Registry';
 
 // Visioncreator DAO constants - Owned by multiple owners
 export const VISIONCREATOR_DAO_UUID = '7d8e9f0a-b1c2-43d4-95f6-87c8a9b0c1d2';
@@ -41,6 +41,15 @@ export const YVONNE_UUID = 'c4d5e6f7-a8b9-4c0d-1e2f-3a4b5c6d7e8f';
 export const YVONNE_DOMAIN = 'yvonne.homin.io';
 export const YVONNE_NAME = 'Yvonne Müller';
 
+// MetaSchema constants
+export const METASCHEMA_UUID = 'f8e9d7c6-b5a4-3210-9876-543210fedcba';
+export const METASCHEMA_NAME = 'MetaSchema';
+export const METASCHEMA_DOMAIN = '*.hominio.o.homin.io';
+
+// MetadataSchema constants
+export const METADATASCHEMA_UUID = 'a7b8c9d0-e1f2-3456-7890-123456789abc';
+export const METADATASCHEMA_NAME = 'MetadataSchema';
+export const METADATASCHEMA_DOMAIN = '*.hominio.o.homin.io';
 
 // Document Metadata Types
 export interface DocumentMetadata {
@@ -48,6 +57,7 @@ export interface DocumentMetadata {
     domain: string;
     owner: string[] | string;  // UUID of the owner(s)
     createdAt: number;
+    schema?: string; // Reference to a schema document UUID
 }
 
 // Initial Access Control Configuration
@@ -107,5 +117,20 @@ export const INITIAL_ACCESS_CONTROL: Record<string, DocumentMetadata> = {
         domain: YVONNE_DOMAIN,
         owner: YVONNE_UUID,
         createdAt: Date.now()
+    },
+    // MetaSchema document owned by Hominio DAO
+    [METASCHEMA_UUID]: {
+        name: METASCHEMA_NAME,
+        domain: METASCHEMA_DOMAIN,
+        owner: HOMINIO_DAO_UUID,
+        createdAt: Date.now()
+    },
+    // MetadataSchema document owned by Hominio DAO
+    [METADATASCHEMA_UUID]: {
+        name: METADATASCHEMA_NAME,
+        domain: METADATASCHEMA_DOMAIN,
+        owner: HOMINIO_DAO_UUID,
+        createdAt: Date.now(),
+        schema: METASCHEMA_UUID
     }
 };

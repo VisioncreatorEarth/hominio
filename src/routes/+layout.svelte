@@ -219,7 +219,7 @@
 
 		<!-- Main Content -->
 		<main class="flex-1 overflow-auto bg-blue-950">
-			<div class="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+			<div class="mx-auto w-full">
 				<!-- Slot for page content -->
 				{@render children()}
 			</div>

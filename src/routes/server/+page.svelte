@@ -11,9 +11,9 @@
 		DAO_REGISTRY_UUID,
 		HUMAN_REGISTRY_DOMAIN,
 		DAO_REGISTRY_DOMAIN,
-		INITIAL_ACCESS_CONTROL,
-		type AccessControl
+		INITIAL_ACCESS_CONTROL
 	} from '$lib/constants/registry';
+	import { LoroDoc } from 'loro-crdt';
 
 	// Define types for our data structures
 	interface Document {
@@ -23,8 +23,7 @@
 		domain?: string;
 		snapshot_count: number;
 		last_updated: string;
-		owner?: string;
-		accessControl?: Record<string, AccessControl>;
+		owner?: string | string[];
 	}
 
 	interface Registry {
@@ -56,6 +55,13 @@
 	let snapshots: Snapshot[] = [];
 	let loading = false;
 	let error: string | null = null;
+
+	// Add state for active tab
+	let activeTab: 'docs' | 'snapshots' = 'docs';
+
+	// Add state for selected owned document
+	let selectedOwnedDoc: Document | null = null;
+	let selectedOwnedDocContent: any = null;
 
 	// Fetch the list of documents that have snapshots
 	async function fetchDocuments() {
@@ -167,8 +173,8 @@
 	// Get registry type based on document ID
 	function getRegistryType(docId: string): string {
 		if (docId === GENESIS_REGISTRY_UUID) return 'Genesis';
-		if (docId === HUMAN_REGISTRY_UUID) return 'HUMAN';
-		if (docId === DAO_REGISTRY_UUID) return 'DAO';
+		if (docId === HUMAN_REGISTRY_UUID) return 'HUMANS';
+		if (docId === DAO_REGISTRY_UUID) return 'DAOS';
 		return 'Unknown';
 	}
 
@@ -209,14 +215,109 @@
 		return INITIAL_ACCESS_CONTROL[ownerUuid]?.name || 'No Owner';
 	}
 
+	// Function to get owned documents
+	function getOwnedDocs(): Document[] {
+		const currentDoc = selectedEntry || selectedRegistry;
+		if (!currentDoc?.owner) return [];
+
+		return documents.filter((doc) => {
+			const docOwner = doc.owner;
+			if (Array.isArray(docOwner)) {
+				return docOwner.includes(currentDoc.doc_id);
+			}
+			return docOwner === currentDoc.doc_id;
+		});
+	}
+
+	// Function to fetch document content
+	async function fetchDocumentContent(docId: string) {
+		try {
+			loading = true;
+			error = null;
+
+			console.log('Fetching content for document:', docId);
+
+			// Get the latest snapshot for this document
+			const response = await hominio.agent.resources.docs.snapshots[docId].get();
+			console.log('Response from snapshots endpoint:', response);
+
+			if (
+				response.data &&
+				response.data.status === 'success' &&
+				response.data.snapshots.length > 0
+			) {
+				const latestSnapshot = response.data.snapshots[0];
+				console.log('Latest snapshot:', latestSnapshot);
+
+				// Get the binary data directly from the snapshot
+				const binaryData = latestSnapshot.binary_data;
+				console.log('Binary data:', binaryData);
+
+				if (binaryData) {
+					try {
+						// Create a new LoroDoc instance
+						const doc = new LoroDoc();
+
+						// Import the binary data
+						doc.import(new Uint8Array(Object.values(binaryData)));
+
+						// Get the document content
+						const content = doc.toJSON();
+						console.log('Parsed content:', content);
+
+						if (content) {
+							selectedOwnedDocContent = content;
+						} else {
+							error = 'No content in document';
+							selectedOwnedDocContent = null;
+						}
+					} catch (importError) {
+						console.error('Error importing document:', importError);
+						error = `Error importing document: ${importError.message}`;
+						selectedOwnedDocContent = null;
+					}
+				} else {
+					error = 'No binary data in snapshot';
+					selectedOwnedDocContent = null;
+				}
+			} else {
+				console.log('No snapshots found or invalid response:', response);
+				selectedOwnedDocContent = null;
+				error = 'No content found for document';
+			}
+		} catch (e) {
+			console.error('Error fetching document content:', e);
+			error = e instanceof Error ? e.message : String(e);
+			selectedOwnedDocContent = null;
+		} finally {
+			loading = false;
+		}
+	}
+
+	// Function to select an owned document
+	function selectOwnedDocument(doc: Document) {
+		selectedOwnedDoc = doc;
+		fetchDocumentContent(doc.doc_id);
+	}
+
+	// Function to format JSON for display with proper indentation
+	function formatJSON(obj: any): string {
+		try {
+			return JSON.stringify(obj, null, 2);
+		} catch (e) {
+			console.error('Error formatting JSON:', e);
+			return 'Error formatting document content';
+		}
+	}
+
 	// Initialize on mount
 	onMount(() => {
 		fetchDocuments();
 	});
 </script>
 
-<div class="min-h-screen bg-blue-950 text-emerald-100">
-	<div class="mx-auto max-w-4xl p-6">
+<div class="min-h-screen w-screen bg-blue-950 text-emerald-100">
+	<div class="h-full w-full p-6">
 		<h1 class="mb-6 text-3xl font-bold text-emerald-400">Server</h1>
 
 		{#if error}
@@ -225,94 +326,32 @@
 			</div>
 		{/if}
 
-		<!-- Registry Documents -->
-		<h2 class="mb-4 text-xl font-semibold text-emerald-300">Registries</h2>
+		<div class="flex w-full gap-6">
+			<!-- Left Sidebar - Registries and Entries -->
+			<aside class="w-[320px] shrink-0">
+				<!-- Registry Documents -->
+				<h2 class="mb-4 text-xl font-semibold text-emerald-300">Registries</h2>
 
-		{#if loading && registryDocs.length === 0}
-			<div class="my-8 flex justify-center">
-				<div
-					class="h-8 w-8 animate-spin rounded-full border-4 border-blue-800 border-t-emerald-500"
-				></div>
-			</div>
-		{:else if registryDocs.length === 0}
-			<div class="rounded-md bg-blue-900/10 p-4 text-center text-emerald-100/60">
-				No registry documents found.
-			</div>
-		{:else}
-			<div class="mb-6 grid grid-cols-1 gap-3 md:grid-cols-3">
-				{#each registryDocs as doc}
-					<button
-						class={`flex flex-col rounded-lg border p-3 text-left transition-all ${
-							selectedRegistry?.doc_id === doc.doc_id
-								? 'border-emerald-500/50 bg-emerald-900/20 shadow-md'
-								: 'border-blue-700/20 bg-blue-900/10 hover:bg-blue-900/20'
-						}`}
-						on:click={() => selectRegistry(doc)}
-					>
-						<div class="flex items-center justify-between">
-							<span
-								class={`${getDocType(doc).bgColor} ${getDocType(doc).textColor} rounded px-2 py-0.5 text-xs font-medium`}
-							>
-								{getDocType(doc).label}
-							</span>
-						</div>
-						<div class="mt-2 text-lg font-medium text-emerald-200">
-							{doc.name || doc.domain || 'Untitled'}
-						</div>
-						<div class="mt-1 flex items-center justify-between">
-							<span class="text-xs text-emerald-100/70">
-								{doc.snapshot_count} snapshot{doc.snapshot_count !== 1 ? 's' : ''}
-							</span>
-						</div>
-						{#if doc.owner}
-							<div class="mt-2 border-t border-blue-700/20 pt-2">
-								<div class="text-xs text-emerald-100/70">
-									Owner{Array.isArray(doc.owner) ? 's' : ''}: {getOwnerName(doc.owner)}
-								</div>
-							</div>
-						{/if}
-					</button>
-				{/each}
-			</div>
-
-			<button
-				on:click={fetchDocuments}
-				class="mb-6 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-emerald-500 disabled:opacity-50"
-				disabled={loading}
-			>
-				{loading ? 'Loading...' : 'Refresh'}
-			</button>
-
-			<!-- Registry Entries Section (DAOs or Humans) -->
-			{#if selectedRegistry}
-				{#if selectedRegistry.doc_id === HUMAN_REGISTRY_UUID}
-					<h2
-						class="mt-8 mb-4 border-t border-blue-700/20 pt-6 text-xl font-semibold text-emerald-300"
-					>
-						Humans
-					</h2>
-				{:else if selectedRegistry.doc_id === DAO_REGISTRY_UUID}
-					<h2
-						class="mt-8 mb-4 border-t border-blue-700/20 pt-6 text-xl font-semibold text-emerald-300"
-					>
-						DAOs
-					</h2>
-				{/if}
-
-				{#if entryDocs.length === 0}
-					<div class="mb-6 rounded-md bg-blue-900/10 p-4 text-center text-emerald-100/60">
-						No entries found in this registry.
+				{#if loading && registryDocs.length === 0}
+					<div class="my-8 flex justify-center">
+						<div
+							class="h-8 w-8 animate-spin rounded-full border-4 border-blue-800 border-t-emerald-500"
+						></div>
+					</div>
+				{:else if registryDocs.length === 0}
+					<div class="rounded-md bg-blue-900/10 p-4 text-center text-emerald-100/60">
+						No registry documents found.
 					</div>
 				{:else}
-					<div class="mb-6 grid grid-cols-1 gap-3 md:grid-cols-2">
-						{#each entryDocs as doc}
+					<div class="mb-6 flex flex-col gap-3">
+						{#each registryDocs as doc}
 							<button
 								class={`flex flex-col rounded-lg border p-3 text-left transition-all ${
-									selectedEntry?.doc_id === doc.doc_id
+									selectedRegistry?.doc_id === doc.doc_id
 										? 'border-emerald-500/50 bg-emerald-900/20 shadow-md'
 										: 'border-blue-700/20 bg-blue-900/10 hover:bg-blue-900/20'
 								}`}
-								on:click={() => selectEntry(doc)}
+								on:click={() => selectRegistry(doc)}
 							>
 								<div class="flex items-center justify-between">
 									<span
@@ -324,56 +363,311 @@
 								<div class="mt-2 text-lg font-medium text-emerald-200">
 									{doc.name || doc.domain || 'Untitled'}
 								</div>
-								<div class="mt-1 flex items-center justify-between">
-									<span class="text-xs text-emerald-100/70">
-										{doc.snapshot_count} snapshot{doc.snapshot_count !== 1 ? 's' : ''}
-									</span>
-								</div>
-								{#if doc.owner}
-									<div class="mt-2 border-t border-blue-700/20 pt-2">
-										<div class="text-xs text-emerald-100/70">
-											Owner{Array.isArray(doc.owner) ? 's' : ''}: {getOwnerName(doc.owner)}
-										</div>
-									</div>
-								{/if}
 							</button>
 						{/each}
 					</div>
-				{/if}
-			{/if}
 
-			<!-- Selected Document Snapshots -->
-			{#if selectedDocId && snapshots.length > 0}
-				<div class="mt-8 border-t border-blue-700/20 pt-6">
-					<h3 class="mb-4 text-lg font-semibold text-emerald-300">
-						{#if selectedEntry}
-							{selectedEntry.name || selectedEntry.domain} Snapshots
-						{:else if selectedRegistry}
-							{getRegistryType(selectedRegistry.doc_id)} Registry Snapshots
-						{:else}
-							Document Snapshots
+					<!-- Registry Entries Section (DAOs or Humans) -->
+					{#if selectedRegistry}
+						{#if selectedRegistry.doc_id === HUMAN_REGISTRY_UUID}
+							<h2
+								class="mb-4 border-t border-blue-700/20 pt-6 text-xl font-semibold text-emerald-300"
+							>
+								Humans
+							</h2>
+						{:else if selectedRegistry.doc_id === DAO_REGISTRY_UUID}
+							<h2
+								class="mb-4 border-t border-blue-700/20 pt-6 text-xl font-semibold text-emerald-300"
+							>
+								DAOs
+							</h2>
 						{/if}
-					</h3>
 
-					<div class="space-y-3">
-						{#each snapshots as snapshot}
-							<div class="rounded-md border border-blue-700/20 bg-blue-900/10 p-3">
-								<div class="flex items-center justify-between text-sm">
-									<div class="font-medium text-emerald-200">
-										{formatDate(snapshot.created_at)}
+						{#if entryDocs.length === 0}
+							<div class="rounded-md bg-blue-900/10 p-4 text-center text-emerald-100/60">
+								No entries found in this registry.
+							</div>
+						{:else}
+							<div class="flex flex-col gap-3">
+								{#each entryDocs as doc}
+									<button
+										class={`flex flex-col rounded-lg border p-3 text-left transition-all ${
+											selectedEntry?.doc_id === doc.doc_id
+												? 'border-emerald-500/50 bg-emerald-900/20 shadow-md'
+												: 'border-blue-700/20 bg-blue-900/10 hover:bg-blue-900/20'
+										}`}
+										on:click={() => selectEntry(doc)}
+									>
+										<div class="flex items-center justify-between">
+											<span
+												class={`${getDocType(doc).bgColor} ${getDocType(doc).textColor} rounded px-2 py-0.5 text-xs font-medium`}
+											>
+												{getDocType(doc).label}
+											</span>
+										</div>
+										<div class="mt-2 text-lg font-medium text-emerald-200">
+											{doc.name || doc.domain || 'Untitled'}
+										</div>
+									</button>
+								{/each}
+							</div>
+						{/if}
+					{/if}
+				{/if}
+			</aside>
+
+			<!-- Main Content Area -->
+			<main class="flex-1">
+				{#if selectedDocId}
+					<div class="rounded-lg border border-blue-700/20 bg-blue-900/5 p-6">
+						<!-- Document Header -->
+						<div class="mb-6 border-b border-blue-700/20 pb-6">
+							<div class="flex items-center justify-between">
+								<h3 class="text-2xl font-semibold text-emerald-300">
+									{#if selectedEntry}
+										{selectedEntry.name || selectedEntry.domain || 'Untitled'}
+									{:else if selectedRegistry}
+										{getRegistryType(selectedRegistry.doc_id)} Registry
+									{:else}
+										Document Details
+									{/if}
+								</h3>
+								<span
+									class={`${
+										selectedEntry
+											? getDocType(selectedEntry).bgColor
+											: selectedRegistry
+												? getDocType(selectedRegistry).bgColor
+												: ''
+									} ${
+										selectedEntry
+											? getDocType(selectedEntry).textColor
+											: selectedRegistry
+												? getDocType(selectedRegistry).textColor
+												: ''
+									} rounded px-2 py-0.5 text-xs font-medium`}
+								>
+									{#if selectedEntry}
+										{getDocType(selectedEntry).label}
+									{:else if selectedRegistry}
+										{getDocType(selectedRegistry).label}
+									{/if}
+								</span>
+							</div>
+						</div>
+
+						<!-- Metadata Section -->
+						<div class="mb-8 rounded-lg border border-blue-700/20 bg-blue-900/10 p-4">
+							<h4 class="mb-4 text-lg font-semibold text-emerald-300">Metadata</h4>
+							<div class="grid gap-4 text-sm md:grid-cols-2">
+								{#if selectedEntry || selectedRegistry}
+									{#if selectedEntry?.domain || selectedRegistry?.domain}
+										<div>
+											<span class="text-emerald-100/60">Domain:</span>
+											<span class="ml-2 font-mono text-emerald-100">
+												{selectedEntry?.domain || selectedRegistry?.domain}
+											</span>
+										</div>
+									{/if}
+									<div>
+										<span class="text-emerald-100/60">Document ID:</span>
+										<span class="ml-2 font-mono text-emerald-100">
+											{selectedEntry?.doc_id || selectedRegistry?.doc_id}
+										</span>
 									</div>
-									<div class="rounded bg-blue-500/20 px-2 py-0.5 text-xs text-blue-200">
-										{snapshot.snapshot_type}
+									<div>
+										<span class="text-emerald-100/60">Type:</span>
+										<span class="ml-2 font-mono text-emerald-100">
+											{selectedEntry?.doc_type || selectedRegistry?.doc_type}
+										</span>
 									</div>
-								</div>
-								<div class="mt-2 overflow-hidden font-mono text-xs text-emerald-100/70">
-									ID: {snapshot.snapshot_id}
+									<div>
+										<span class="text-emerald-100/60">Last Updated:</span>
+										<span class="ml-2 font-mono text-emerald-100">
+											{selectedEntry?.last_updated || selectedRegistry?.last_updated
+												? formatDate(
+														selectedEntry?.last_updated || selectedRegistry?.last_updated || ''
+													)
+												: 'Never'}
+										</span>
+									</div>
+									<div class="md:col-span-2">
+										<span class="text-emerald-100/60">
+											Owner{Array.isArray(selectedEntry?.owner || selectedRegistry?.owner)
+												? 's'
+												: ''}:
+										</span>
+										<span class="ml-2 font-mono text-emerald-100">
+											{getOwnerName(selectedEntry?.owner || selectedRegistry?.owner || '')}
+										</span>
+									</div>
+								{/if}
+							</div>
+						</div>
+
+						<!-- Tabs -->
+						<div class="mb-6 border-b border-blue-700/20">
+							<div class="flex gap-4">
+								<button
+									class={`pb-3 text-sm font-medium transition-colors ${
+										activeTab === 'docs'
+											? 'border-b-2 border-emerald-500 text-emerald-400'
+											: 'text-emerald-100/60 hover:text-emerald-100'
+									}`}
+									on:click={() => (activeTab = 'docs')}
+								>
+									Owned Documents
+								</button>
+								<button
+									class={`pb-3 text-sm font-medium transition-colors ${
+										activeTab === 'snapshots'
+											? 'border-b-2 border-emerald-500 text-emerald-400'
+											: 'text-emerald-100/60 hover:text-emerald-100'
+									}`}
+									on:click={() => (activeTab = 'snapshots')}
+								>
+									Snapshots
+								</button>
+							</div>
+						</div>
+
+						<!-- Tab Content -->
+						{#if activeTab === 'docs'}
+							<div>
+								<h4 class="mb-4 text-lg font-semibold text-emerald-300">Owned Documents</h4>
+								{#if getOwnedDocs().length > 0}
+									<div class="space-y-3">
+										{#each getOwnedDocs() as doc}
+											<button
+												class={`w-full rounded-md border ${
+													selectedOwnedDoc?.doc_id === doc.doc_id
+														? 'border-emerald-500/50 bg-emerald-900/20'
+														: 'border-blue-700/20 bg-blue-900/10 hover:bg-blue-900/20'
+												} p-3 text-left transition-all`}
+												on:click={() => selectOwnedDocument(doc)}
+											>
+												<div class="flex items-center justify-between">
+													<div class="font-medium text-emerald-200">
+														{doc.name || doc.domain || 'Untitled'}
+													</div>
+													<span
+														class={`${getDocType(doc).bgColor} ${
+															getDocType(doc).textColor
+														} rounded px-2 py-0.5 text-xs`}
+													>
+														{getDocType(doc).label}
+													</span>
+												</div>
+												<div class="mt-2 text-xs text-emerald-100/70">
+													ID: {doc.doc_id}
+												</div>
+											</button>
+										{/each}
+									</div>
+								{:else}
+									<div class="rounded-md bg-blue-900/10 p-4 text-center text-emerald-100/60">
+										No owned documents found.
+									</div>
+								{/if}
+							</div>
+						{:else}
+							<div>
+								<h4 class="mb-4 text-lg font-semibold text-emerald-300">Snapshots</h4>
+								{#if snapshots.length > 0}
+									<div class="space-y-3">
+										{#each snapshots as snapshot}
+											<div class="rounded-md border border-blue-700/20 bg-blue-900/10 p-3">
+												<div class="flex items-center justify-between text-sm">
+													<div class="font-medium text-emerald-200">
+														{formatDate(snapshot.created_at)}
+													</div>
+													<div class="rounded bg-blue-500/20 px-2 py-0.5 text-xs text-blue-200">
+														{snapshot.snapshot_type}
+													</div>
+												</div>
+												<div class="mt-2 overflow-hidden font-mono text-xs text-emerald-100/70">
+													ID: {snapshot.snapshot_id}
+												</div>
+											</div>
+										{/each}
+									</div>
+								{:else}
+									<div class="rounded-md bg-blue-900/10 p-4 text-center text-emerald-100/60">
+										No snapshots available for this document.
+									</div>
+								{/if}
+							</div>
+						{/if}
+					</div>
+				{:else}
+					<div
+						class="flex h-full items-center justify-center rounded-lg border border-blue-700/20 bg-blue-900/5 p-6"
+					>
+						<p class="text-emerald-100/60">Select a document to view its details and snapshots.</p>
+					</div>
+				{/if}
+			</main>
+
+			<!-- Right Aside - Document Content -->
+			<aside class="w-1/3 shrink-0">
+				{#if selectedOwnedDoc}
+					<div class="rounded-lg border border-blue-700/20 bg-blue-900/5 p-6">
+						<!-- Document Header -->
+						<div class="mb-6 border-b border-blue-700/20 pb-6">
+							<div class="flex items-center justify-between">
+								<h3 class="text-xl font-semibold text-emerald-300">
+									{selectedOwnedDoc.name || selectedOwnedDoc.domain || 'Untitled'}
+								</h3>
+								<span
+									class={`${getDocType(selectedOwnedDoc).bgColor} ${
+										getDocType(selectedOwnedDoc).textColor
+									} rounded px-2 py-0.5 text-xs font-medium`}
+								>
+									{getDocType(selectedOwnedDoc).label}
+								</span>
+							</div>
+						</div>
+
+						<!-- Document Content -->
+						{#if loading}
+							<div class="flex justify-center py-8">
+								<div
+									class="h-8 w-8 animate-spin rounded-full border-4 border-blue-800 border-t-emerald-500"
+								/>
+							</div>
+						{:else if selectedOwnedDocContent}
+							<div class="rounded-lg border border-blue-700/20 bg-blue-900/10 p-4">
+								<div class="max-h-[calc(100vh-20rem)] overflow-auto">
+									<pre
+										class="font-mono text-sm break-words whitespace-pre-wrap text-emerald-100/90">{JSON.stringify(
+											selectedOwnedDocContent,
+											null,
+											2
+										)}</pre>
 								</div>
 							</div>
-						{/each}
+						{:else}
+							<div class="rounded-md bg-blue-900/10 p-4 text-center text-emerald-100/60">
+								No content available for this document.
+							</div>
+						{/if}
 					</div>
-				</div>
-			{/if}
-		{/if}
+				{:else}
+					<div
+						class="flex h-full items-center justify-center rounded-lg border border-blue-700/20 bg-blue-900/5 p-6"
+					>
+						<p class="text-emerald-100/60">Select an owned document to view its content.</p>
+					</div>
+				{/if}
+			</aside>
+		</div>
 	</div>
 </div>
+
+<style>
+	:global(body) {
+		margin: 0;
+		padding: 0;
+		overflow-x: hidden;
+	}
+</style>
