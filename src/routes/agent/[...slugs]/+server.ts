@@ -1,21 +1,29 @@
 import { Elysia } from 'elysia';
 import { PGlite } from '@electric-sql/pglite';
 import {
+    GENESIS_REGISTRY_UUID,
+    GENESIS_REGISTRY_DOMAIN,
+    GENESIS_REGISTRY_NAME,
     HUMAN_REGISTRY_UUID,
-    DAO_REGISTRY_UUID,
     HUMAN_REGISTRY_DOMAIN,
-    DAO_REGISTRY_DOMAIN
+    HUMAN_REGISTRY_NAME,
+    DAO_REGISTRY_UUID,
+    DAO_REGISTRY_DOMAIN,
+    DAO_REGISTRY_NAME,
+    HOMINIO_DAO_UUID,
+    HOMINIO_DAO_DOMAIN,
+    HOMINIO_DAO_NAME,
+    VISIONCREATOR_DAO_UUID,
+    VISIONCREATOR_DAO_DOMAIN,
+    VISIONCREATOR_DAO_NAME
 } from '$lib/constants/registry';
 
-// Define our hardcoded registry document ID with genesis UUID
-const ROOT_REGISTRY_DOC_ID = HUMAN_REGISTRY_UUID;
-const ROOT_REGISTRY_TITLE = HUMAN_REGISTRY_DOMAIN;
-
-// DAO Registry constants
-const DAO_REGISTRY_TITLE = DAO_REGISTRY_DOMAIN;
+// Define our hardcoded registry document ID with Genesis UUID
+const GENESIS_REGISTRY_DOC_ID = GENESIS_REGISTRY_UUID;
 
 // Document types
 const DOC_TYPE_REGISTRY = 'registry';
+const DOC_TYPE_DAO = 'dao';
 
 // We'll generate random UUIDs for our entities 
 
@@ -48,6 +56,43 @@ interface RegistrySnapshotResponse {
     error?: unknown;
 }
 
+// Define registry document entry type
+interface RegistryDocEntry {
+    uuid: string;
+    docType: string;
+    name: string;
+    domain: string;
+    owner: string;
+    createdAt: number;
+    currentSnapshotId: string;
+}
+
+// Hardcoded Genesis registry - this is not a loro doc but a system-level registry
+const GENESIS_REGISTRY = {
+    uuid: GENESIS_REGISTRY_UUID,
+    name: GENESIS_REGISTRY_NAME,
+    documents: {
+        [HUMAN_REGISTRY_UUID]: {
+            uuid: HUMAN_REGISTRY_UUID,
+            docType: DOC_TYPE_REGISTRY,
+            name: HUMAN_REGISTRY_NAME,
+            domain: HUMAN_REGISTRY_DOMAIN,
+            owner: GENESIS_REGISTRY_DOMAIN,
+            createdAt: Date.now(),
+            currentSnapshotId: 'system'
+        },
+        [DAO_REGISTRY_UUID]: {
+            uuid: DAO_REGISTRY_UUID,
+            docType: DOC_TYPE_REGISTRY,
+            name: DAO_REGISTRY_NAME,
+            domain: DAO_REGISTRY_DOMAIN,
+            owner: GENESIS_REGISTRY_DOMAIN,
+            createdAt: Date.now(),
+            currentSnapshotId: 'system'
+        }
+    }
+};
+
 /**
  * Convert base64 string to buffer for PGLite storage
  */
@@ -72,7 +117,7 @@ async function initializeDb() {
                 snapshot_type TEXT NOT NULL,
                 version_vector JSONB,
                 client_id TEXT,
-                title TEXT,
+                name TEXT,
                 doc_type TEXT,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
@@ -104,16 +149,15 @@ async function initializeDb() {
 async function initializeRootRegistry() {
     try {
         // Check if the HUMAN registry document exists
-        const registryExists = await db.query(
+        const humanRegistryExists = await db.query(
             `SELECT EXISTS(SELECT 1 FROM loro_snapshots WHERE doc_id = $1) as exists`,
-            [ROOT_REGISTRY_DOC_ID]
+            [HUMAN_REGISTRY_UUID]
         );
 
         let needsHumanRegistryCreation = true;
-        if (registryExists.rows.length > 0) {
-            const row = registryExists.rows[0] as Record<string, unknown>;
+        if (humanRegistryExists.rows.length > 0) {
+            const row = humanRegistryExists.rows[0] as Record<string, unknown>;
             if (row.exists) {
-                // Root registry document already exists
                 needsHumanRegistryCreation = false;
             }
         }
@@ -128,36 +172,35 @@ async function initializeRootRegistry() {
         if (daoRegistryExists.rows.length > 0) {
             const row = daoRegistryExists.rows[0] as Record<string, unknown>;
             if (row.exists) {
-                // DAO registry document already exists
                 needsDaoRegistryCreation = false;
             }
         }
 
         if (needsHumanRegistryCreation) {
             // Create the HUMAN registry
-            const snapshotId = crypto.randomUUID();
-            const placeholderData = Buffer.from(JSON.stringify({
+            const humanSnapshotId = crypto.randomUUID();
+            const humanPlaceholderData = Buffer.from(JSON.stringify({
                 version: 1,
                 documents: {},
                 meta: {
-                    title: ROOT_REGISTRY_TITLE,
+                    name: HUMAN_REGISTRY_NAME,
                     createdAt: Date.now()
                 }
             }));
 
-            // Insert the genesis document (HUMAN registry)
+            // Insert the HUMAN registry document
             await db.query(
                 `INSERT INTO loro_snapshots (
                     snapshot_id, doc_id, binary_data, snapshot_type, 
-                    title, doc_type, created_at
+                    name, doc_type, created_at
                 )
                 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
                 [
-                    snapshotId,
-                    ROOT_REGISTRY_DOC_ID,
-                    placeholderData,
+                    humanSnapshotId,
+                    HUMAN_REGISTRY_UUID,
+                    humanPlaceholderData,
                     'full',
-                    ROOT_REGISTRY_TITLE,
+                    HUMAN_REGISTRY_NAME,
                     DOC_TYPE_REGISTRY,
                     new Date()
                 ]
@@ -165,13 +208,37 @@ async function initializeRootRegistry() {
         }
 
         if (needsDaoRegistryCreation) {
-            // Create the DAO registry
+            // Create the DAO registry with Hominio DAO and Visioncreator DAO entries
             const daoSnapshotId = crypto.randomUUID();
-            const daoPlaceholderData = Buffer.from(JSON.stringify({
+            const daoDocuments: Record<string, RegistryDocEntry> = {};
+
+            // Add Hominio DAO reference to the DAO registry
+            daoDocuments[HOMINIO_DAO_UUID] = {
+                uuid: HOMINIO_DAO_UUID,
+                docType: DOC_TYPE_DAO,
+                name: HOMINIO_DAO_NAME,
+                domain: HOMINIO_DAO_DOMAIN,
+                owner: DAO_REGISTRY_DOMAIN,
+                createdAt: Date.now(),
+                currentSnapshotId: 'server'
+            };
+
+            // Add Visioncreator DAO reference to the DAO registry
+            daoDocuments[VISIONCREATOR_DAO_UUID] = {
+                uuid: VISIONCREATOR_DAO_UUID,
+                docType: DOC_TYPE_DAO,
+                name: VISIONCREATOR_DAO_NAME,
+                domain: VISIONCREATOR_DAO_DOMAIN,
+                owner: DAO_REGISTRY_DOMAIN,
+                createdAt: Date.now(),
+                currentSnapshotId: 'server'
+            };
+
+            const daoRegistryData = Buffer.from(JSON.stringify({
                 version: 1,
-                documents: {},
+                documents: daoDocuments,
                 meta: {
-                    title: DAO_REGISTRY_TITLE,
+                    name: DAO_REGISTRY_NAME,
                     createdAt: Date.now()
                 }
             }));
@@ -180,16 +247,86 @@ async function initializeRootRegistry() {
             await db.query(
                 `INSERT INTO loro_snapshots (
                     snapshot_id, doc_id, binary_data, snapshot_type, 
-                    title, doc_type, created_at
+                    name, doc_type, created_at
                 )
                 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
                 [
                     daoSnapshotId,
                     DAO_REGISTRY_UUID,
-                    daoPlaceholderData,
+                    daoRegistryData,
                     'full',
-                    DAO_REGISTRY_TITLE,
+                    DAO_REGISTRY_NAME,
                     DOC_TYPE_REGISTRY,
+                    new Date()
+                ]
+            );
+
+            // Create Hominio DAO document
+            const hominioDaoSnapshotId = crypto.randomUUID();
+            const hominioDaoData = Buffer.from(JSON.stringify({
+                version: 1,
+                members: [],
+                properties: {
+                    name: HOMINIO_DAO_NAME,
+                    description: 'The root DAO in the DAO registry',
+                    founded: Date.now()
+                },
+                meta: {
+                    name: HOMINIO_DAO_NAME,
+                    domain: HOMINIO_DAO_DOMAIN,
+                    createdAt: Date.now()
+                }
+            }));
+
+            // Insert the Hominio DAO document
+            await db.query(
+                `INSERT INTO loro_snapshots (
+                    snapshot_id, doc_id, binary_data, snapshot_type, 
+                    name, doc_type, created_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                [
+                    hominioDaoSnapshotId,
+                    HOMINIO_DAO_UUID,
+                    hominioDaoData,
+                    'full',
+                    HOMINIO_DAO_NAME,
+                    DOC_TYPE_DAO,
+                    new Date()
+                ]
+            );
+
+            // Create Visioncreator DAO document
+            const visioncreatorDaoSnapshotId = crypto.randomUUID();
+            const visioncreatorDaoData = Buffer.from(JSON.stringify({
+                version: 1,
+                members: [],
+                properties: {
+                    name: VISIONCREATOR_DAO_NAME,
+                    description: 'The visionary DAO in the DAO registry',
+                    founded: Date.now()
+                },
+                meta: {
+                    name: VISIONCREATOR_DAO_NAME,
+                    domain: VISIONCREATOR_DAO_DOMAIN,
+                    createdAt: Date.now()
+                }
+            }));
+
+            // Insert the Visioncreator DAO document
+            await db.query(
+                `INSERT INTO loro_snapshots (
+                    snapshot_id, doc_id, binary_data, snapshot_type, 
+                    name, doc_type, created_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                [
+                    visioncreatorDaoSnapshotId,
+                    VISIONCREATOR_DAO_UUID,
+                    visioncreatorDaoData,
+                    'full',
+                    VISIONCREATOR_DAO_NAME,
+                    DOC_TYPE_DAO,
                     new Date()
                 ]
             );
@@ -202,27 +339,19 @@ async function initializeRootRegistry() {
 // Get the registry document's latest snapshot
 async function getLatestRegistrySnapshot(): Promise<RegistrySnapshotResponse> {
     try {
-        const result = await db.query(
-            `SELECT snapshot_id, binary_data 
-             FROM loro_snapshots 
-             WHERE doc_id = $1 
-             ORDER BY created_at DESC 
-             LIMIT 1`,
-            [ROOT_REGISTRY_DOC_ID]
-        );
-
-        if (result.rows.length > 0) {
-            const row = result.rows[0] as Record<string, unknown>;
+        // For Genesis registry, return a hardcoded response
+        if (GENESIS_REGISTRY) {
             return {
                 exists: true,
-                snapshotId: row.snapshot_id as string,
-                binaryData: row.binary_data as Uint8Array
+                snapshotId: 'system',
+                // Create a fake binary representation of the Genesis registry
+                binaryData: Buffer.from(JSON.stringify(GENESIS_REGISTRY)) as unknown as Uint8Array
             };
         } else {
             return { exists: false };
         }
     } catch (error) {
-        console.error('Error getting registry snapshot:', error);
+        console.error('Error getting Genesis registry snapshot:', error);
         return { exists: false, error };
     }
 }
@@ -285,7 +414,7 @@ const app = new Elysia({ prefix: '/agent' })
                 // Check if registry exists
                 const registryResult = await db.query(
                     'SELECT EXISTS(SELECT 1 FROM loro_snapshots WHERE doc_id = $1) as exists',
-                    [ROOT_REGISTRY_DOC_ID]
+                    [GENESIS_REGISTRY_DOC_ID]
                 );
 
                 if (registryResult.rows.length > 0) {
@@ -322,7 +451,7 @@ const app = new Elysia({ prefix: '/agent' })
                     // Then get all documents
                     const result = await db.query(
                         `SELECT doc_id, 
-                          MAX(title) as title,
+                          MAX(name) as name,
                           MAX(doc_type) as doc_type,
                           COUNT(snapshot_id) as snapshot_count,
                           MAX(created_at) as last_updated
@@ -335,12 +464,12 @@ const app = new Elysia({ prefix: '/agent' })
                         status: 'success',
                         documents: result.rows,
                         registry: {
-                            id: ROOT_REGISTRY_DOC_ID,
-                            title: ROOT_REGISTRY_TITLE,
+                            id: GENESIS_REGISTRY_DOC_ID,
+                            name: GENESIS_REGISTRY_NAME,
                             exists: registrySnapshot.exists,
                             snapshotId: registrySnapshot.snapshotId,
                         },
-                        genesisUuid: HUMAN_REGISTRY_UUID,
+                        genesisUuid: GENESIS_REGISTRY_UUID,
                         timestamp: new Date().toISOString()
                     }
                 } catch (error) {
@@ -366,7 +495,7 @@ const app = new Elysia({ prefix: '/agent' })
                         const { docId, docType, binaryData, versionVector, timestamp, meta, clientId } = snapshotData;
 
                         // Determine if this is the root registry document
-                        const isRootRegistry = docId === ROOT_REGISTRY_DOC_ID;
+                        const isRootRegistry = docId === GENESIS_REGISTRY_DOC_ID;
 
                         // Generate a unique ID for this snapshot
                         const snapshotId = crypto.randomUUID();
@@ -376,14 +505,14 @@ const app = new Elysia({ prefix: '/agent' })
 
                         // Add optional title if provided in metadata
                         const title = isRootRegistry
-                            ? ROOT_REGISTRY_TITLE
-                            : (meta?.title as string) || docType;
+                            ? GENESIS_REGISTRY_DOMAIN
+                            : (meta?.name as string) || docType;
 
                         // Insert the snapshot into the database
                         await db.query(
                             `INSERT INTO loro_snapshots (
                                 snapshot_id, doc_id, binary_data, snapshot_type, 
-                                version_vector, client_id, title, doc_type, created_at
+                                version_vector, client_id, name, doc_type, created_at
                             )
                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
                             [
@@ -487,7 +616,7 @@ const app = new Elysia({ prefix: '/agent' })
                               doc_type,
                               snapshot_type,
                               version_vector,
-                              title,
+                              name,
                               created_at
                             FROM loro_snapshots
                             WHERE doc_id = $1

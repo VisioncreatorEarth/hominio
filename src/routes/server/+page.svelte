@@ -6,6 +6,7 @@
 	import { hominio } from '$lib/client/hominio';
 	import { onMount } from 'svelte';
 	import {
+		GENESIS_REGISTRY_UUID,
 		HUMAN_REGISTRY_UUID,
 		DAO_REGISTRY_UUID,
 		HUMAN_REGISTRY_DOMAIN,
@@ -15,7 +16,7 @@
 	// Define types for our data structures
 	interface Document {
 		doc_id: string;
-		title: string;
+		name: string;
 		doc_type: string;
 		domain?: string;
 		snapshot_count: number;
@@ -24,7 +25,7 @@
 
 	interface Registry {
 		id: string;
-		title: string;
+		name: string;
 		exists: boolean;
 		snapshotId?: string;
 	}
@@ -34,7 +35,7 @@
 		doc_id: string;
 		doc_type: string;
 		snapshot_type: string;
-		title: string;
+		name: string;
 		domain?: string;
 		version_vector: Record<string, number> | null;
 		created_at: string;
@@ -42,6 +43,10 @@
 
 	// State variables using Svelte's reactive declarations
 	let documents: Document[] = [];
+	let registryDocs: Document[] = [];
+	let entryDocs: Document[] = [];
+	let selectedRegistry: Document | null = null;
+	let selectedEntry: Document | null = null;
 	let registry: Registry | null = null;
 	let selectedDocId: string = '';
 	let snapshots: Snapshot[] = [];
@@ -60,17 +65,18 @@
 
 			// Check the data structure
 			if (response.data && response.data.status === 'success') {
-				// Filter only registry documents
-				documents = (response.data.documents || []).filter(
-					(doc: Document) => doc.doc_type === 'registry'
-				);
-				registry = response.data.registry || null;
+				// Get all documents
+				documents = response.data.documents || [];
 
-				// If we have documents and none is selected, select the first one
-				if (documents.length > 0 && !selectedDocId) {
-					selectedDocId = documents[0].doc_id;
-					await fetchSnapshots(selectedDocId);
+				// Filter registry documents
+				registryDocs = documents.filter((doc: Document) => doc.doc_type === 'registry');
+
+				// Set initial selection to the first registry
+				if (registryDocs.length > 0 && !selectedRegistry) {
+					selectRegistry(registryDocs[0]);
 				}
+
+				registry = response.data.registry || null;
 			} else {
 				error = 'Failed to fetch documents';
 				console.error('Failed response:', response);
@@ -81,6 +87,37 @@
 		} finally {
 			loading = false;
 		}
+	}
+
+	// Select a registry and filter its entries
+	async function selectRegistry(doc: Document) {
+		selectedRegistry = doc;
+		selectedDocId = doc.doc_id;
+
+		// Update entries based on selected registry
+		if (doc.doc_id === HUMAN_REGISTRY_UUID) {
+			// Show human accounts
+			entryDocs = documents.filter((d: Document) => d.doc_type === 'human');
+		} else if (doc.doc_id === DAO_REGISTRY_UUID) {
+			// Show DAO entries
+			entryDocs = documents.filter((d: Document) => d.doc_type === 'dao');
+		} else {
+			// Genesis registry or other - no entries
+			entryDocs = [];
+		}
+
+		// Clear selected entry
+		selectedEntry = null;
+
+		// Fetch snapshots for the registry
+		await fetchSnapshots(doc.doc_id);
+	}
+
+	// Select an entry
+	async function selectEntry(doc: Document) {
+		selectedEntry = doc;
+		selectedDocId = doc.doc_id;
+		await fetchSnapshots(doc.doc_id);
 	}
 
 	// Fetch snapshots for a specific document
@@ -122,14 +159,39 @@
 
 	// Get registry type based on document ID
 	function getRegistryType(docId: string): string {
+		if (docId === GENESIS_REGISTRY_UUID) return 'Genesis';
 		if (docId === HUMAN_REGISTRY_UUID) return 'HUMAN';
 		if (docId === DAO_REGISTRY_UUID) return 'DAO';
 		return 'Unknown';
 	}
 
-	// Is the document a registry document (either HUMAN or DAO)
-	function isRegistryDoc(docId: string): boolean {
-		return docId === HUMAN_REGISTRY_UUID || docId === DAO_REGISTRY_UUID;
+	// Get document type for display
+	function getDocType(doc: Document): { label: string; bgColor: string; textColor: string } {
+		if (doc.doc_type === 'registry') {
+			return {
+				label: getRegistryType(doc.doc_id),
+				bgColor: 'bg-indigo-500/20',
+				textColor: 'text-indigo-200'
+			};
+		} else if (doc.doc_type === 'dao') {
+			return {
+				label: 'DAO',
+				bgColor: 'bg-emerald-500/20',
+				textColor: 'text-emerald-200'
+			};
+		} else if (doc.doc_type === 'human') {
+			return {
+				label: 'HUMAN',
+				bgColor: 'bg-blue-500/20',
+				textColor: 'text-blue-200'
+			};
+		} else {
+			return {
+				label: doc.doc_type.toUpperCase(),
+				bgColor: 'bg-blue-500/20',
+				textColor: 'text-blue-200'
+			};
+		}
 	}
 
 	// Initialize on mount
@@ -151,40 +213,37 @@
 		<!-- Registry Documents -->
 		<h2 class="mb-4 text-xl font-semibold text-emerald-300">Registries</h2>
 
-		{#if loading && documents.length === 0}
+		{#if loading && registryDocs.length === 0}
 			<div class="my-8 flex justify-center">
 				<div
 					class="h-8 w-8 animate-spin rounded-full border-4 border-blue-800 border-t-emerald-500"
 				></div>
 			</div>
-		{:else if documents.length === 0}
+		{:else if registryDocs.length === 0}
 			<div class="rounded-md bg-blue-900/10 p-4 text-center text-emerald-100/60">
 				No registry documents found.
 			</div>
 		{:else}
-			<div class="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-				{#each documents as doc}
+			<div class="mb-6 grid grid-cols-1 gap-3 md:grid-cols-3">
+				{#each registryDocs as doc}
 					<button
 						class={`flex flex-col rounded-lg border p-3 text-left transition-all ${
-							selectedDocId === doc.doc_id
+							selectedRegistry?.doc_id === doc.doc_id
 								? 'border-emerald-500/50 bg-emerald-900/20 shadow-md'
 								: 'border-blue-700/20 bg-blue-900/10 hover:bg-blue-900/20'
 						}`}
-						on:click={() => fetchSnapshots(doc.doc_id)}
+						on:click={() => selectRegistry(doc)}
 					>
-						<div class="flex items-center justify-between">
-							<span
-								class="rounded bg-indigo-500/20 px-2 py-0.5 text-xs font-medium text-indigo-200"
-							>
-								{getRegistryType(doc.doc_id)}
-							</span>
-							<span class="text-xs text-emerald-100/50">{doc.snapshot_count} snapshots</span>
-						</div>
+						<span
+							class={`${getDocType(doc).bgColor} ${getDocType(doc).textColor} self-start rounded px-2 py-0.5 text-xs font-medium`}
+						>
+							{getDocType(doc).label}
+						</span>
 						<div class="mt-2 text-lg font-medium text-emerald-200">
-							{doc.title || doc.domain || 'Untitled'}
+							{doc.name || doc.domain || 'Untitled'}
 						</div>
 						<div class="mt-1 text-xs text-emerald-100/70">
-							Last updated: {formatDate(doc.last_updated)}
+							{doc.snapshot_count} snapshot{doc.snapshot_count !== 1 ? 's' : ''}
 						</div>
 					</button>
 				{/each}
@@ -192,21 +251,71 @@
 
 			<button
 				on:click={fetchDocuments}
-				class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-emerald-500 disabled:opacity-50"
+				class="mb-6 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-emerald-500 disabled:opacity-50"
 				disabled={loading}
 			>
 				{loading ? 'Loading...' : 'Refresh'}
 			</button>
 
-			<!-- Selected Registry Snapshots -->
-			{#if selectedDocId && snapshots.length > 0}
-				<div class="mt-6 border-t border-blue-700/20 pt-6">
-					<h3 class="mb-4 text-lg font-semibold text-emerald-300">
-						{#each documents as doc}
-							{#if doc.doc_id === selectedDocId}
-								{getRegistryType(doc.doc_id)} Registry Snapshots
-							{/if}
+			<!-- Registry Entries Section (DAOs or Humans) -->
+			{#if selectedRegistry}
+				{#if selectedRegistry.doc_id === HUMAN_REGISTRY_UUID}
+					<h2
+						class="mt-8 mb-4 border-t border-blue-700/20 pt-6 text-xl font-semibold text-emerald-300"
+					>
+						Humans
+					</h2>
+				{:else if selectedRegistry.doc_id === DAO_REGISTRY_UUID}
+					<h2
+						class="mt-8 mb-4 border-t border-blue-700/20 pt-6 text-xl font-semibold text-emerald-300"
+					>
+						DAOs
+					</h2>
+				{/if}
+
+				{#if entryDocs.length === 0}
+					<div class="mb-6 rounded-md bg-blue-900/10 p-4 text-center text-emerald-100/60">
+						No entries found in this registry.
+					</div>
+				{:else}
+					<div class="mb-6 grid grid-cols-1 gap-3 md:grid-cols-2">
+						{#each entryDocs as doc}
+							<button
+								class={`flex flex-col rounded-lg border p-3 text-left transition-all ${
+									selectedEntry?.doc_id === doc.doc_id
+										? 'border-emerald-500/50 bg-emerald-900/20 shadow-md'
+										: 'border-blue-700/20 bg-blue-900/10 hover:bg-blue-900/20'
+								}`}
+								on:click={() => selectEntry(doc)}
+							>
+								<span
+									class={`${getDocType(doc).bgColor} ${getDocType(doc).textColor} self-start rounded px-2 py-0.5 text-xs font-medium`}
+								>
+									{getDocType(doc).label}
+								</span>
+								<div class="mt-2 text-lg font-medium text-emerald-200">
+									{doc.name || doc.domain || 'Untitled'}
+								</div>
+								<div class="mt-1 text-xs text-emerald-100/70">
+									{doc.snapshot_count} snapshot{doc.snapshot_count !== 1 ? 's' : ''}
+								</div>
+							</button>
 						{/each}
+					</div>
+				{/if}
+			{/if}
+
+			<!-- Selected Document Snapshots -->
+			{#if selectedDocId && snapshots.length > 0}
+				<div class="mt-8 border-t border-blue-700/20 pt-6">
+					<h3 class="mb-4 text-lg font-semibold text-emerald-300">
+						{#if selectedEntry}
+							{selectedEntry.name || selectedEntry.domain} Snapshots
+						{:else if selectedRegistry}
+							{getRegistryType(selectedRegistry.doc_id)} Registry Snapshots
+						{:else}
+							Document Snapshots
+						{/if}
 					</h3>
 
 					<div class="space-y-3">
