@@ -1,16 +1,23 @@
 <!-- 
-  Server Page - Displays snapshots stored in the server's PGLite instance
-  This page demonstrates the server-side storage and retrieval of Loro document snapshots
+  Server Page - Displays documents from the server's PGLite instance
+  This page focuses on showing the registry structure and document snapshots
 -->
 <script lang="ts">
 	import { hominio } from '$lib/client/hominio';
 	import { onMount } from 'svelte';
+	import {
+		HUMAN_REGISTRY_UUID,
+		DAO_REGISTRY_UUID,
+		HUMAN_REGISTRY_DOMAIN,
+		DAO_REGISTRY_DOMAIN
+	} from '$lib/constants/registry';
 
 	// Define types for our data structures
 	interface Document {
 		doc_id: string;
 		title: string;
 		doc_type: string;
+		domain?: string;
 		snapshot_count: number;
 		last_updated: string;
 	}
@@ -28,11 +35,12 @@
 		doc_type: string;
 		snapshot_type: string;
 		title: string;
+		domain?: string;
 		version_vector: Record<string, number> | null;
 		created_at: string;
 	}
 
-	// Standard state variables using Svelte's reactive declarations
+	// State variables using Svelte's reactive declarations
 	let documents: Document[] = [];
 	let registry: Registry | null = null;
 	let selectedDocId: string = '';
@@ -40,22 +48,22 @@
 	let loading = false;
 	let error: string | null = null;
 
-	// Constants
-	const GENESIS_UUID = '00000000-0000-0000-0000-000000000000';
-
 	// Fetch the list of documents that have snapshots
 	async function fetchDocuments() {
 		try {
 			loading = true;
 			error = null;
 
-			// Use the resources/docs endpoint - now without .index
+			// Use the resources/docs endpoint
 			// @ts-expect-error - Eden type mismatch but this works
 			const response = await hominio.agent.resources.docs.get();
 
 			// Check the data structure
 			if (response.data && response.data.status === 'success') {
-				documents = response.data.documents || [];
+				// Filter only registry documents
+				documents = (response.data.documents || []).filter(
+					(doc: Document) => doc.doc_type === 'registry'
+				);
 				registry = response.data.registry || null;
 
 				// If we have documents and none is selected, select the first one
@@ -82,7 +90,7 @@
 			error = null;
 			selectedDocId = docId;
 
-			// Use the resources/docs/snapshots/:docId endpoint - without .index
+			// Use the resources/docs/snapshots/:docId endpoint
 			const response = await hominio.agent.resources.docs.snapshots[docId].get();
 
 			// Check the data structure
@@ -112,21 +120,16 @@
 		}
 	}
 
-	// Get document type label with appropriate styling
-	function getDocTypeLabel(docType: string): { text: string; bgColor: string; textColor: string } {
-		switch (docType) {
-			case 'dao':
-				return { text: 'DAO', bgColor: 'bg-purple-600/20', textColor: 'text-purple-300' };
-			case 'todos':
-				return { text: 'Todos', bgColor: 'bg-green-600/20', textColor: 'text-green-300' };
-			default:
-				return { text: docType, bgColor: 'bg-blue-600/20', textColor: 'text-blue-300' };
-		}
+	// Get registry type based on document ID
+	function getRegistryType(docId: string): string {
+		if (docId === HUMAN_REGISTRY_UUID) return 'HUMAN';
+		if (docId === DAO_REGISTRY_UUID) return 'DAO';
+		return 'Unknown';
 	}
 
-	// Is the document the genesis registry
+	// Is the document a registry document (either HUMAN or DAO)
 	function isRegistryDoc(docId: string): boolean {
-		return docId === GENESIS_UUID;
+		return docId === HUMAN_REGISTRY_UUID || docId === DAO_REGISTRY_UUID;
 	}
 
 	// Initialize on mount
@@ -136,169 +139,95 @@
 </script>
 
 <div class="min-h-screen bg-blue-950 text-emerald-100">
-	<div class="mx-auto max-w-6xl p-6">
+	<div class="mx-auto max-w-4xl p-6">
 		<h1 class="mb-6 text-3xl font-bold text-emerald-400">Server</h1>
-		<p class="mb-8 text-emerald-200">
-			View snapshots stored in the server's in-memory PGLite database.
-		</p>
 
 		{#if error}
-			<div class="mb-6 rounded border border-red-700 bg-red-900/50 p-4 text-red-200">
+			<div class="mb-4 rounded border border-red-700 bg-red-900/50 p-3 text-red-200">
 				{error}
 			</div>
 		{/if}
 
-		<!-- Registry Info -->
-		{#if registry}
-			<div class="mb-8 rounded border border-purple-700/30 bg-purple-900/10 p-4">
-				<h2 class="mb-2 text-xl font-semibold text-purple-300">Registry</h2>
-				<div class="grid grid-cols-2 gap-2 text-sm">
-					<span class="text-emerald-100/50">ID:</span>
-					<span class="font-mono text-emerald-100">{registry.id}</span>
+		<!-- Registry Documents -->
+		<h2 class="mb-4 text-xl font-semibold text-emerald-300">Registries</h2>
 
-					<span class="text-emerald-100/50">Title:</span>
-					<span class="text-emerald-100">{registry.title}</span>
-
-					<span class="text-emerald-100/50">Status:</span>
-					<span class="text-emerald-100">{registry.exists ? 'Exists' : 'Not found'}</span>
-
-					{#if registry.snapshotId}
-						<span class="text-emerald-100/50">Snapshot ID:</span>
-						<span class="font-mono text-xs text-emerald-100">{registry.snapshotId}</span>
-					{/if}
-				</div>
+		{#if loading && documents.length === 0}
+			<div class="my-8 flex justify-center">
+				<div
+					class="h-8 w-8 animate-spin rounded-full border-4 border-blue-800 border-t-emerald-500"
+				></div>
 			</div>
-		{/if}
-
-		<!-- Document Selection -->
-		<div class="mb-8">
-			<h2 class="mb-4 text-xl font-semibold text-emerald-300">Documents</h2>
-
-			<div class="mb-4 flex flex-wrap gap-2">
-				{#if loading && documents.length === 0}
-					<div class="w-full p-8 text-center">
-						<div
-							class="inline-block h-8 w-8 animate-spin rounded-full border-4 border-blue-800 border-t-emerald-500"
-						></div>
-						<p class="mt-4 text-emerald-200">Loading documents...</p>
-					</div>
-				{:else if documents.length === 0}
-					<p class="text-emerald-100/50">No documents found in the database.</p>
-				{:else}
-					{#each documents as doc}
-						<button
-							class={`flex items-center gap-2 rounded border px-4 py-2 transition-colors ${
-								selectedDocId === doc.doc_id
-									? 'border-emerald-500 bg-emerald-900/30'
-									: 'border-blue-700 bg-blue-900/30'
-							}`}
-							onclick={() => fetchSnapshots(doc.doc_id)}
-						>
-							{#if isRegistryDoc(doc.doc_id)}
-								<span class="text-xs font-semibold tracking-wide text-purple-300 uppercase"
-									>Root</span
-								>
-							{/if}
-							<span class="font-medium">{doc.title || 'Untitled'}</span>
-							{#if doc.doc_type}
-								{@const label = getDocTypeLabel(doc.doc_type)}
-								<span
-									class={`ml-1 rounded px-1.5 py-0.5 text-xs font-medium ${label.bgColor} ${label.textColor}`}
-								>
-									{label.text}
-								</span>
-							{/if}
-							<span class="ml-1 text-xs text-emerald-100/30">
-								{doc.snapshot_count} snapshot{doc.snapshot_count !== 1 ? 's' : ''}
+		{:else if documents.length === 0}
+			<div class="rounded-md bg-blue-900/10 p-4 text-center text-emerald-100/60">
+				No registry documents found.
+			</div>
+		{:else}
+			<div class="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+				{#each documents as doc}
+					<button
+						class={`flex flex-col rounded-lg border p-3 text-left transition-all ${
+							selectedDocId === doc.doc_id
+								? 'border-emerald-500/50 bg-emerald-900/20 shadow-md'
+								: 'border-blue-700/20 bg-blue-900/10 hover:bg-blue-900/20'
+						}`}
+						on:click={() => fetchSnapshots(doc.doc_id)}
+					>
+						<div class="flex items-center justify-between">
+							<span
+								class="rounded bg-indigo-500/20 px-2 py-0.5 text-xs font-medium text-indigo-200"
+							>
+								{getRegistryType(doc.doc_id)}
 							</span>
-						</button>
-					{/each}
-				{/if}
+							<span class="text-xs text-emerald-100/50">{doc.snapshot_count} snapshots</span>
+						</div>
+						<div class="mt-2 text-lg font-medium text-emerald-200">
+							{doc.title || doc.domain || 'Untitled'}
+						</div>
+						<div class="mt-1 text-xs text-emerald-100/70">
+							Last updated: {formatDate(doc.last_updated)}
+						</div>
+					</button>
+				{/each}
 			</div>
 
 			<button
-				onclick={fetchDocuments}
-				class="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-emerald-500"
+				on:click={fetchDocuments}
+				class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-emerald-500 disabled:opacity-50"
 				disabled={loading}
 			>
-				{loading ? 'Loading...' : 'Refresh Documents'}
+				{loading ? 'Loading...' : 'Refresh'}
 			</button>
-		</div>
 
-		<!-- Snapshots Display -->
-		{#if selectedDocId}
-			<div>
-				<h2 class="mb-4 text-xl font-semibold text-emerald-300">
-					Snapshots for Document:
-					{#each documents as doc}
-						{#if doc.doc_id === selectedDocId}
-							<span class="text-emerald-400">{doc.title || selectedDocId}</span>
-						{/if}
-					{/each}
-				</h2>
+			<!-- Selected Registry Snapshots -->
+			{#if selectedDocId && snapshots.length > 0}
+				<div class="mt-6 border-t border-blue-700/20 pt-6">
+					<h3 class="mb-4 text-lg font-semibold text-emerald-300">
+						{#each documents as doc}
+							{#if doc.doc_id === selectedDocId}
+								{getRegistryType(doc.doc_id)} Registry Snapshots
+							{/if}
+						{/each}
+					</h3>
 
-				{#if loading && snapshots.length === 0}
-					<div class="p-8 text-center">
-						<div
-							class="inline-block h-8 w-8 animate-spin rounded-full border-4 border-blue-800 border-t-emerald-500"
-						></div>
-						<p class="mt-4 text-emerald-200">Loading snapshots...</p>
-					</div>
-				{:else if snapshots.length === 0}
-					<p class="text-emerald-100/50">No snapshots found for this document.</p>
-				{:else}
-					<div class="space-y-6">
+					<div class="space-y-3">
 						{#each snapshots as snapshot}
-							<div class="rounded border border-blue-700/50 bg-blue-900/30 p-4">
-								<div class="mb-2 flex flex-wrap items-center justify-between gap-2">
-									<div>
-										<span class="font-mono text-xs text-emerald-100/50">
-											ID: <span class="text-emerald-100">{snapshot.snapshot_id}</span>
-										</span>
-										{#if snapshot.doc_type}
-											{@const label = getDocTypeLabel(snapshot.doc_type)}
-											<span
-												class={`ml-3 rounded px-1.5 py-0.5 text-xs font-medium ${label.bgColor} ${label.textColor}`}
-											>
-												{label.text}
-											</span>
-										{/if}
-										{#if snapshot.snapshot_type}
-											<span
-												class="ml-2 rounded bg-blue-600/20 px-1.5 py-0.5 text-xs font-medium text-blue-300"
-											>
-												{snapshot.snapshot_type}
-											</span>
-										{/if}
+							<div class="rounded-md border border-blue-700/20 bg-blue-900/10 p-3">
+								<div class="flex items-center justify-between text-sm">
+									<div class="font-medium text-emerald-200">
+										{formatDate(snapshot.created_at)}
 									</div>
-									<div class="text-xs text-emerald-100/70">
-										<span>Created: {formatDate(snapshot.created_at)}</span>
+									<div class="rounded bg-blue-500/20 px-2 py-0.5 text-xs text-blue-200">
+										{snapshot.snapshot_type}
 									</div>
 								</div>
-
-								{#if snapshot.version_vector}
-									<div class="mt-3">
-										<div class="mb-1 text-sm font-medium text-emerald-300">Version Vector:</div>
-										<pre
-											class="overflow-auto rounded bg-blue-900/50 p-3 text-xs text-emerald-100/70">{JSON.stringify(
-												snapshot.version_vector,
-												null,
-												2
-											)}</pre>
-									</div>
-								{/if}
-
-								{#if snapshot.title}
-									<div class="mt-3 text-sm">
-										<span class="font-medium text-emerald-300">Title:</span>
-										<span class="ml-2 text-emerald-100">{snapshot.title}</span>
-									</div>
-								{/if}
+								<div class="mt-2 overflow-hidden font-mono text-xs text-emerald-100/70">
+									ID: {snapshot.snapshot_id}
+								</div>
 							</div>
 						{/each}
 					</div>
-				{/if}
-			</div>
+				</div>
+			{/if}
 		{/if}
 	</div>
 </div>

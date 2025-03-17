@@ -1,10 +1,23 @@
 import { Elysia } from 'elysia';
 import { PGlite } from '@electric-sql/pglite';
+import {
+    HUMAN_REGISTRY_UUID,
+    DAO_REGISTRY_UUID,
+    HUMAN_REGISTRY_DOMAIN,
+    DAO_REGISTRY_DOMAIN
+} from '$lib/constants/registry';
 
 // Define our hardcoded registry document ID with genesis UUID
-const GENESIS_UUID = '00000000-0000-0000-0000-000000000000';
-const ROOT_REGISTRY_DOC_ID = GENESIS_UUID;
-const ROOT_REGISTRY_TITLE = 'o.homin.io';
+const ROOT_REGISTRY_DOC_ID = HUMAN_REGISTRY_UUID;
+const ROOT_REGISTRY_TITLE = HUMAN_REGISTRY_DOMAIN;
+
+// DAO Registry constants
+const DAO_REGISTRY_TITLE = DAO_REGISTRY_DOMAIN;
+
+// Document types
+const DOC_TYPE_REGISTRY = 'registry';
+
+// We'll generate random UUIDs for our entities 
 
 // Define snapshot data type
 interface SnapshotData {
@@ -80,8 +93,6 @@ async function initializeDb() {
             CREATE INDEX IF NOT EXISTS idx_loro_updates_doc_id ON loro_updates(doc_id);
         `);
 
-        // console.log('Server-side PGLite initialized with in-memory database');
-
         // Check if the genesis root registry exists, if not create it
         await initializeRootRegistry();
     } catch (error) {
@@ -92,53 +103,99 @@ async function initializeDb() {
 // Initialize the registry document if it doesn't exist yet
 async function initializeRootRegistry() {
     try {
-        // Check if the registry document exists
+        // Check if the HUMAN registry document exists
         const registryExists = await db.query(
             `SELECT EXISTS(SELECT 1 FROM loro_snapshots WHERE doc_id = $1) as exists`,
             [ROOT_REGISTRY_DOC_ID]
         );
 
+        let needsHumanRegistryCreation = true;
         if (registryExists.rows.length > 0) {
             const row = registryExists.rows[0] as Record<string, unknown>;
             if (row.exists) {
-                // console.log('Root registry document already exists');
-                return;
+                // Root registry document already exists
+                needsHumanRegistryCreation = false;
             }
         }
 
-        // Create a placeholder "empty" registry document
-        // In a real app, this would be an actual Loro snapshot
-        const snapshotId = crypto.randomUUID();
-        const placeholderData = Buffer.from(JSON.stringify({
-            version: 1,
-            documents: {},
-            meta: {
-                title: ROOT_REGISTRY_TITLE,
-                createdAt: Date.now()
-            }
-        }));
-
-        // Insert the genesis document
-        await db.query(
-            `INSERT INTO loro_snapshots (
-                snapshot_id, doc_id, binary_data, snapshot_type, 
-                title, doc_type, created_at
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [
-                snapshotId,
-                ROOT_REGISTRY_DOC_ID,
-                placeholderData,
-                'full',
-                ROOT_REGISTRY_TITLE,
-                'dao',
-                new Date()
-            ]
+        // Check if the DAO registry document exists
+        const daoRegistryExists = await db.query(
+            `SELECT EXISTS(SELECT 1 FROM loro_snapshots WHERE doc_id = $1) as exists`,
+            [DAO_REGISTRY_UUID]
         );
 
-        // console.log(`Initialized root registry document with ID: ${ROOT_REGISTRY_DOC_ID}`);
+        let needsDaoRegistryCreation = true;
+        if (daoRegistryExists.rows.length > 0) {
+            const row = daoRegistryExists.rows[0] as Record<string, unknown>;
+            if (row.exists) {
+                // DAO registry document already exists
+                needsDaoRegistryCreation = false;
+            }
+        }
+
+        if (needsHumanRegistryCreation) {
+            // Create the HUMAN registry
+            const snapshotId = crypto.randomUUID();
+            const placeholderData = Buffer.from(JSON.stringify({
+                version: 1,
+                documents: {},
+                meta: {
+                    title: ROOT_REGISTRY_TITLE,
+                    createdAt: Date.now()
+                }
+            }));
+
+            // Insert the genesis document (HUMAN registry)
+            await db.query(
+                `INSERT INTO loro_snapshots (
+                    snapshot_id, doc_id, binary_data, snapshot_type, 
+                    title, doc_type, created_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                [
+                    snapshotId,
+                    ROOT_REGISTRY_DOC_ID,
+                    placeholderData,
+                    'full',
+                    ROOT_REGISTRY_TITLE,
+                    DOC_TYPE_REGISTRY,
+                    new Date()
+                ]
+            );
+        }
+
+        if (needsDaoRegistryCreation) {
+            // Create the DAO registry
+            const daoSnapshotId = crypto.randomUUID();
+            const daoPlaceholderData = Buffer.from(JSON.stringify({
+                version: 1,
+                documents: {},
+                meta: {
+                    title: DAO_REGISTRY_TITLE,
+                    createdAt: Date.now()
+                }
+            }));
+
+            // Insert the DAO registry document
+            await db.query(
+                `INSERT INTO loro_snapshots (
+                    snapshot_id, doc_id, binary_data, snapshot_type, 
+                    title, doc_type, created_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                [
+                    daoSnapshotId,
+                    DAO_REGISTRY_UUID,
+                    daoPlaceholderData,
+                    'full',
+                    DAO_REGISTRY_TITLE,
+                    DOC_TYPE_REGISTRY,
+                    new Date()
+                ]
+            );
+        }
     } catch (error) {
-        console.error('Failed to initialize root registry:', error);
+        console.error('Failed to initialize registries:', error);
     }
 }
 
@@ -283,7 +340,7 @@ const app = new Elysia({ prefix: '/agent' })
                             exists: registrySnapshot.exists,
                             snapshotId: registrySnapshot.snapshotId,
                         },
-                        genesisUuid: GENESIS_UUID,
+                        genesisUuid: HUMAN_REGISTRY_UUID,
                         timestamp: new Date().toISOString()
                     }
                 } catch (error) {
@@ -337,7 +394,7 @@ const app = new Elysia({ prefix: '/agent' })
                                 versionVector ? JSON.stringify(versionVector) : null,
                                 clientId || null,
                                 title,
-                                isRootRegistry ? 'dao' : docType,
+                                isRootRegistry ? DOC_TYPE_REGISTRY : docType,
                                 new Date(timestamp)
                             ]
                         );

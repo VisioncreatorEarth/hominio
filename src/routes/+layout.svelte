@@ -5,7 +5,6 @@
 	import { loroPGLiteStorage } from '$lib/stores/loroPGLiteStorage';
 	import { LoroDoc } from 'loro-crdt';
 	import { generateUUID, generateShortUUID } from '$lib/utils/uuid';
-	import { registerSnapshotHook } from '$lib/client/syncservice';
 
 	// Disable Server-Side Rendering since Tauri is client-only
 	export const ssr = false;
@@ -28,7 +27,7 @@
 	// Loro document registry
 	let loroDocsRegistry = $state<Record<string, { doc: LoroDoc }>>({});
 
-	// Initialize storage before setting context
+	// Initialize storage
 	async function initializeStorage() {
 		if (isInitializing) {
 			return false;
@@ -44,12 +43,9 @@
 			// Update storage state after initialization
 			isStorageInitialized = true;
 
-			// Register the snapshot hook for server synchronization
-			registerSnapshotHook(loroStorage);
-
-			// Set the client ID for the sync service
+			// Set the client ID for identification
 			if (typeof window !== 'undefined') {
-				window.__CLIENT_ID = clientId;
+				(window as any).__CLIENT_ID = clientId;
 			}
 
 			isInitializing = false;
@@ -189,7 +185,7 @@
 					<div class="flex items-center">
 						<div class="flex-shrink-0">
 							<a href="/" class="flex items-center">
-								<span class="text-xl font-semibold text-emerald-400">Hominio</span>
+								<span class="text-xl font-semibold text-emerald-400">homin.io</span>
 							</a>
 						</div>
 						<nav class="ml-10 flex items-baseline space-x-4">
@@ -198,12 +194,6 @@
 								class="rounded-md px-3 py-2 text-sm font-medium text-emerald-100 transition-colors hover:bg-blue-950 hover:text-emerald-50"
 							>
 								Todos
-							</a>
-							<a
-								href="/registry"
-								class="rounded-md px-3 py-2 text-sm font-medium text-emerald-100 transition-colors hover:bg-blue-950 hover:text-emerald-50"
-							>
-								Registry
 							</a>
 							<a
 								href="/server"
