@@ -15,7 +15,16 @@ import {
     HOMINIO_DAO_NAME,
     VISIONCREATOR_DAO_UUID,
     VISIONCREATOR_DAO_DOMAIN,
-    VISIONCREATOR_DAO_NAME
+    VISIONCREATOR_DAO_NAME,
+    SAMUEL_UUID,
+    SAMUEL_DOMAIN,
+    SAMUEL_NAME,
+    CHIELO_UUID,
+    CHIELO_DOMAIN,
+    CHIELO_NAME,
+    YVONNE_UUID,
+    YVONNE_DOMAIN,
+    YVONNE_NAME
 } from '$lib/constants/registry';
 
 // Define our hardcoded registry document ID with Genesis UUID
@@ -24,6 +33,7 @@ const GENESIS_REGISTRY_DOC_ID = GENESIS_REGISTRY_UUID;
 // Document types
 const DOC_TYPE_REGISTRY = 'registry';
 const DOC_TYPE_DAO = 'dao';
+const DOC_TYPE_HUMAN = 'human';
 
 // We'll generate random UUIDs for our entities 
 
@@ -162,28 +172,51 @@ async function initializeRootRegistry() {
             }
         }
 
-        // Check if the DAO registry document exists
-        const daoRegistryExists = await db.query(
-            `SELECT EXISTS(SELECT 1 FROM loro_snapshots WHERE doc_id = $1) as exists`,
-            [DAO_REGISTRY_UUID]
-        );
-
-        let needsDaoRegistryCreation = true;
-        if (daoRegistryExists.rows.length > 0) {
-            const row = daoRegistryExists.rows[0] as Record<string, unknown>;
-            if (row.exists) {
-                needsDaoRegistryCreation = false;
-            }
-        }
-
         if (needsHumanRegistryCreation) {
-            // Create the HUMAN registry
+            // Create the HUMAN registry with Samuel, Chielo, and Yvonne as humans
             const humanSnapshotId = crypto.randomUUID();
-            const humanPlaceholderData = Buffer.from(JSON.stringify({
+            const humanDocuments: Record<string, RegistryDocEntry> = {};
+
+            // Add Samuel to the HUMAN registry
+            humanDocuments[SAMUEL_UUID] = {
+                uuid: SAMUEL_UUID,
+                docType: DOC_TYPE_HUMAN,
+                name: SAMUEL_NAME,
+                domain: SAMUEL_DOMAIN,
+                owner: SAMUEL_UUID,
+                createdAt: Date.now(),
+                currentSnapshotId: 'server'
+            };
+
+            // Add Chielo to the HUMAN registry
+            humanDocuments[CHIELO_UUID] = {
+                uuid: CHIELO_UUID,
+                docType: DOC_TYPE_HUMAN,
+                name: CHIELO_NAME,
+                domain: CHIELO_DOMAIN,
+                owner: CHIELO_UUID,
+                createdAt: Date.now(),
+                currentSnapshotId: 'server'
+            };
+
+            // Add Yvonne to the HUMAN registry
+            humanDocuments[YVONNE_UUID] = {
+                uuid: YVONNE_UUID,
+                docType: DOC_TYPE_HUMAN,
+                name: YVONNE_NAME,
+                domain: YVONNE_DOMAIN,
+                owner: YVONNE_UUID,
+                createdAt: Date.now(),
+                currentSnapshotId: 'server'
+            };
+
+            const humanRegistryData = Buffer.from(JSON.stringify({
                 version: 1,
-                documents: {},
+                documents: humanDocuments,
                 meta: {
                     name: HUMAN_REGISTRY_NAME,
+                    domain: HUMAN_REGISTRY_DOMAIN,
+                    owner: HOMINIO_DAO_UUID,
                     createdAt: Date.now()
                 }
             }));
@@ -198,13 +231,132 @@ async function initializeRootRegistry() {
                 [
                     humanSnapshotId,
                     HUMAN_REGISTRY_UUID,
-                    humanPlaceholderData,
+                    humanRegistryData,
                     'full',
                     HUMAN_REGISTRY_NAME,
                     DOC_TYPE_REGISTRY,
                     new Date()
                 ]
             );
+
+            // Create Samuel's HUMAN document
+            const samuelSnapshotId = crypto.randomUUID();
+            const samuelData = Buffer.from(JSON.stringify({
+                version: 1,
+                properties: {
+                    name: SAMUEL_NAME,
+                    description: 'The first HUMAN in the HUMAN registry',
+                    joined: Date.now()
+                },
+                meta: {
+                    name: SAMUEL_NAME,
+                    domain: SAMUEL_DOMAIN,
+                    createdAt: Date.now()
+                },
+                ownedDaos: [HOMINIO_DAO_UUID] // Samuel owns Hominio DAO
+            }));
+
+            // Insert Samuel's document
+            await db.query(
+                `INSERT INTO loro_snapshots (
+                    snapshot_id, doc_id, binary_data, snapshot_type, 
+                    name, doc_type, created_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                [
+                    samuelSnapshotId,
+                    SAMUEL_UUID,
+                    samuelData,
+                    'full',
+                    SAMUEL_NAME,
+                    DOC_TYPE_HUMAN,
+                    new Date()
+                ]
+            );
+
+            // Create Chielo's HUMAN document
+            const chieloSnapshotId = crypto.randomUUID();
+            const chieloData = Buffer.from(JSON.stringify({
+                version: 1,
+                properties: {
+                    name: CHIELO_NAME,
+                    description: 'The second HUMAN in the HUMAN registry',
+                    joined: Date.now()
+                },
+                meta: {
+                    name: CHIELO_NAME,
+                    domain: CHIELO_DOMAIN,
+                    createdAt: Date.now()
+                },
+                ownedDaos: [VISIONCREATOR_DAO_UUID]
+            }));
+
+            // Insert Chielo's document
+            await db.query(
+                `INSERT INTO loro_snapshots (
+                    snapshot_id, doc_id, binary_data, snapshot_type, 
+                    name, doc_type, created_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                [
+                    chieloSnapshotId,
+                    CHIELO_UUID,
+                    chieloData,
+                    'full',
+                    CHIELO_NAME,
+                    DOC_TYPE_HUMAN,
+                    new Date()
+                ]
+            );
+
+            // Create Yvonne's HUMAN document
+            const yvonneSnapshotId = crypto.randomUUID();
+            const yvonneData = Buffer.from(JSON.stringify({
+                version: 1,
+                properties: {
+                    name: YVONNE_NAME,
+                    description: 'The third HUMAN in the HUMAN registry',
+                    joined: Date.now()
+                },
+                meta: {
+                    name: YVONNE_NAME,
+                    domain: YVONNE_DOMAIN,
+                    createdAt: Date.now()
+                },
+                ownedDaos: [VISIONCREATOR_DAO_UUID]
+            }));
+
+            // Insert Yvonne's document
+            await db.query(
+                `INSERT INTO loro_snapshots (
+                    snapshot_id, doc_id, binary_data, snapshot_type, 
+                    name, doc_type, created_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                [
+                    yvonneSnapshotId,
+                    YVONNE_UUID,
+                    yvonneData,
+                    'full',
+                    YVONNE_NAME,
+                    DOC_TYPE_HUMAN,
+                    new Date()
+                ]
+            );
+        }
+
+        // Check if the DAO registry document exists
+        const daoRegistryExists = await db.query(
+            `SELECT EXISTS(SELECT 1 FROM loro_snapshots WHERE doc_id = $1) as exists`,
+            [DAO_REGISTRY_UUID]
+        );
+
+        let needsDaoRegistryCreation = true;
+        if (daoRegistryExists.rows.length > 0) {
+            const row = daoRegistryExists.rows[0] as Record<string, unknown>;
+            if (row.exists) {
+                needsDaoRegistryCreation = false;
+            }
         }
 
         if (needsDaoRegistryCreation) {
@@ -218,7 +370,7 @@ async function initializeRootRegistry() {
                 docType: DOC_TYPE_DAO,
                 name: HOMINIO_DAO_NAME,
                 domain: HOMINIO_DAO_DOMAIN,
-                owner: DAO_REGISTRY_DOMAIN,
+                owner: SAMUEL_UUID, // Owned by Samuel
                 createdAt: Date.now(),
                 currentSnapshotId: 'server'
             };
@@ -229,7 +381,7 @@ async function initializeRootRegistry() {
                 docType: DOC_TYPE_DAO,
                 name: VISIONCREATOR_DAO_NAME,
                 domain: VISIONCREATOR_DAO_DOMAIN,
-                owner: DAO_REGISTRY_DOMAIN,
+                owner: CHIELO_UUID, // Owned by Chielo
                 createdAt: Date.now(),
                 currentSnapshotId: 'server'
             };
@@ -239,6 +391,8 @@ async function initializeRootRegistry() {
                 documents: daoDocuments,
                 meta: {
                     name: DAO_REGISTRY_NAME,
+                    domain: DAO_REGISTRY_DOMAIN,
+                    owner: HOMINIO_DAO_UUID, // Owned by Hominio DAO
                     createdAt: Date.now()
                 }
             }));
@@ -274,8 +428,10 @@ async function initializeRootRegistry() {
                 meta: {
                     name: HOMINIO_DAO_NAME,
                     domain: HOMINIO_DAO_DOMAIN,
+                    owner: SAMUEL_UUID, // Owned by Samuel
                     createdAt: Date.now()
-                }
+                },
+                ownedRegistries: [HUMAN_REGISTRY_UUID, DAO_REGISTRY_UUID] // Hominio DAO owns both registries
             }));
 
             // Insert the Hominio DAO document
@@ -296,7 +452,7 @@ async function initializeRootRegistry() {
                 ]
             );
 
-            // Create Visioncreator DAO document
+            // Create Visioncreator DAO document with multiple owners
             const visioncreatorDaoSnapshotId = crypto.randomUUID();
             const visioncreatorDaoData = Buffer.from(JSON.stringify({
                 version: 1,
@@ -309,6 +465,7 @@ async function initializeRootRegistry() {
                 meta: {
                     name: VISIONCREATOR_DAO_NAME,
                     domain: VISIONCREATOR_DAO_DOMAIN,
+                    owner: [YVONNE_UUID, SAMUEL_UUID, CHIELO_UUID],
                     createdAt: Date.now()
                 }
             }));

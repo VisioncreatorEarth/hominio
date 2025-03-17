@@ -10,7 +10,9 @@
 		HUMAN_REGISTRY_UUID,
 		DAO_REGISTRY_UUID,
 		HUMAN_REGISTRY_DOMAIN,
-		DAO_REGISTRY_DOMAIN
+		DAO_REGISTRY_DOMAIN,
+		INITIAL_ACCESS_CONTROL,
+		type AccessControl
 	} from '$lib/constants/registry';
 
 	// Define types for our data structures
@@ -21,6 +23,8 @@
 		domain?: string;
 		snapshot_count: number;
 		last_updated: string;
+		owner?: string;
+		accessControl?: Record<string, AccessControl>;
 	}
 
 	interface Registry {
@@ -65,8 +69,11 @@
 
 			// Check the data structure
 			if (response.data && response.data.status === 'success') {
-				// Get all documents
-				documents = response.data.documents || [];
+				// Get all documents and enrich them with ownership data
+				documents = (response.data.documents || []).map((doc: Document) => ({
+					...doc,
+					owner: INITIAL_ACCESS_CONTROL[doc.doc_id]?.owner
+				}));
 
 				// Filter registry documents
 				registryDocs = documents.filter((doc: Document) => doc.doc_type === 'registry');
@@ -194,6 +201,14 @@
 		}
 	}
 
+	// Get owner name by UUID
+	function getOwnerName(ownerUuid: string | string[]): string {
+		if (Array.isArray(ownerUuid)) {
+			return ownerUuid.map((uuid) => INITIAL_ACCESS_CONTROL[uuid]?.name || 'Unknown').join(', ');
+		}
+		return INITIAL_ACCESS_CONTROL[ownerUuid]?.name || 'No Owner';
+	}
+
 	// Initialize on mount
 	onMount(() => {
 		fetchDocuments();
@@ -234,17 +249,28 @@
 						}`}
 						on:click={() => selectRegistry(doc)}
 					>
-						<span
-							class={`${getDocType(doc).bgColor} ${getDocType(doc).textColor} self-start rounded px-2 py-0.5 text-xs font-medium`}
-						>
-							{getDocType(doc).label}
-						</span>
+						<div class="flex items-center justify-between">
+							<span
+								class={`${getDocType(doc).bgColor} ${getDocType(doc).textColor} rounded px-2 py-0.5 text-xs font-medium`}
+							>
+								{getDocType(doc).label}
+							</span>
+						</div>
 						<div class="mt-2 text-lg font-medium text-emerald-200">
 							{doc.name || doc.domain || 'Untitled'}
 						</div>
-						<div class="mt-1 text-xs text-emerald-100/70">
-							{doc.snapshot_count} snapshot{doc.snapshot_count !== 1 ? 's' : ''}
+						<div class="mt-1 flex items-center justify-between">
+							<span class="text-xs text-emerald-100/70">
+								{doc.snapshot_count} snapshot{doc.snapshot_count !== 1 ? 's' : ''}
+							</span>
 						</div>
+						{#if doc.owner}
+							<div class="mt-2 border-t border-blue-700/20 pt-2">
+								<div class="text-xs text-emerald-100/70">
+									Owner{Array.isArray(doc.owner) ? 's' : ''}: {getOwnerName(doc.owner)}
+								</div>
+							</div>
+						{/if}
 					</button>
 				{/each}
 			</div>
@@ -288,17 +314,28 @@
 								}`}
 								on:click={() => selectEntry(doc)}
 							>
-								<span
-									class={`${getDocType(doc).bgColor} ${getDocType(doc).textColor} self-start rounded px-2 py-0.5 text-xs font-medium`}
-								>
-									{getDocType(doc).label}
-								</span>
+								<div class="flex items-center justify-between">
+									<span
+										class={`${getDocType(doc).bgColor} ${getDocType(doc).textColor} rounded px-2 py-0.5 text-xs font-medium`}
+									>
+										{getDocType(doc).label}
+									</span>
+								</div>
 								<div class="mt-2 text-lg font-medium text-emerald-200">
 									{doc.name || doc.domain || 'Untitled'}
 								</div>
-								<div class="mt-1 text-xs text-emerald-100/70">
-									{doc.snapshot_count} snapshot{doc.snapshot_count !== 1 ? 's' : ''}
+								<div class="mt-1 flex items-center justify-between">
+									<span class="text-xs text-emerald-100/70">
+										{doc.snapshot_count} snapshot{doc.snapshot_count !== 1 ? 's' : ''}
+									</span>
 								</div>
+								{#if doc.owner}
+									<div class="mt-2 border-t border-blue-700/20 pt-2">
+										<div class="text-xs text-emerald-100/70">
+											Owner{Array.isArray(doc.owner) ? 's' : ''}: {getOwnerName(doc.owner)}
+										</div>
+									</div>
+								{/if}
 							</button>
 						{/each}
 					</div>

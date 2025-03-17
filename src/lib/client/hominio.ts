@@ -23,7 +23,6 @@ export const hominio = client;
 // This is a singleton client that can be imported anywhere in the application
 // Access patterns:
 // - hominio.agent.get() directly for the root endpoint (wrapper)
-// - hominio.agent.index.get() for the root endpoint (standard)
 // - hominio.agent.health.get() for the health endpoint
 // 
 // Future endpoints:
