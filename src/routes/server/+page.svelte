@@ -1,7 +1,4 @@
 <!-- 
-  Server Page - Displays documents from the server's PGLite instance
-  This page focuses on showing the registry structure and document snapshots
--->
 <script lang="ts">
 	import { hominio } from '$lib/client/hominio';
 	import { onMount } from 'svelte';
@@ -316,34 +313,32 @@
 	});
 </script>
 
-<div class="min-h-screen w-screen bg-blue-950 text-emerald-100">
-	<div class="h-full w-full p-6">
+<div class="w-screen min-h-screen bg-blue-950 text-emerald-100">
+	<div class="w-full h-full p-6">
 		<h1 class="mb-6 text-3xl font-bold text-emerald-400">Server</h1>
 
 		{#if error}
-			<div class="mb-4 rounded border border-red-700 bg-red-900/50 p-3 text-red-200">
+			<div class="p-3 mb-4 text-red-200 border border-red-700 rounded bg-red-900/50">
 				{error}
 			</div>
 		{/if}
 
 		<div class="flex w-full gap-6">
-			<!-- Left Sidebar - Registries and Entries -->
 			<aside class="w-[320px] shrink-0">
-				<!-- Registry Documents -->
 				<h2 class="mb-4 text-xl font-semibold text-emerald-300">Registries</h2>
 
 				{#if loading && registryDocs.length === 0}
-					<div class="my-8 flex justify-center">
+					<div class="flex justify-center my-8">
 						<div
-							class="h-8 w-8 animate-spin rounded-full border-4 border-blue-800 border-t-emerald-500"
+							class="w-8 h-8 border-4 border-blue-800 rounded-full animate-spin border-t-emerald-500"
 						></div>
 					</div>
 				{:else if registryDocs.length === 0}
-					<div class="rounded-md bg-blue-900/10 p-4 text-center text-emerald-100/60">
+					<div class="p-4 text-center rounded-md bg-blue-900/10 text-emerald-100/60">
 						No registry documents found.
 					</div>
 				{:else}
-					<div class="mb-6 flex flex-col gap-3">
+					<div class="flex flex-col gap-3 mb-6">
 						{#each registryDocs as doc}
 							<button
 								class={`flex flex-col rounded-lg border p-3 text-left transition-all ${
@@ -367,24 +362,23 @@
 						{/each}
 					</div>
 
-					<!-- Registry Entries Section (DAOs or Humans) -->
 					{#if selectedRegistry}
 						{#if selectedRegistry.doc_id === HUMAN_REGISTRY_UUID}
 							<h2
-								class="mb-4 border-t border-blue-700/20 pt-6 text-xl font-semibold text-emerald-300"
+								class="pt-6 mb-4 text-xl font-semibold border-t border-blue-700/20 text-emerald-300"
 							>
 								Humans
 							</h2>
 						{:else if selectedRegistry.doc_id === DAO_REGISTRY_UUID}
 							<h2
-								class="mb-4 border-t border-blue-700/20 pt-6 text-xl font-semibold text-emerald-300"
+								class="pt-6 mb-4 text-xl font-semibold border-t border-blue-700/20 text-emerald-300"
 							>
 								DAOs
 							</h2>
 						{/if}
 
 						{#if entryDocs.length === 0}
-							<div class="rounded-md bg-blue-900/10 p-4 text-center text-emerald-100/60">
+							<div class="p-4 text-center rounded-md bg-blue-900/10 text-emerald-100/60">
 								No entries found in this registry.
 							</div>
 						{:else}
@@ -416,12 +410,10 @@
 				{/if}
 			</aside>
 
-			<!-- Main Content Area -->
 			<main class="flex-1">
 				{#if selectedDocId}
-					<div class="rounded-lg border border-blue-700/20 bg-blue-900/5 p-6">
-						<!-- Document Header -->
-						<div class="mb-6 border-b border-blue-700/20 pb-6">
+					<div class="p-6 border rounded-lg border-blue-700/20 bg-blue-900/5">
+						<div class="pb-6 mb-6 border-b border-blue-700/20">
 							<div class="flex items-center justify-between">
 								<h3 class="text-2xl font-semibold text-emerald-300">
 									{#if selectedEntry}
@@ -456,8 +448,7 @@
 							</div>
 						</div>
 
-						<!-- Metadata Section -->
-						<div class="mb-8 rounded-lg border border-blue-700/20 bg-blue-900/10 p-4">
+						<div class="p-4 mb-8 border rounded-lg border-blue-700/20 bg-blue-900/10">
 							<h4 class="mb-4 text-lg font-semibold text-emerald-300">Metadata</h4>
 							<div class="grid gap-4 text-sm md:grid-cols-2">
 								{#if selectedEntry || selectedRegistry}
@@ -505,7 +496,6 @@
 							</div>
 						</div>
 
-						<!-- Tabs -->
 						<div class="mb-6 border-b border-blue-700/20">
 							<div class="flex gap-4">
 								<button
@@ -531,7 +521,6 @@
 							</div>
 						</div>
 
-						<!-- Tab Content -->
 						{#if activeTab === 'docs'}
 							<div>
 								<h4 class="mb-4 text-lg font-semibold text-emerald-300">Owned Documents</h4>
@@ -565,7 +554,7 @@
 										{/each}
 									</div>
 								{:else}
-									<div class="rounded-md bg-blue-900/10 p-4 text-center text-emerald-100/60">
+									<div class="p-4 text-center rounded-md bg-blue-900/10 text-emerald-100/60">
 										No owned documents found.
 									</div>
 								{/if}
@@ -576,7 +565,7 @@
 								{#if snapshots.length > 0}
 									<div class="space-y-3">
 										{#each snapshots as snapshot}
-											<div class="rounded-md border border-blue-700/20 bg-blue-900/10 p-3">
+											<div class="p-3 border rounded-md border-blue-700/20 bg-blue-900/10">
 												<div class="flex items-center justify-between text-sm">
 													<div class="font-medium text-emerald-200">
 														{formatDate(snapshot.created_at)}
@@ -592,7 +581,7 @@
 										{/each}
 									</div>
 								{:else}
-									<div class="rounded-md bg-blue-900/10 p-4 text-center text-emerald-100/60">
+									<div class="p-4 text-center rounded-md bg-blue-900/10 text-emerald-100/60">
 										No snapshots available for this document.
 									</div>
 								{/if}
@@ -601,19 +590,17 @@
 					</div>
 				{:else}
 					<div
-						class="flex h-full items-center justify-center rounded-lg border border-blue-700/20 bg-blue-900/5 p-6"
+						class="flex items-center justify-center h-full p-6 border rounded-lg border-blue-700/20 bg-blue-900/5"
 					>
 						<p class="text-emerald-100/60">Select a document to view its details and snapshots.</p>
 					</div>
 				{/if}
 			</main>
 
-			<!-- Right Aside - Document Content -->
 			<aside class="w-1/3 shrink-0">
 				{#if selectedOwnedDoc}
-					<div class="rounded-lg border border-blue-700/20 bg-blue-900/5 p-6">
-						<!-- Document Header -->
-						<div class="mb-6 border-b border-blue-700/20 pb-6">
+					<div class="p-6 border rounded-lg border-blue-700/20 bg-blue-900/5">
+						<div class="pb-6 mb-6 border-b border-blue-700/20">
 							<div class="flex items-center justify-between">
 								<h3 class="text-xl font-semibold text-emerald-300">
 									{selectedOwnedDoc.name || selectedOwnedDoc.domain || 'Untitled'}
@@ -627,16 +614,14 @@
 								</span>
 							</div>
 						</div>
-
-						<!-- Document Content -->
 						{#if loading}
 							<div class="flex justify-center py-8">
 								<div
-									class="h-8 w-8 animate-spin rounded-full border-4 border-blue-800 border-t-emerald-500"
+									class="w-8 h-8 border-4 border-blue-800 rounded-full animate-spin border-t-emerald-500"
 								/>
 							</div>
 						{:else if selectedOwnedDocContent}
-							<div class="rounded-lg border border-blue-700/20 bg-blue-900/10 p-4">
+							<div class="p-4 border rounded-lg border-blue-700/20 bg-blue-900/10">
 								<div class="max-h-[calc(100vh-20rem)] overflow-auto">
 									<pre
 										class="font-mono text-sm break-words whitespace-pre-wrap text-emerald-100/90">{JSON.stringify(
@@ -647,14 +632,14 @@
 								</div>
 							</div>
 						{:else}
-							<div class="rounded-md bg-blue-900/10 p-4 text-center text-emerald-100/60">
+							<div class="p-4 text-center rounded-md bg-blue-900/10 text-emerald-100/60">
 								No content available for this document.
 							</div>
 						{/if}
 					</div>
 				{:else}
 					<div
-						class="flex h-full items-center justify-center rounded-lg border border-blue-700/20 bg-blue-900/5 p-6"
+						class="flex items-center justify-center h-full p-6 border rounded-lg border-blue-700/20 bg-blue-900/5"
 					>
 						<p class="text-emerald-100/60">Select an owned document to view its content.</p>
 					</div>
@@ -670,4 +655,4 @@
 		padding: 0;
 		overflow-x: hidden;
 	}
-</style>
+</style> -->

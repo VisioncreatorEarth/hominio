@@ -196,10 +196,10 @@
 								Todos
 							</a>
 							<a
-								href="/server"
+								href="/docs"
 								class="rounded-md px-3 py-2 text-sm font-medium text-emerald-100 transition-colors hover:bg-blue-950 hover:text-emerald-50"
 							>
-								Server
+								Docs
 							</a>
 						</nav>
 					</div>
