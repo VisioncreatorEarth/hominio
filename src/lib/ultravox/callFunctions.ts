@@ -75,59 +75,143 @@ export function toggleMute(role: Role): void {
     }
 }
 
+// Define tools configuration following askHominio.ts pattern
+const tools = [
+    {
+        temporaryTool: {
+            modelToolName: 'createTodo',
+            description: 'Create a new todo item. Use this tool when a todo needs to be created. NEVER emit text when doing this tool call.',
+            dynamicParameters: [
+                {
+                    name: 'todoText',
+                    location: 'PARAMETER_LOCATION_BODY',
+                    schema: {
+                        type: 'string',
+                        description: 'The text content of the todo task to create'
+                    },
+                    required: true
+                },
+                {
+                    name: 'tags',
+                    location: 'PARAMETER_LOCATION_BODY',
+                    schema: {
+                        type: 'string',
+                        description: 'Optional comma-separated list of tags (e.g. "work,urgent,home")'
+                    },
+                    required: false
+                }
+            ],
+            client: {}
+        }
+    },
+    {
+        temporaryTool: {
+            modelToolName: 'toggleTodo',
+            description: 'Toggle the completion status of a todo. Use this tool when a todo needs to be marked as complete or incomplete. NEVER emit text when doing this tool call.',
+            dynamicParameters: [
+                {
+                    name: 'todoId',
+                    location: 'PARAMETER_LOCATION_BODY',
+                    schema: {
+                        type: 'string',
+                        description: 'The ID of the todo to toggle (optional if todoText is provided)'
+                    },
+                    required: false
+                },
+                {
+                    name: 'todoText',
+                    location: 'PARAMETER_LOCATION_BODY',
+                    schema: {
+                        type: 'string',
+                        description: 'Text content to search for in todo items (optional if todoId is provided)'
+                    },
+                    required: false
+                }
+            ],
+            client: {}
+        }
+    },
+    {
+        temporaryTool: {
+            modelToolName: 'removeTodo',
+            description: 'Delete a todo from the list. Use this tool when a todo needs to be removed. NEVER emit text when doing this tool call.',
+            dynamicParameters: [
+                {
+                    name: 'todoId',
+                    location: 'PARAMETER_LOCATION_BODY',
+                    schema: {
+                        type: 'string',
+                        description: 'The ID of the todo to delete (optional if todoText is provided)'
+                    },
+                    required: false
+                },
+                {
+                    name: 'todoText',
+                    location: 'PARAMETER_LOCATION_BODY',
+                    schema: {
+                        type: 'string',
+                        description: 'Text content to search for in todo items (optional if todoId is provided)'
+                    },
+                    required: false
+                }
+            ],
+            client: {}
+        }
+    },
+    {
+        temporaryTool: {
+            modelToolName: 'updateTodo',
+            description: 'Update a todo\'s text or tags. Use this tool when a todo needs to be edited. NEVER emit text when doing this tool call.',
+            dynamicParameters: [
+                {
+                    name: 'todoId',
+                    location: 'PARAMETER_LOCATION_BODY',
+                    schema: {
+                        type: 'string',
+                        description: 'The ID of the todo to update (optional if todoText is provided)'
+                    },
+                    required: false
+                },
+                {
+                    name: 'todoText',
+                    location: 'PARAMETER_LOCATION_BODY',
+                    schema: {
+                        type: 'string',
+                        description: 'Current text content to search for (optional if todoId is provided)'
+                    },
+                    required: false
+                },
+                {
+                    name: 'newText',
+                    location: 'PARAMETER_LOCATION_BODY',
+                    schema: {
+                        type: 'string',
+                        description: 'The new text content for the todo'
+                    },
+                    required: true
+                },
+                {
+                    name: 'tags',
+                    location: 'PARAMETER_LOCATION_BODY',
+                    schema: {
+                        type: 'string',
+                        description: 'Optional comma-separated list of tags (e.g. "work,urgent,home")'
+                    },
+                    required: false
+                }
+            ],
+            client: {}
+        }
+    }
+];
+
 // Create a call with Ultravox API
 async function createCall(callConfig: CallConfig): Promise<JoinUrlResponse> {
     try {
         // Add tools configuration to the call request
         const requestConfig = {
             ...callConfig,
-            selectedTools: [
-                {
-                    temporaryTool: {
-                        modelToolName: 'createTodo',
-                        description: 'Create a new todo item. Use this tool when a todo needs to be created. NEVER emit text when doing this tool call.',
-                        dynamicParameters: [
-                            {
-                                name: 'todoText',
-                                location: 'PARAMETER_LOCATION_BODY',
-                                schema: {
-                                    type: 'string',
-                                    description: 'The text content of the todo task to create'
-                                },
-                                required: true
-                            }
-                        ],
-                        client: {}
-                    }
-                },
-                {
-                    temporaryTool: {
-                        modelToolName: 'toggleTodo',
-                        description: 'Toggle the completion status of a todo. Use this tool when a todo needs to be marked as complete or incomplete. NEVER emit text when doing this tool call.',
-                        dynamicParameters: [
-                            {
-                                name: 'todoId',
-                                location: 'PARAMETER_LOCATION_BODY',
-                                schema: {
-                                    type: 'string',
-                                    description: 'The ID of the todo to toggle (optional if todoText is provided)'
-                                },
-                                required: false
-                            },
-                            {
-                                name: 'todoText',
-                                location: 'PARAMETER_LOCATION_BODY',
-                                schema: {
-                                    type: 'string',
-                                    description: 'Text content to search for in todo items (optional if todoId is provided)'
-                                },
-                                required: false
-                            }
-                        ],
-                        client: {}
-                    }
-                }
-            ]
+            selectedTools: tools
         };
 
         const response = await fetch('/callHominio', {
