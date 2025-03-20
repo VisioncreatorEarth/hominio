@@ -5,6 +5,15 @@
 	import { loroPGLiteStorage } from '$lib/stores/loroPGLiteStorage';
 	import { LoroDoc } from 'loro-crdt';
 	import { generateUUID, generateShortUUID } from '$lib/utils/uuid';
+	import {
+		startCall,
+		endCall,
+		toggleMute,
+		UltravoxSessionStatus,
+		Role,
+		type Transcript
+	} from '$lib/ultravox/callFunctions';
+	import CallInterface from '$lib/components/CallInterface.svelte';
 
 	// Disable Server-Side Rendering since Tauri is client-only
 	export const ssr = false;
@@ -23,9 +32,112 @@
 	let activeDocumentsCount = $state(0);
 	let clientId = $state(generateShortUUID());
 	let isStorageInitialized = $state(false);
+	let isCallActive = $state(false);
+	let callStatus = $state<string>('off');
+	let transcripts = $state<Transcript[]>([]);
 
 	// Loro document registry
 	let loroDocsRegistry = $state<Record<string, { doc: LoroDoc }>>({});
+
+	// Toggle modal state
+	async function toggleCall() {
+		if (isCallActive) {
+			await handleEndCall();
+		} else {
+			await handleStartCall();
+		}
+	}
+
+	// Handle starting a call
+	async function handleStartCall() {
+		try {
+			const callConfig = {
+				systemPrompt: `You are Hominio, a personal assistant for the user.
+
+You have access to the following tools that you MUST use when relevant:
+
+1. createTodo - Creates a new todo item
+   Parameters:
+     - todoText: string (REQUIRED) - The text content of the todo to create
+   When to use: Whenever a user asks to create, add, or make a new task/todo
+   Example usage: createTodo({"todoText": "buy groceries"})
+
+2. toggleTodo - Toggles a todo's completion status
+   Parameters (at least one is REQUIRED):
+     - todoId: string (OPTIONAL) - The ID of the todo to toggle
+     - todoText: string (OPTIONAL) - Text to search for in todos
+   When to use: Whenever a user asks to mark, toggle, complete, or finish a task
+   Example usage: toggleTodo({"todoText": "groceries"})
+
+IMPORTANT INSTRUCTIONS:
+1. You MUST use these tools directly without asking for confirmation
+2. Call the appropriate tool as soon as a user requests to create or toggle a todo
+3. Execute the tool when needed WITHOUT typing out the function in your response
+4. AFTER the tool executes, respond with text confirming what you did
+5. DO NOT tell the user "I'll use the createTodo tool" - just USE it directly
+
+Example of proper usage:
+User: "Add a todo to buy milk"
+[You execute createTodo with todoText="buy milk" silently]
+You: "I've added 'buy milk' to your todo list."
+
+User: "Mark my grocery task as complete"
+[You execute toggleTodo with todoText="grocery" silently]
+You: "I've marked the grocery task as complete."
+
+Be friendly, concise, and helpful. Keep responses under 3 sentences when possible.`,
+				model: 'fixie-ai/ultravox-70B',
+				voice: 'b0e6b5c1-3100-44d5-8578-9015aa3023ae', // Jessica voice ID
+				languageHint: 'en', // English language hint
+				temperature: 0.7
+			};
+
+			await startCall(
+				{
+					onStatusChange: (status) => {
+						callStatus = status || 'unknown';
+						isCallActive =
+							status !== 'disconnected' && status !== 'call_ended' && status !== 'error';
+
+						// Register Hominio tools when call becomes active
+						if (isCallActive && typeof window !== 'undefined') {
+							type WindowWithCustomProps = Window &
+								typeof globalThis & {
+									registerHominionTools?: (session: any) => void;
+									__ULTRAVOX_SESSION?: any;
+								};
+
+							const windowWithProps = window as WindowWithCustomProps;
+
+							if (windowWithProps.registerHominionTools && windowWithProps.__ULTRAVOX_SESSION) {
+								windowWithProps.registerHominionTools(windowWithProps.__ULTRAVOX_SESSION);
+							}
+						}
+					},
+					onTranscriptChange: (newTranscripts) => {
+						if (newTranscripts) {
+							transcripts = [...newTranscripts];
+						}
+					}
+				},
+				callConfig
+			);
+		} catch (error) {
+			console.error('Failed to start call:', error);
+		}
+	}
+
+	// Handle ending a call
+	async function handleEndCall() {
+		try {
+			await endCall();
+			isCallActive = false;
+			callStatus = 'off';
+			transcripts = [];
+		} catch (error) {
+			console.error('Failed to end call:', error);
+		}
+	}
 
 	// Initialize storage
 	async function initializeStorage() {
@@ -169,35 +281,86 @@
 	onDestroy(() => {
 		// Clean up registry
 		loroDocsRegistry = {};
+
+		// End any active call
+		if (isCallActive) {
+			handleEndCall();
+		}
+	});
+
+	// Define window interface with our custom properties
+	type WindowWithSession = Window &
+		typeof globalThis & {
+			registerHominionTools?: (session: unknown) => void;
+			__ULTRAVOX_SESSION?: unknown;
+		};
+
+	// Use $effect instead of $: for reactivity in Svelte 5 runes
+	$effect(() => {
+		if (callStatus === 'active' && typeof window !== 'undefined') {
+			console.log('Call became active, attempting to register Hominio tools...');
+
+			const win = window as WindowWithSession;
+
+			// Check if the registerHominionTools function is available on the window object
+			if (typeof win.registerHominionTools === 'function' && win.__ULTRAVOX_SESSION) {
+				try {
+					console.log('Calling registerHominionTools with Ultravox session...');
+					win.registerHominionTools(win.__ULTRAVOX_SESSION);
+				} catch (error) {
+					console.error('Error registering Hominio tools:', error);
+				}
+			} else {
+				console.log('registerHominionTools function or ULTRAVOX_SESSION not available yet');
+			}
+		}
 	});
 
 	let { children } = $props();
 </script>
 
-<div class="flex h-screen bg-blue-950 text-white">
-	<!-- Main Content Area -->
-	<div class="flex flex-1 flex-col overflow-hidden">
-		<!-- Header with Navigation -->
-		<header class="border-b border-emerald-500/20" style="background-color: #0B3156;">
+<div
+	class="relative min-h-screen w-full overflow-hidden bg-cover bg-center text-white"
+	style="background-image: url('/bg.jpg');"
+>
+	<!-- Overlay gradient - reduced opacity -->
+	<div
+		class="absolute inset-0 bg-gradient-to-b from-blue-950/70 to-indigo-950/70 backdrop-blur-[2px]"
+	></div>
+
+	<!-- Background circles/shapes for design - increased transparency -->
+	<div class="absolute top-20 right-20 h-64 w-64 rounded-full bg-orange-500/10 blur-3xl"></div>
+	<div class="absolute bottom-40 left-20 h-80 w-80 rounded-full bg-blue-500/10 blur-3xl"></div>
+
+	<!-- Main Content Container -->
+	<div class="relative z-10 flex h-screen flex-col">
+		<!-- Header with Navigation - more transparent -->
+		<header class="border-b border-white/5 bg-white/5 backdrop-blur-md">
 			<div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
 				<div class="flex h-16 items-center justify-between">
 					<!-- Navigation: Left Side Links -->
 					<div class="flex items-center">
 						<div class="flex-shrink-0">
 							<a href="/" class="flex items-center">
-								<span class="text-xl font-semibold text-emerald-400">homin.io</span>
+								<span class="text-xl font-medium text-white/95">homin.io</span>
 							</a>
 						</div>
 						<nav class="ml-10 flex items-baseline space-x-4">
 							<a
+								href="/hominio"
+								class="rounded-md px-3 py-2 text-sm font-medium text-white/80 transition-colors hover:bg-white/5 hover:text-white"
+							>
+								Hominio
+							</a>
+							<a
 								href="/todos"
-								class="rounded-md px-3 py-2 text-sm font-medium text-emerald-100 transition-colors hover:bg-blue-950 hover:text-emerald-50"
+								class="rounded-md px-3 py-2 text-sm font-medium text-white/80 transition-colors hover:bg-white/5 hover:text-white"
 							>
 								Todos
 							</a>
 							<a
 								href="/docs"
-								class="rounded-md px-3 py-2 text-sm font-medium text-emerald-100 transition-colors hover:bg-blue-950 hover:text-emerald-50"
+								class="rounded-md px-3 py-2 text-sm font-medium text-white/80 transition-colors hover:bg-white/5 hover:text-white"
 							>
 								Docs
 							</a>
@@ -209,7 +372,7 @@
 						<span
 							class={`inline-block h-2 w-2 rounded-full ${isStorageInitialized ? 'bg-emerald-400' : 'bg-red-400'}`}
 						></span>
-						<span class="text-xs text-emerald-300">
+						<span class="text-xs text-white/70">
 							{isStorageInitialized ? 'Storage Ready' : 'Initializing Storage...'}
 						</span>
 					</div>
@@ -218,11 +381,88 @@
 		</header>
 
 		<!-- Main Content -->
-		<main class="flex-1 overflow-auto bg-blue-950">
+		<main class="flex-1 overflow-auto">
 			<div class="mx-auto w-full">
 				<!-- Slot for page content -->
 				{@render children()}
 			</div>
 		</main>
+
+		<!-- Centered Logo Button - more transparent -->
+		<div class="fixed bottom-0 left-1/2 z-50 -translate-x-1/2">
+			<button
+				class={`flex h-16 w-16 transform items-center justify-center shadow-lg backdrop-blur-sm transition-all duration-300 hover:scale-105 focus:outline-none
+					${
+						!isCallActive
+							? 'rounded-full bg-white/5 hover:bg-white/10'
+							: 'rounded-b-none bg-red-500/20 hover:bg-red-500/30'
+					}`}
+				onclick={toggleCall}
+			>
+				{#if !isCallActive}
+					<div class="h-12 w-12 overflow-hidden rounded-full bg-white/5 p-1">
+						<img src="/logo.png" alt="Hominio Logo" class="h-full w-full object-cover" />
+					</div>
+				{:else}
+					<svg
+						xmlns="http://www.w3.org/2000/svg"
+						class="h-8 w-8 text-white"
+						fill="none"
+						viewBox="0 0 24 24"
+						stroke="currentColor"
+					>
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							stroke-width="2"
+							d="M6 18L18 6M6 6l12 12"
+						/>
+					</svg>
+				{/if}
+			</button>
+		</div>
+
+		<!-- Call Interface - When Call is Active -->
+		{#if isCallActive}
+			<CallInterface
+				{callStatus}
+				{transcripts}
+				onMute={() => toggleMute(Role.USER)}
+				onEndCall={handleEndCall}
+			/>
+		{/if}
 	</div>
 </div>
+
+<style lang="postcss">
+	:global(body) {
+		margin: 0;
+		padding: 0;
+		font-family:
+			'Inter',
+			-apple-system,
+			BlinkMacSystemFont,
+			'Segoe UI',
+			Roboto,
+			sans-serif;
+		color-scheme: dark;
+	}
+
+	/* Custom scrollbar styling */
+	:global(*::-webkit-scrollbar) {
+		width: 6px;
+	}
+
+	:global(*::-webkit-scrollbar-track) {
+		background: rgba(255, 255, 255, 0.05);
+	}
+
+	:global(*::-webkit-scrollbar-thumb) {
+		background: rgba(255, 255, 255, 0.2);
+		border-radius: 10px;
+	}
+
+	:global(*::-webkit-scrollbar-thumb:hover) {
+		background: rgba(255, 255, 255, 0.3);
+	}
+</style>

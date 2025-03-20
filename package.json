@@ -47,6 +47,7 @@
     "@tauri-apps/api": "^2.3.0",
     "@tauri-apps/plugin-fs": "^2.2.0",
     "elysia": "^1.2.25",
-    "loro-crdt": "^1.4.6"
+    "loro-crdt": "^1.4.6",
+    "ultravox-client": "^0.3.4"
   }
 }
