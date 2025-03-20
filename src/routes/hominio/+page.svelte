@@ -15,6 +15,7 @@
 		completed: boolean;
 		createdAt: number;
 		tags: string[];
+		docId: string; // Which document/list this todo belongs to
 	}
 
 	// Initialize LoroDoc for todos
@@ -76,8 +77,113 @@
 		return { success, message };
 	}
 
+	// Initialize the list of Loro documents
+	let loroDocuments = $state<{ id: string; name: string; createdAt: number; numTodos: number }[]>([
+		{
+			id: 'personal',
+			name: 'Personal List',
+			createdAt: Date.now(),
+			numTodos: 0
+		},
+		{
+			id: 'work',
+			name: 'Work List',
+			createdAt: Date.now(),
+			numTodos: 0
+		}
+	]);
+
+	// Track the currently active document
+	let activeDocId = $state('personal');
+
+	// Get the active document name for display
+	function getActiveDocName(): string {
+		const activeDoc = loroDocuments.find((doc) => doc.id === activeDocId);
+		return activeDoc ? activeDoc.name : 'Personal List';
+	}
+
+	// Create a new document/list
+	function createLoroDocument(name: string): string {
+		const normalizedName = name.trim();
+		if (!normalizedName) return '';
+
+		// Generate a slugified ID from the name
+		const id = normalizedName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+
+		// Check if a document with this ID already exists
+		if (loroDocuments.some((doc) => doc.id === id)) {
+			console.log(`Document with ID ${id} already exists`);
+			return id; // Return existing ID
+		}
+
+		// Create new document
+		const newDoc = {
+			id,
+			name: normalizedName,
+			createdAt: Date.now(),
+			numTodos: 0
+		};
+
+		loroDocuments = [...loroDocuments, newDoc];
+		return id;
+	}
+
+	// Switch to a specific document
+	function switchToDocument(docId: string): boolean {
+		console.log(`Switching to document: ${docId}`);
+		const targetDoc = loroDocuments.find((doc) => doc.id === docId);
+		if (targetDoc) {
+			activeDocId = docId;
+
+			// Reset any active filter when switching documents
+			selectedTag = null;
+
+			// Force a reactive update by directly updating todoEntries
+			const rawEntries = [...todos.entries()];
+			const typedEntries: [string, TodoItem][] = rawEntries.map((entry) => {
+				const key = entry[0] as string;
+				const value = entry[1] as unknown as TodoItem;
+				// Ensure docId exists (for backward compatibility)
+				if (!value.docId) value.docId = 'personal';
+				return [key, value];
+			});
+
+			// Immediately update todoEntries with filtered data for the new active document
+			todoEntries = typedEntries
+				.filter(([_, todo]) => todo.docId === activeDocId)
+				.sort((a, b) => b[1].createdAt - a[1].createdAt);
+
+			// Update document list counts
+			updateLoroDocuments();
+
+			console.log(`Switched to document: ${targetDoc.name}, found ${todoEntries.length} todos`);
+			return true;
+		}
+		console.log(`Document not found: ${docId}`);
+		return false;
+	}
+
+	// Update document list with count
+	function updateLoroDocuments() {
+		// Use a Map to store todo counts by document
+		const counts = new Map<string, number>();
+
+		// Count todos for each document
+		todoEntries.forEach(([_, todo]) => {
+			const docId = todo.docId || 'personal'; // Default to personal if not specified
+			const currentCount = counts.get(docId) || 0;
+			counts.set(docId, currentCount + 1);
+		});
+
+		// Update the documents list with the counts
+		loroDocuments = loroDocuments.map((doc) => ({
+			...doc,
+			numTodos: counts.get(doc.id) || 0
+		}));
+	}
+
 	// Add a new todo to the Loro document
-	function addTodo(text: string, tagsStr: string = ''): string {
+	function addTodo(text: string, tagsStr: string = '', docId: string = activeDocId): string {
 		if (!text.trim()) return '';
 
 		const todoId = crypto.randomUUID();
@@ -91,7 +197,8 @@
 			text: text.trim(),
 			completed: false,
 			createdAt: Date.now(),
-			tags
+			tags,
+			docId // Store which document this belongs to
 		};
 
 		todos.set(todoId, todoItem as unknown as Value);
@@ -141,11 +248,15 @@
 		const typedEntries: [string, TodoItem][] = rawEntries.map((entry) => {
 			const key = entry[0] as string;
 			const value = entry[1] as unknown as TodoItem;
+			// Ensure docId exists (for backward compatibility)
+			if (!value.docId) value.docId = 'personal';
 			return [key, value];
 		});
 
-		// Sort by creation date (newest first)
-		todoEntries = typedEntries.sort((a, b) => b[1].createdAt - a[1].createdAt);
+		// Filter for the active document and sort by creation date (newest first)
+		todoEntries = typedEntries
+			.filter(([_, todo]) => todo.docId === activeDocId)
+			.sort((a, b) => b[1].createdAt - a[1].createdAt);
 
 		// Update document list
 		updateLoroDocuments();
@@ -247,7 +358,11 @@
 	let selectedTag = $state<string | null>(null);
 
 	function filterTodosByTag(tag: string | null) {
+		console.log(`Filtering todos by tag: ${tag}`);
 		selectedTag = tag;
+		// Force a reactive update by modifying the todoEntries array
+		// This ensures the UI updates when the filter changes
+		todoEntries = [...todoEntries];
 	}
 
 	// Tool implementations based on AskHominio.svelte pattern
@@ -255,16 +370,44 @@
 	const createTodoTool = (parameters: any) => {
 		console.log('Called createTodo tool with parameters:', parameters);
 		try {
-			const { todoText, tags } = parameters;
+			const { todoText, tags, listName } = parameters;
 			toolState.pendingAction = 'create';
+
+			// Check if we need to create in a specific list
+			let targetDocId = activeDocId;
+			if (listName && typeof listName === 'string') {
+				// Try to find a matching list (case insensitive)
+				const targetName = listName.trim().toLowerCase();
+				const matchingDoc = loroDocuments.find(
+					(doc) => doc.name.toLowerCase().includes(targetName) || doc.id.includes(targetName)
+				);
+
+				if (matchingDoc) {
+					targetDocId = matchingDoc.id;
+				} else {
+					// Create the list if it doesn't exist
+					const newId = createLoroDocument(listName.trim());
+					if (newId) {
+						targetDocId = newId;
+					}
+				}
+			}
 
 			if (typeof todoText === 'string' && todoText.trim()) {
 				const tagsStr = tags || '';
-				const newTodoId = addTodo(todoText.trim(), tagsStr);
+				const newTodoId = addTodo(todoText.trim(), tagsStr, targetDocId);
+
+				// If the todo was added to a different list than the active one, switch to that list
+				if (targetDocId !== activeDocId) {
+					switchToDocument(targetDocId);
+				}
+
+				const targetListName =
+					loroDocuments.find((doc) => doc.id === targetDocId)?.name || 'Personal List';
 
 				const result = {
 					success: true,
-					message: `Created todo: "${todoText}"${tagsStr ? ' with tags: ' + tagsStr : ''}`
+					message: `Created todo: "${todoText}"${tagsStr ? ' with tags: ' + tagsStr : ''} in ${targetListName}`
 				};
 
 				logToolActivity('create', result.message, true);
@@ -569,7 +712,8 @@
 
 			if (tag === 'all' || tag === 'clear') {
 				// Reset filter to show all todos
-				selectedTag = null;
+				console.log('Clearing filter to show all todos');
+				filterTodosByTag(null);
 				const result = {
 					success: true,
 					message: 'Showing all todos'
@@ -580,13 +724,20 @@
 
 			// Check if tag exists
 			const allTags = getAllUniqueTags();
+			console.log('Available tags:', allTags);
 
 			if (tag && typeof tag === 'string') {
 				// Try to find a matching tag (case insensitive)
 				const matchingTag = allTags.find((t) => t.toLowerCase() === tag.toLowerCase());
 
 				if (matchingTag) {
-					selectedTag = matchingTag;
+					console.log(`Filtering by tag: ${matchingTag}`);
+					// Explicitly call the filterTodosByTag function with the matching tag
+					filterTodosByTag(matchingTag);
+
+					// Double-check that UI state has been updated properly
+					console.log(`Selected tag set to: ${selectedTag}`);
+
 					const result = {
 						success: true,
 						message: `Filtered todos by tag: "${matchingTag}"`
@@ -594,9 +745,10 @@
 					logToolActivity('filter', result.message, true);
 					return JSON.stringify(result);
 				} else {
+					console.log(`Tag not found: ${tag}`);
 					const result = {
 						success: false,
-						message: `Tag "${tag}" not found. Available tags: ${allTags.join(', ')}`
+						message: `Tag "${tag}" not found. Available tags: ${allTags.length > 0 ? allTags.join(', ') : 'None'}`
 					};
 					logToolActivity('filter', result.message, false);
 					return JSON.stringify(result);
@@ -633,29 +785,95 @@
 		}
 	};
 
-	// Initialize the list of Loro documents
-	let loroDocuments = $state<{ id: string; name: string; createdAt: number; numTodos: number }[]>([
-		{
-			id: 'todos',
-			name: 'Default Todo List',
-			createdAt: Date.now(),
-			numTodos: 0
-		}
-	]);
+	// Add a tool implementation for creating a new list
+	const createListTool = (parameters: any) => {
+		console.log('Called createList tool with parameters:', parameters);
+		try {
+			const { listName } = parameters;
+			toolState.pendingAction = 'createList';
 
-	// Update document list with count
-	function updateLoroDocuments() {
-		// Update the todo count in the documents list
-		loroDocuments = loroDocuments.map((doc) => {
-			if (doc.id === 'todos') {
-				return {
-					...doc,
-					numTodos: todoEntries.length
-				};
+			if (typeof listName === 'string' && listName.trim()) {
+				const newId = createLoroDocument(listName.trim());
+				if (newId) {
+					const result = {
+						success: true,
+						message: `Created new list: "${listName}"`
+					};
+					logToolActivity('createList', result.message, true);
+					return JSON.stringify(result);
+				}
 			}
-			return doc;
-		});
-	}
+
+			const result = {
+				success: false,
+				message: 'Invalid list name provided'
+			};
+			logToolActivity('createList', result.message, false);
+			return JSON.stringify(result);
+		} catch (error: unknown) {
+			console.error('Error in createList tool:', error);
+			const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
+			const result = {
+				success: false,
+				message: `Error creating list: ${errorMessage}`
+			};
+			logToolActivity('createList', result.message, false);
+			return JSON.stringify(result);
+		}
+	};
+
+	// Add a tool implementation for switching between lists
+	const switchListTool = (parameters: any) => {
+		console.log('Called switchList tool with parameters:', parameters);
+		try {
+			const { listName } = parameters;
+			toolState.pendingAction = 'switchList';
+
+			if (typeof listName === 'string' && listName.trim()) {
+				// Try to find a matching list (case insensitive)
+				const targetName = listName.trim().toLowerCase();
+				const matchingDoc = loroDocuments.find(
+					(doc) => doc.name.toLowerCase().includes(targetName) || doc.id.includes(targetName)
+				);
+
+				if (matchingDoc) {
+					switchToDocument(matchingDoc.id);
+					const result = {
+						success: true,
+						message: `Switched to "${matchingDoc.name}" list`
+					};
+					logToolActivity('switchList', result.message, true);
+					return JSON.stringify(result);
+				} else {
+					const listNames = loroDocuments.map((doc) => `"${doc.name}"`).join(', ');
+					const result = {
+						success: false,
+						message: `Couldn't find a list matching "${listName}". Available lists: ${listNames}`
+					};
+					logToolActivity('switchList', result.message, false);
+					return JSON.stringify(result);
+				}
+			}
+
+			const result = {
+				success: false,
+				message: 'Invalid list name provided'
+			};
+			logToolActivity('switchList', result.message, false);
+			return JSON.stringify(result);
+		} catch (error: unknown) {
+			console.error('Error in switchList tool:', error);
+			const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
+			const result = {
+				success: false,
+				message: `Error switching lists: ${errorMessage}`
+			};
+			logToolActivity('switchList', result.message, false);
+			return JSON.stringify(result);
+		}
+	};
 
 	// Following the pattern in askHominio.ts, register tools with window
 	onMount(() => {
@@ -667,7 +885,9 @@
 				toggleTodo: toggleTodoTool,
 				removeTodo: removeTodoTool,
 				updateTodo: updateTodoTool,
-				filterTodos: filterTodosTool
+				filterTodos: filterTodosTool,
+				createList: createListTool,
+				switchList: switchListTool
 			};
 
 			// Create the registration function that Ultravox will call
@@ -690,6 +910,12 @@
 
 						console.log('Registering filterTodos tool...');
 						session.registerToolImplementation('filterTodos', filterTodosTool);
+
+						console.log('Registering createList tool...');
+						session.registerToolImplementation('createList', createListTool);
+
+						console.log('Registering switchList tool...');
+						session.registerToolImplementation('switchList', switchListTool);
 
 						console.log('Hominio todo tools registered successfully');
 					} catch (error) {
@@ -758,12 +984,23 @@
 		<div class="sticky top-6 p-4">
 			<!-- Loro Documents Section -->
 			<div class="rounded-xl border border-white/10 bg-white/5 p-4 backdrop-blur-sm">
-				<h3 class="mb-3 text-lg font-semibold text-white/80">Loro Documents</h3>
+				<h3 class="mb-3 text-lg font-semibold text-white/80">Todo Lists</h3>
 				<div class="space-y-3">
 					{#each loroDocuments as doc}
-						<div class="rounded-lg border border-white/5 bg-white/5 p-3">
+						<button
+							on:click={() => switchToDocument(doc.id)}
+							class={`w-full rounded-lg border ${
+								activeDocId === doc.id
+									? 'border-blue-500/30 bg-blue-500/10 text-blue-100'
+									: 'border-white/5 bg-white/5 hover:bg-white/10'
+							} p-3 text-left transition-colors`}
+						>
 							<div class="flex items-center gap-2">
-								<div class="rounded-full bg-blue-500/20 p-1.5">
+								<div
+									class={`rounded-full ${
+										activeDocId === doc.id ? 'bg-blue-500/30' : 'bg-blue-500/20'
+									} p-1.5`}
+								>
 									<svg
 										xmlns="http://www.w3.org/2000/svg"
 										class="h-3.5 w-3.5"
@@ -790,10 +1027,41 @@
 									{new Date(doc.createdAt).toLocaleDateString()}
 								</div>
 							</div>
-						</div>
+						</button>
 					{/each}
 				</div>
 			</div>
+
+			<!-- Tags Section -->
+			{#if getAllUniqueTags().length > 0}
+				<div class="mt-6 rounded-xl border border-white/10 bg-white/5 p-4 backdrop-blur-sm">
+					<h3 class="mb-3 text-lg font-semibold text-white/80">Available Tags</h3>
+					<div class="flex flex-wrap gap-2">
+						{#key getAllUniqueTags().join(',')}
+							{#each getAllUniqueTags() as tag}
+								<button
+									on:click={() => filterTodosByTag(tag)}
+									class={`rounded-lg border ${
+										selectedTag === tag
+											? 'border-purple-500/30 bg-purple-500/10 text-purple-100'
+											: 'border-white/5 bg-white/5 hover:bg-white/10'
+									} px-3 py-1 text-xs transition-colors`}
+								>
+									{tag}
+								</button>
+							{/each}
+						{/key}
+						{#if selectedTag}
+							<button
+								on:click={() => filterTodosByTag(null)}
+								class="rounded-lg border border-white/5 bg-white/5 px-3 py-1 text-xs text-white/60 hover:bg-white/10"
+							>
+								Clear Filter
+							</button>
+						{/if}
+					</div>
+				</div>
+			{/if}
 		</div>
 	</div>
 
@@ -804,7 +1072,7 @@
 			<div class="mb-8 text-center">
 				<h1 class="text-3xl font-bold text-white/95">Hominio Voice Todos</h1>
 				<p class="mt-2 text-white/70">
-					Manage your tasks using voice commands. Try saying "Create a todo to..."
+					Currently viewing <span class="font-semibold text-blue-300">{getActiveDocName()}</span>
 				</p>
 			</div>
 
@@ -823,18 +1091,20 @@
 						>
 							All
 						</button>
-						{#each getAllUniqueTags() as tag}
-							<button
-								on:click={() => filterTodosByTag(tag)}
-								class={`rounded-lg px-3 py-1 text-sm transition-colors ${
-									selectedTag === tag
-										? 'bg-blue-500/30 text-white'
-										: 'bg-white/10 text-white/70 hover:bg-white/20'
-								}`}
-							>
-								{tag}
-							</button>
-						{/each}
+						{#key getAllUniqueTags().join(',')}
+							{#each getAllUniqueTags() as tag}
+								<button
+									on:click={() => filterTodosByTag(tag)}
+									class={`rounded-lg px-3 py-1 text-sm transition-colors ${
+										selectedTag === tag
+											? 'bg-blue-500/30 text-white'
+											: 'bg-white/10 text-white/70 hover:bg-white/20'
+									}`}
+								>
+									{tag}
+								</button>
+							{/each}
+						{/key}
 					</div>
 				</div>
 			{/if}
@@ -905,6 +1175,51 @@
 											d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
 										/>
 									</svg>
+								{:else if recentToolActivity.action === 'filter'}
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										class="h-5 w-5 text-indigo-300"
+										fill="none"
+										viewBox="0 0 24 24"
+										stroke="currentColor"
+									>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											stroke-width="2"
+											d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+										/>
+									</svg>
+								{:else if recentToolActivity.action === 'createList'}
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										class="h-5 w-5 text-indigo-300"
+										fill="none"
+										viewBox="0 0 24 24"
+										stroke="currentColor"
+									>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											stroke-width="2"
+											d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+										/>
+									</svg>
+								{:else if recentToolActivity.action === 'switchList'}
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										class="h-5 w-5 text-indigo-300"
+										fill="none"
+										viewBox="0 0 24 24"
+										stroke="currentColor"
+									>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											stroke-width="2"
+											d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"
+										/>
+									</svg>
 								{/if}
 							</div>
 							<div>
@@ -917,6 +1232,12 @@
 										Task Edited
 									{:else if recentToolActivity.action === 'delete'}
 										Task Deleted
+									{:else if recentToolActivity.action === 'filter'}
+										Todos Filtered
+									{:else if recentToolActivity.action === 'createList'}
+										List Created
+									{:else if recentToolActivity.action === 'switchList'}
+										List Switched
 									{/if}
 								</div>
 								<div class="text-xs text-indigo-300/80">
@@ -937,62 +1258,72 @@
 						No todos yet. Start by saying "Create a todo to..."
 					</div>
 				{:else}
-					{#each todoEntries.filter(([_, todo]) => selectedTag === null || todo.tags.includes(selectedTag)) as [id, todo] (id)}
-						<div
-							class="rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm transition-colors hover:bg-white/10"
-						>
-							<div class="flex flex-col p-4">
-								<div class="flex items-center justify-between">
-									<div class="flex min-w-0 flex-1 items-center gap-4">
-										<div
-											class={`flex h-6 w-6 items-center justify-center rounded-full border transition-colors ${
-												todo.completed
-													? 'border-green-500 bg-green-500/20 text-green-400'
-													: 'border-white/20 bg-white/5 text-transparent'
-											}`}
-										>
-											{#if todo.completed}
-												<svg
-													xmlns="http://www.w3.org/2000/svg"
-													class="h-4 w-4"
-													fill="none"
-													viewBox="0 0 24 24"
-													stroke="currentColor"
-												>
-													<path
-														stroke-linecap="round"
-														stroke-linejoin="round"
-														stroke-width="2.5"
-														d="M5 13l4 4L19 7"
-													/>
-												</svg>
-											{/if}
+					{#key [todoEntries.length, selectedTag, activeDocId]}
+						{#each todoEntries.filter(([_, todo]) => selectedTag === null || todo.tags.includes(selectedTag)) as [id, todo] (id)}
+							<div
+								class="rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm transition-colors hover:bg-white/10"
+							>
+								<div class="flex flex-col p-4">
+									<div class="flex items-center justify-between">
+										<div class="flex min-w-0 flex-1 items-center gap-4">
+											<div
+												class={`flex h-6 w-6 items-center justify-center rounded-full border transition-colors ${
+													todo.completed
+														? 'border-green-500 bg-green-500/20 text-green-400'
+														: 'border-white/20 bg-white/5 text-transparent'
+												}`}
+											>
+												{#if todo.completed}
+													<svg
+														xmlns="http://www.w3.org/2000/svg"
+														class="h-4 w-4"
+														fill="none"
+														viewBox="0 0 24 24"
+														stroke="currentColor"
+													>
+														<path
+															stroke-linecap="round"
+															stroke-linejoin="round"
+															stroke-width="2.5"
+															d="M5 13l4 4L19 7"
+														/>
+													</svg>
+												{/if}
+											</div>
+											<span
+												class={todo.completed
+													? 'truncate text-white/50 line-through'
+													: 'truncate text-white/90'}
+											>
+												{todo.text}
+											</span>
 										</div>
-										<span
-											class={todo.completed
-												? 'truncate text-white/50 line-through'
-												: 'truncate text-white/90'}
-										>
-											{todo.text}
+										<span class="text-xs text-white/40">
+											{formatDate(todo.createdAt)}
 										</span>
 									</div>
-									<span class="text-xs text-white/40">
-										{formatDate(todo.createdAt)}
-									</span>
-								</div>
 
-								{#if todo.tags && todo.tags.length > 0}
-									<div class="mt-2 flex flex-wrap gap-1.5">
-										{#each todo.tags as tag}
-											<span class="rounded-md bg-indigo-500/20 px-2 py-0.5 text-xs text-indigo-200">
-												{tag}
-											</span>
-										{/each}
-									</div>
-								{/if}
+									{#if todo.tags && todo.tags.length > 0}
+										<div class="mt-2 flex flex-wrap gap-1.5">
+											{#each todo.tags as tag}
+												<span
+													class="rounded-md bg-indigo-500/20 px-2 py-0.5 text-xs text-indigo-200"
+												>
+													{tag}
+												</span>
+											{/each}
+										</div>
+									{/if}
+								</div>
 							</div>
-						</div>
-					{/each}
+						{:else}
+							<div
+								class="flex items-center justify-center rounded-xl border border-white/10 bg-white/5 p-12 text-white/60 backdrop-blur-sm"
+							>
+								No todos match the selected filter
+							</div>
+						{/each}
+					{/key}
 				{/if}
 			</div>
 		</div>
@@ -1115,6 +1446,50 @@
 						</div>
 						<div class="mt-1 text-xs text-white/70">Show tasks by tag</div>
 					</div>
+					<div class="rounded-lg border border-white/5 bg-white/5 p-3">
+						<div class="flex items-center gap-2">
+							<div class="rounded-full bg-amber-500/20 p-1.5">
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									class="h-3.5 w-3.5"
+									fill="none"
+									viewBox="0 0 24 24"
+									stroke="currentColor"
+								>
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="2"
+										d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+									/>
+								</svg>
+							</div>
+							<div class="text-xs font-medium text-white/80">Create List</div>
+						</div>
+						<div class="mt-1 text-xs text-white/70">Add new todo list</div>
+					</div>
+					<div class="rounded-lg border border-white/5 bg-white/5 p-3">
+						<div class="flex items-center gap-2">
+							<div class="rounded-full bg-cyan-500/20 p-1.5">
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									class="h-3.5 w-3.5"
+									fill="none"
+									viewBox="0 0 24 24"
+									stroke="currentColor"
+								>
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="2"
+										d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"
+									/>
+								</svg>
+							</div>
+							<div class="text-xs font-medium text-white/80">Switch List</div>
+						</div>
+						<div class="mt-1 text-xs text-white/70">Change current todo list</div>
+					</div>
 				</div>
 			</div>
 
@@ -1138,7 +1513,13 @@
 																? 'bg-indigo-500/20'
 																: entry.action === 'delete'
 																	? 'bg-red-500/20'
-																	: 'bg-gray-500/20'
+																	: entry.action === 'filter'
+																		? 'bg-purple-500/20'
+																		: entry.action === 'createList'
+																			? 'bg-amber-500/20'
+																			: entry.action === 'switchList'
+																				? 'bg-cyan-500/20'
+																				: 'bg-gray-500/20'
 													: 'bg-orange-500/20'
 											}`}
 										>
@@ -1202,10 +1583,59 @@
 														d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
 													/>
 												</svg>
+											{:else if entry.action === 'filter'}
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													class="h-3.5 w-3.5"
+													fill="none"
+													viewBox="0 0 24 24"
+													stroke="currentColor"
+												>
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														stroke-width="2"
+														d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+													/>
+												</svg>
+											{:else if entry.action === 'createList'}
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													class="h-3.5 w-3.5"
+													fill="none"
+													viewBox="0 0 24 24"
+													stroke="currentColor"
+												>
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														stroke-width="2"
+														d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+													/>
+												</svg>
+											{:else if entry.action === 'switchList'}
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													class="h-3.5 w-3.5"
+													fill="none"
+													viewBox="0 0 24 24"
+													stroke="currentColor"
+												>
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														stroke-width="2"
+														d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"
+													/>
+												</svg>
 											{/if}
 										</div>
 										<div class="text-xs font-medium text-white/80 capitalize">
-											{entry.action}
+											{entry.action === 'createList'
+												? 'create list'
+												: entry.action === 'switchList'
+													? 'switch list'
+													: entry.action}
 										</div>
 										<div class="ml-auto text-[10px] text-white/50">
 											{new Date(entry.timestamp).toLocaleTimeString()}

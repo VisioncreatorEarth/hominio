@@ -13,6 +13,7 @@
 		Role,
 		type Transcript
 	} from '$lib/ultravox/callFunctions';
+	import { registerHominionTools } from '$lib/ultravox/toolImplementation';
 	import CallInterface from '$lib/components/CallInterface.svelte';
 
 	// Disable Server-Side Rendering since Tauri is client-only
@@ -59,9 +60,10 @@ You have access to the following tools that you MUST use when relevant:
 1. createTodo - Creates a new todo item
    Parameters:
      - todoText: string (REQUIRED) - The text content of the todo to create
-     - tags: string (OPTIONAL) - Comma-separated list of tags (e.g. "work,home,urgent")
+     - tags: string (REQUIRED) - Comma-separated list of tags (e.g. "work,home,urgent")
+     - listName: string (OPTIONAL) - The list to add the todo to (default is personal list)
    When to use: Whenever a user asks to create, add, or make a new task/todo
-   Example usage: createTodo({"todoText": "buy groceries", "tags": "shopping,errands"})
+   Example usage: createTodo({"todoText": "buy groceries", "tags": "shopping,errands", "listName": "personal"})
 
 2. toggleTodo - Toggles a todo's completion status
    Parameters (at least one is REQUIRED):
@@ -92,30 +94,43 @@ You have access to the following tools that you MUST use when relevant:
    When to use: Whenever a user asks to filter, show, or display todos with specific tags
    Example usage: filterTodos({"tag": "shopping"}) or filterTodos({"tag": "all"})
 
+6. createList - Creates a new todo list
+   Parameters:
+     - listName: string (REQUIRED) - The name for the new list
+   When to use: Whenever a user asks to create, add, or make a new list
+   Example usage: createList({"listName": "Work Tasks"})
+
+7. switchList - Switches to a different todo list
+   Parameters:
+     - listName: string (REQUIRED) - The name of the list to switch to
+   When to use: Whenever a user asks to switch to, view, or open a different list
+   Example usage: switchList({"listName": "Personal"})
+
 IMPORTANT INSTRUCTIONS:
 1. You MUST use these tools directly without asking for confirmation
-2. Call the appropriate tool as soon as a user requests to create, toggle, delete, update, or filter a todo
+2. Call the appropriate tool as soon as a user requests to create, toggle, delete, update, filter, or manage lists
 3. Execute the tool when needed WITHOUT typing out the function in your response
 4. AFTER the tool executes, respond with text confirming what you did
 5. DO NOT tell the user "I'll use the tool" - just USE it directly
-6. For tags, look for words like "tag", "category", or "label" in the user's request
+6. ALWAYS add tags to todos automatically based on the content:
+   - For time-sensitive items, add "urgent" or "important"
+   - If the user specifies specific tags, use those instead of or in addition to your automatic tags
+7. For lists, default to the "Personal List" if no list is specified
+8. When creating a todo, you can specify which list it should go in, and a new list will be created if it doesn't exist
+9. When filtering todos, use the exact tag the user mentions or "all" to show all todos
 
 Example of proper usage:
-User: "Add a todo to buy milk with tags shopping and errands"
-[You execute createTodo with todoText="buy milk" and tags="shopping,errands" silently]
-You: "I've added 'buy milk' to your todo list with tags 'shopping' and 'errands'."
+User: "Add a todo to buy milk"
+[You execute createTodo with todoText="buy milk", tags="shopping,personal" silently]
+You: "I've added 'buy milk' to your todo list with tags 'shopping' and 'personal'."
 
-User: "Mark my grocery task as complete"
-[You execute toggleTodo with todoText="grocery" silently]
-You: "I've marked the grocery task as complete."
+User: "Create a new list for my vacation"
+[You execute createList with listName="vacation" silently]
+You: "I've created a new 'vacation' list for you."
 
-User: "Delete the dog walking todo"
-[You execute removeTodo with todoText="dog walking" silently]
-You: "I've removed the dog walking task from your list."
-
-User: "Change my buy milk todo to get almond milk instead and add a health tag"
-[You execute updateTodo with todoText="buy milk", newText="get almond milk", tags="shopping,health" silently]
-You: "I've updated your todo to 'get almond milk' and added the 'health' tag."
+User: "Show me my work list"
+[You execute switchList with listName="work" silently]
+You: "I've switched to your 'Work' list."
 
 User: "Show me todos with the shopping tag"
 [You execute filterTodos with tag="shopping" silently]
@@ -343,15 +358,15 @@ Be friendly, concise, and helpful. Keep responses under 3 sentences when possibl
 			const win = window as WindowWithSession;
 
 			// Check if the registerHominionTools function is available on the window object
-			if (typeof win.registerHominionTools === 'function' && win.__ULTRAVOX_SESSION) {
+			if (win.__ULTRAVOX_SESSION) {
 				try {
 					console.log('Calling registerHominionTools with Ultravox session...');
-					win.registerHominionTools(win.__ULTRAVOX_SESSION);
+					registerHominionTools(win.__ULTRAVOX_SESSION);
 				} catch (error) {
 					console.error('Error registering Hominio tools:', error);
 				}
 			} else {
-				console.log('registerHominionTools function or ULTRAVOX_SESSION not available yet');
+				console.log('ULTRAVOX_SESSION not available yet');
 			}
 		}
 	});
@@ -375,10 +390,9 @@ Be friendly, concise, and helpful. Keep responses under 3 sentences when possibl
 	<!-- Main Content Container -->
 	<div class="relative z-10 flex h-screen flex-col">
 		<!-- Header with Navigation - more transparent -->
-		<header class="border-b border-white/5 bg-white/5 backdrop-blur-md">
+		<!-- <header class="border-b border-white/5 bg-white/5 backdrop-blur-md">
 			<div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
 				<div class="flex h-16 items-center justify-between">
-					<!-- Navigation: Left Side Links -->
 					<div class="flex items-center">
 						<div class="flex-shrink-0">
 							<a href="/" class="flex items-center">
@@ -407,7 +421,6 @@ Be friendly, concise, and helpful. Keep responses under 3 sentences when possibl
 						</nav>
 					</div>
 
-					<!-- Storage Status Indicator -->
 					<div class="flex items-center gap-2">
 						<span
 							class={`inline-block h-2 w-2 rounded-full ${isStorageInitialized ? 'bg-emerald-400' : 'bg-red-400'}`}
@@ -418,7 +431,7 @@ Be friendly, concise, and helpful. Keep responses under 3 sentences when possibl
 					</div>
 				</div>
 			</div>
-		</header>
+		</header> -->
 
 		<!-- Main Content -->
 		<main class="flex-1 overflow-auto">

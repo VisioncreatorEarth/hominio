@@ -202,6 +202,24 @@ const tools = [
             ],
             client: {}
         }
+    },
+    {
+        temporaryTool: {
+            modelToolName: 'filterTodos',
+            description: 'Filter todos by tag. Use this tool when a user wants to view todos with specific tags. NEVER emit text when doing this tool call.',
+            dynamicParameters: [
+                {
+                    name: 'tag',
+                    location: 'PARAMETER_LOCATION_BODY',
+                    schema: {
+                        type: 'string',
+                        description: 'The tag to filter by, or "all" to show all todos'
+                    },
+                    required: true
+                }
+            ],
+            client: {}
+        }
     }
 ];
 
