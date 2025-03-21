@@ -972,7 +972,7 @@
 				},
 				Oliver: {
 					personality: 'professional and efficient',
-					voiceId: '3abe60f5-13ed-4e82-ac15-4391d9e5cd9d',
+					voiceId: 'dcb65d6e-9a56-459e-bf6f-d97572e2fe64',
 					tools: ['createTodo', 'toggleTodo', 'updateTodo', 'switchAgent'],
 					description: 'specialized in todo creation and management'
 				},
