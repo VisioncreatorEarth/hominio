@@ -1,0 +1,17 @@
+{
+    "id": "toggleTodo",
+    "name": "Toggle Todo",
+    "description": "Mark a todo as complete or incomplete. Use this when a user wants to check off or uncheck a todo.",
+    "modelToolName": "toggleTodo",
+    "parameters": [
+        {
+            "name": "todoText",
+            "location": "PARAMETER_LOCATION_BODY",
+            "schema": {
+                "type": "string",
+                "description": "The text of the todo to toggle"
+            },
+            "required": true
+        }
+    ]
+}

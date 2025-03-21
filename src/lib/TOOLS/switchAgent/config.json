@@ -1,0 +1,17 @@
+{
+    "id": "switchAgent",
+    "name": "Switch Agent",
+    "description": "Switch to a different agent. Use this when the user requests to speak with a different AI assistant.",
+    "modelToolName": "switchAgent",
+    "parameters": [
+        {
+            "name": "agentName",
+            "location": "PARAMETER_LOCATION_BODY",
+            "schema": {
+                "type": "string",
+                "description": "The name of the agent to switch to"
+            },
+            "required": true
+        }
+    ]
+}

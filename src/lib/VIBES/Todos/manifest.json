@@ -1,0 +1,24 @@
+{
+    "id": "todos",
+    "name": "Todo Assistant",
+    "description": "Interactive assistant for managing todo lists",
+    "defaultAgent": "Hominio",
+    "agents": [
+        "Hominio",
+        "Oliver",
+        "Rajesh"
+    ],
+    "coreTools": [
+        "hangUp",
+        "switchAgent"
+    ],
+    "appTools": [
+        "createTodo",
+        "toggleTodo",
+        "updateTodo",
+        "removeTodo",
+        "filterTodos",
+        "createList",
+        "switchList"
+    ]
+}

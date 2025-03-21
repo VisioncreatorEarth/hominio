@@ -1,0 +1,17 @@
+{
+    "id": "switchAgent",
+    "name": "Switch Agent",
+    "description": "Switch to a different agent personality. Use this tool when a user asks to speak to a different agent.",
+    "modelToolName": "switchAgent",
+    "parameters": [
+        {
+            "name": "agentName",
+            "location": "PARAMETER_LOCATION_BODY",
+            "schema": {
+                "type": "string",
+                "description": "The name of the agent to switch to (e.g. \"Oliver\", \"Rajesh\", \"Hominio\")"
+            },
+            "required": true
+        }
+    ]
+}

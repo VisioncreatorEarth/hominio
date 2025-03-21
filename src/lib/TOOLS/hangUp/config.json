@@ -1,0 +1,7 @@
+{
+    "id": "hangUp",
+    "name": "Hang Up",
+    "description": "End the current call. Use this when the user wants to disconnect from the current conversation.",
+    "modelToolName": "hangUp",
+    "parameters": []
+}
