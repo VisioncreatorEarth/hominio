@@ -317,7 +317,7 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
 
         // Register event listeners
         console.log('🌟 Attempting to register stage_change event listener');
-        uvSession.addEventListener('stage_change', (evt: Event) => {
+        uvSession.addEventListener('stage_change', async (evt: Event) => {
             console.log('🌟 STAGE CHANGE EVENT RECEIVED', evt);
 
             // Log detailed information about the event
@@ -335,6 +335,27 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
                     voiceId: stageChangeEvent.detail.voiceId,
                     systemPromptExcerpt: stageChangeEvent.detail.systemPrompt?.substring(0, 50) + '...'
                 });
+
+                // Update current agent if there's a system prompt change
+                if (stageChangeEvent.detail.systemPrompt) {
+                    // Import dynamically to avoid circular dependencies
+                    const { currentAgent } = await import('./toolImplementation');
+                    const { get } = await import('svelte/store');
+
+                    // Try to extract agent name from system prompt
+                    const systemPrompt = stageChangeEvent.detail.systemPrompt;
+                    const agentMatch = systemPrompt.match(/You are now ([A-Za-z]+),/i);
+
+                    if (agentMatch && agentMatch[1]) {
+                        const newAgentName = agentMatch[1];
+                        console.log(`🌟 Updating current agent to: ${newAgentName}`);
+
+                        // Only update if it's changed
+                        if (browser && get(currentAgent) !== newAgentName) {
+                            currentAgent.set(newAgentName);
+                        }
+                    }
+                }
             } else {
                 console.log('🌟 STAGE CHANGE EVENT HAS NO DETAIL PROPERTY', JSON.stringify(evt));
             }

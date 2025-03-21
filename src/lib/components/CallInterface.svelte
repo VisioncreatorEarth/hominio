@@ -14,6 +14,12 @@
 	}>();
 
 	let transcriptContainer: HTMLDivElement;
+	let displayedAgent = $state($currentAgent);
+
+	// Ensure we always display the most current agent name
+	$effect(() => {
+		displayedAgent = $currentAgent;
+	});
 
 	// Auto-scroll to bottom when new transcripts arrive
 	$effect(() => {
@@ -22,16 +28,42 @@
 		}
 	});
 
-	// Ensure audio is always unmuted
+	// Setup event listeners and ensure audio is always unmuted
 	onMount(() => {
-		// Access Ultravox session if available and ensure speaker is not muted
+		// Access Ultravox session if available
 		if (typeof window !== 'undefined' && (window as any).__ULTRAVOX_SESSION) {
 			const uvSession = (window as any).__ULTRAVOX_SESSION;
-			// Unmute if needed
+
+			// Ensure speaker is not muted
 			if (uvSession.isSpeakerMuted) {
 				console.log('🔊 Forcibly unmuting speaker');
 				uvSession.unmuteSpeaker();
 			}
+
+			// Listen for stage changes to update the agent display
+			uvSession.addEventListener('stage_change', (evt: Event) => {
+				console.log('🎭 Stage change detected in CallInterface');
+
+				const stageChangeEvent = evt as unknown as {
+					detail?: {
+						stageId?: string;
+						voiceId?: string;
+						systemPrompt?: string;
+					};
+				};
+
+				if (stageChangeEvent?.detail?.systemPrompt) {
+					// Extract agent name from system prompt
+					const systemPrompt = stageChangeEvent.detail.systemPrompt;
+					const agentMatch = systemPrompt.match(/You are now ([A-Za-z]+),/i);
+
+					if (agentMatch && agentMatch[1]) {
+						console.log(`🎭 Detected new agent from stage change: ${agentMatch[1]}`);
+						// Update displayed agent
+						displayedAgent = agentMatch[1];
+					}
+				}
+			});
 		}
 	});
 
@@ -80,7 +112,7 @@
 					</div>
 					<div>
 						<div class="text-xs font-medium text-teal-300/80">CURRENT AGENT</div>
-						<div class="text-xl font-bold text-teal-100">{$currentAgent}</div>
+						<div class="text-xl font-bold text-teal-100">{displayedAgent}</div>
 					</div>
 					<div class="ml-auto">
 						<span class="rounded-full bg-white/5 px-3 py-1 text-sm font-medium text-white/80">
@@ -101,7 +133,7 @@
 					{#each transcripts as transcript}
 						<div class="mb-3">
 							<span class="text-sm font-medium text-white/90">
-								{transcript.speaker === 'agent' ? $currentAgent + ':' : 'You:'}
+								{transcript.speaker === 'agent' ? displayedAgent + ':' : 'You:'}
 							</span>
 							<p class="text-white/80">{transcript.text}</p>
 						</div>

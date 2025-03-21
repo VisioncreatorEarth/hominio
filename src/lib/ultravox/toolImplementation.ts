@@ -37,7 +37,7 @@ type AgentConfig = {
 };
 
 // Define valid agent names
-type AgentName = 'Mark' | 'Emily' | 'Oliver' | 'Hominio';
+type AgentName = 'Mark' | 'Emily' | 'Oliver' | 'Hominio' | 'Rajesh';
 
 // Agent configuration with personality traits and voice IDs
 const agentConfig: Record<AgentName, AgentConfig> = {
@@ -56,6 +56,10 @@ const agentConfig: Record<AgentName, AgentConfig> = {
     'Hominio': {
         personality: 'helpful and attentive',
         voiceId: 'b0e6b5c1-3100-44d5-8578-9015aa3023ae' // Default Jessica voice
+    },
+    'Rajesh': {
+        personality: 'patient and detail-oriented',
+        voiceId: 'a0df06e1-d90a-444a-906a-b9c873796f4e' // Indian voice
     }
 };
 
@@ -158,4 +162,90 @@ Remember: You are ${normalizedName} now. Respond in a ${agent.personality} manne
     // These should connect to your Loro storage implementation
 
     console.log('Hominio tools registered successfully');
+}
+
+export async function switchAgent(params: { agentName?: string }): Promise<Response> {
+    console.log('🔄 SERVER: switchAgent called with params:', params);
+
+    try {
+        // Normalize agent name
+        let normalizedName = (params.agentName || 'Hominio') as AgentName;
+
+        // Convert aliases/variations to standard names
+        if (normalizedName.toLowerCase() === 'ali') {
+            normalizedName = 'Mark';
+        } else if (normalizedName.toLowerCase() === 'sam') {
+            normalizedName = 'Oliver';
+        } else if (normalizedName.toLowerCase().includes('tech') || normalizedName.toLowerCase().includes('support')) {
+            normalizedName = 'Rajesh';
+        }
+
+        // Make sure we have a valid enum value
+        if (!(normalizedName in agentConfig)) {
+            normalizedName = 'Hominio';
+        }
+
+        // Update the current agent in the store
+        currentAgent.set(normalizedName);
+
+        // Get agent config
+        const agent = agentConfig[normalizedName];
+
+        // Create agent-specific descriptions
+        const agentDescriptions = {
+            'Mark': 'specialized in deletion, filtering, and list management',
+            'Oliver': 'specialized in todo creation and management',
+            'Rajesh': 'technical support specialist who helps with app-related issues',
+            'Hominio': 'central orchestrator'
+        };
+
+        // Create specialized tool descriptions
+        const toolDescriptions = {
+            'Mark': 'removeTodo, filterTodos, createList, switchList',
+            'Oliver': 'createTodo, toggleTodo, updateTodo',
+            'Rajesh': '',
+            'Hominio': ''
+        };
+
+        // Create a system prompt for the new agent
+        const systemPrompt = `You are now ${normalizedName}, a friendly assistant for the Hominio todo app. 
+Your personality is more ${agent.personality}. 
+You are ${agentDescriptions[normalizedName as keyof typeof agentDescriptions]}.
+
+Your specialized tools are: ${toolDescriptions[normalizedName as keyof typeof toolDescriptions] || 'None'}. 
+You should always use the switchAgent tool to redirect users to the appropriate specialist when they need help outside your expertise.
+
+Guidelines based on your role:
+- Mark: Handles deletion tasks, filtering todos, and managing todo lists
+- Oliver: Handles creating, toggling, and updating todos
+- Rajesh: Technical support specialist who helps with app-related issues
+- Hominio: Central orchestrator who directs users to the appropriate specialist
+
+Continue helping the user with their todo management tasks using your available tools.
+
+Remember: You are ${normalizedName} now. Respond in a ${agent.personality} manner consistent with your character.`;
+
+        const stageChangeData = {
+            systemPrompt,
+            voice: agent.voiceId,
+            toolResultText: `I'm now switching you to ${normalizedName}...`
+        };
+
+        return new Response(JSON.stringify(stageChangeData), {
+            headers: { 'Content-Type': 'application/json' }
+        });
+    } catch (error) {
+        console.error('❌ SERVER ERROR in switchAgent:', error);
+        return new Response(
+            JSON.stringify({
+                success: false,
+                message: 'Failed to switch agent',
+                error: error instanceof Error ? error.message : 'Unknown error'
+            }),
+            {
+                status: 500,
+                headers: { 'Content-Type': 'application/json' }
+            }
+        );
+    }
 } 

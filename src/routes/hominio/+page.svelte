@@ -882,54 +882,97 @@
 			console.log('🔧 CLIENT: switchAgentTool called with params:', params);
 
 			const agentName = params.agentName || 'Hominio';
-			let normalizedName = agentName;
+			let normalizedName = agentName as string;
 
 			// Map legacy names to new names
 			if (agentName.toLowerCase() === 'ali') {
 				normalizedName = 'Mark';
 			} else if (agentName.toLowerCase() === 'sam') {
-				normalizedName = 'Emily';
-			} else if (agentName.toLowerCase() === 'taylor') {
 				normalizedName = 'Oliver';
+			} else if (
+				agentName.toLowerCase().includes('tech') ||
+				agentName.toLowerCase().includes('support')
+			) {
+				normalizedName = 'Rajesh';
 			}
 
 			console.log(`🔧 CLIENT: Switching to agent ${normalizedName}`);
 
-			// Get personality trait based on agent name
-			let personality = 'helpful and attentive';
-			let voiceId = 'b0e6b5c1-3100-44d5-8578-9015aa3023ae'; // Default voice
+			// Define agent configurations with tool specializations
+			type AgentConfig = {
+				personality: string;
+				voiceId: string;
+				tools: string[];
+				description: string;
+			};
 
-			if (normalizedName === 'Mark') {
-				personality = 'enthusiastic and playful';
-				voiceId = '91fa9bcf-93c8-467c-8b29-973720e3f167';
-			} else if (normalizedName === 'Emily') {
-				personality = 'calm and methodical';
-				voiceId = '87691b77-0174-4808-b73c-30000b334e14';
-			} else if (normalizedName === 'Oliver') {
-				personality = 'professional and efficient';
-				voiceId = '3abe60f5-13ed-4e82-ac15-4391d9e5cd9d';
-			}
+			const agentConfigs: Record<string, AgentConfig> = {
+				Mark: {
+					personality: 'enthusiastic and playful',
+					voiceId: '91fa9bcf-93c8-467c-8b29-973720e3f167',
+					tools: ['removeTodo', 'filterTodos', 'createList', 'switchList', 'switchAgent'],
+					description: 'specialized in deletion, filtering, and list management'
+				},
+				Oliver: {
+					personality: 'professional and efficient',
+					voiceId: '3abe60f5-13ed-4e82-ac15-4391d9e5cd9d',
+					tools: ['createTodo', 'toggleTodo', 'updateTodo', 'switchAgent'],
+					description: 'specialized in todo creation and management'
+				},
+				Rajesh: {
+					personality: 'patient and detail-oriented',
+					voiceId: 'a0df06e1-d90a-444a-906a-b9c873796f4e',
+					tools: ['switchAgent'],
+					description: 'technical support specialist who can help with app issues'
+				},
+				Hominio: {
+					personality: 'helpful and attentive',
+					voiceId: 'b0e6b5c1-3100-44d5-8578-9015aa3023ae',
+					tools: ['switchAgent'],
+					description: 'central orchestrator'
+				}
+			};
+
+			// Get the agent config or default to Hominio
+			const agent = agentConfigs[normalizedName] || agentConfigs['Hominio'];
+
+			// Get the specialized tools for this agent
+			const toolsDescription = agent.tools.filter((t: string) => t !== 'switchAgent').join(', ');
+
+			// Update the current agent in the store directly
+			console.log(`🔧 CLIENT: Updating currentAgent store to: ${normalizedName}`);
+			currentAgent.set(normalizedName);
 
 			// Create personalized system prompt for the agent
 			const systemPrompt = `You are now ${normalizedName}, a friendly assistant for the Hominio todo app. 
-Your personality is more ${personality}. 
+Your personality is more ${agent.personality}. 
+You are ${agent.description}.
 
-Continue helping the user with their todo management tasks using the available tools.
+Your specialized tools are: ${toolsDescription || 'None'}. 
+You should always use the switchAgent tool to redirect users to the appropriate specialist when they need help outside your expertise.
 
-Remember: You are ${normalizedName} now. Respond in a ${personality} manner consistent with your character.`;
+Guidelines based on your role:
+- Mark: Handles deletion tasks, filtering todos, and managing todo lists
+- Oliver: Handles creating, toggling, and updating todos
+- Rajesh: Technical support specialist who helps with app-related issues
+- Hominio: Central orchestrator who directs users to the appropriate specialist
+
+Continue helping the user with their todo management tasks using your available tools.
+
+Remember: You are ${normalizedName} now. Respond in a ${agent.personality} manner consistent with your character.`;
 
 			console.log('🔧 CLIENT: Created system prompt for new agent');
 
 			// Log activity
 			console.log(
-				`🔧 CLIENT: Logging switch to agent ${normalizedName} with personality ${personality}`
+				`🔧 CLIENT: Logging switch to agent ${normalizedName} with personality ${agent.personality}`
 			);
 
 			// CRITICAL - Format correction based on error message:
 			// "Client tool result must be a string or an object with string 'result' and 'responseType' properties"
 			const stageChangeData = {
 				systemPrompt: systemPrompt,
-				voice: voiceId,
+				voice: agent.voiceId,
 				toolResultText: `I'm now switching you to ${normalizedName}...`
 			};
 
