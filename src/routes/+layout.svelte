@@ -522,12 +522,7 @@ Be friendly, concise, and helpful. Keep responses under 3 sentences when possibl
 
 		<!-- Call Interface - When Call is Active -->
 		{#if isCallActive}
-			<CallInterface
-				{callStatus}
-				{transcripts}
-				onMute={() => toggleMute(Role.USER)}
-				onEndCall={handleEndCall}
-			/>
+			<CallInterface {callStatus} {transcripts} onEndCall={handleEndCall} />
 		{/if}
 	</div>
 </div>

@@ -6,17 +6,14 @@
 	let {
 		callStatus,
 		transcripts = [],
-		onMute,
 		onEndCall
 	} = $props<{
 		callStatus: string;
 		transcripts?: Transcript[];
-		onMute: () => void;
 		onEndCall: () => void;
 	}>();
 
 	let transcriptContainer: HTMLDivElement;
-	let isMuted = $state(false);
 
 	// Auto-scroll to bottom when new transcripts arrive
 	$effect(() => {
@@ -25,10 +22,18 @@
 		}
 	});
 
-	function handleMute() {
-		isMuted = !isMuted;
-		onMute();
-	}
+	// Ensure audio is always unmuted
+	onMount(() => {
+		// Access Ultravox session if available and ensure speaker is not muted
+		if (typeof window !== 'undefined' && (window as any).__ULTRAVOX_SESSION) {
+			const uvSession = (window as any).__ULTRAVOX_SESSION;
+			// Unmute if needed
+			if (uvSession.isSpeakerMuted) {
+				console.log('🔊 Forcibly unmuting speaker');
+				uvSession.unmuteSpeaker();
+			}
+		}
+	});
 
 	// Format call status for display
 	function formatStatus(status: string): string {
@@ -105,50 +110,9 @@
 			</div>
 
 			<!-- Call Controls -->
-			<div class="flex space-x-3">
+			<div class="flex justify-center">
 				<button
-					class={`flex flex-1 items-center justify-center rounded-xl px-4 py-3 text-white/90 backdrop-blur-sm transition-all duration-200 ${
-						isMuted
-							? 'bg-amber-500/20 hover:bg-amber-500/30'
-							: 'bg-blue-500/20 hover:bg-blue-500/30'
-					}`}
-					onclick={handleMute}
-				>
-					<svg
-						xmlns="http://www.w3.org/2000/svg"
-						class="mr-2 h-5 w-5"
-						fill="none"
-						viewBox="0 0 24 24"
-						stroke="currentColor"
-					>
-						{#if isMuted}
-							<path
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								stroke-width="2"
-								d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"
-								stroke-dasharray="30"
-								stroke-dashoffset="0"
-							/>
-							<path
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								stroke-width="2"
-								d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2"
-							/>
-						{:else}
-							<path
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								stroke-width="2"
-								d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
-							/>
-						{/if}
-					</svg>
-					{isMuted ? 'Unmute' : 'Mute'}
-				</button>
-				<button
-					class="flex flex-1 items-center justify-center rounded-xl bg-red-500/20 px-4 py-3 text-white/90 backdrop-blur-sm transition-all duration-200 hover:bg-red-500/30"
+					class="flex w-2/3 items-center justify-center rounded-xl bg-red-500/20 px-4 py-3 text-white/90 backdrop-blur-sm transition-all duration-200 hover:bg-red-500/30"
 					onclick={onEndCall}
 				>
 					<svg

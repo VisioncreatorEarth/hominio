@@ -1,5 +1,5 @@
 import { browser } from '$app/environment';
-import type { UltravoxSession as UVSession, UltravoxSessionStatus as UVStatus, Transcript as UVTranscript } from 'ultravox-client';
+import type { UltravoxSession as UVSession, UltravoxSessionStatus as UVStatus, Transcript as UVTranscript, ClientToolImplementation } from 'ultravox-client';
 
 // Define types for our Ultravox integration
 export type CallConfig = {
@@ -66,12 +66,12 @@ export function toggleMute(role: Role): void {
             uvSession.muteMic();
         }
     } else {
-        // Toggle agent speaker
+        // For agent, always ensure speaker is unmuted
         if (uvSession.isSpeakerMuted) {
+            console.log('🔊 Unmuting speaker (speaker should never be muted)');
             uvSession.unmuteSpeaker();
-        } else {
-            uvSession.muteSpeaker();
         }
+        // We never mute the speaker - just unmute if it somehow got muted
     }
 }
 
@@ -301,6 +301,20 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
             // Stages are supported by default in newer versions of Ultravox
         });
 
+        // Register client tools if they are exposed on window.__hominio_tools
+        if (typeof window !== 'undefined' && (window as Window & typeof globalThis & { __hominio_tools?: Record<string, ClientToolImplementation> }).__hominio_tools) {
+            console.log('🔧 Registering client tool implementations with Ultravox session');
+            const toolImpls = (window as Window & typeof globalThis & { __hominio_tools: Record<string, ClientToolImplementation> }).__hominio_tools;
+
+            // Register each tool with the Ultravox session
+            for (const [toolName, toolImpl] of Object.entries(toolImpls)) {
+                console.log(`🔧 Registering tool: ${toolName}`);
+                uvSession.registerToolImplementation(toolName, toolImpl);
+            }
+        } else {
+            console.warn('❌ No window.__hominio_tools found. Client tools will not work!');
+        }
+
         // Register event listeners
         console.log('🌟 Attempting to register stage_change event listener');
         uvSession.addEventListener('stage_change', (evt: Event) => {
@@ -326,17 +340,35 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
             }
 
             // You could update UI or other state here when stage changes
+
+            // Ensure speaker is unmuted after stage change
+            if (uvSession && uvSession.isSpeakerMuted) {
+                console.log('🔊 Unmuting speaker after stage change');
+                uvSession.unmuteSpeaker();
+            }
         });
 
         // Add more logging for main events
         uvSession.addEventListener('status', () => {
             console.log('📡 ULTRAVOX STATUS CHANGE:', uvSession?.status);
             callbacks.onStatusChange(uvSession?.status);
+
+            // Ensure speaker is unmuted after status change, especially when speaking
+            if (uvSession?.status === 'speaking' && uvSession.isSpeakerMuted) {
+                console.log('🔊 Unmuting speaker for speaking state');
+                uvSession.unmuteSpeaker();
+            }
         });
 
         uvSession.addEventListener('transcripts', () => {
             console.log('📝 TRANSCRIPTS UPDATED, count:', uvSession?.transcripts?.length);
             callbacks.onTranscriptChange(uvSession?.transcripts);
+
+            // Ensure speaker is unmuted when transcripts update (agent likely about to speak)
+            if (uvSession && uvSession.isSpeakerMuted) {
+                console.log('🔊 Unmuting speaker after transcript update');
+                uvSession.unmuteSpeaker();
+            }
         });
 
         uvSession.addEventListener('experimental_message', (evt: Event) => {
@@ -359,6 +391,23 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
         // Join the call - tools are configured in the createCall function
         uvSession.joinCall(joinUrl);
         console.log('Call started with tools configuration!');
+
+        // Ensure mic and speaker are in the correct state after joining
+        setTimeout(() => {
+            if (uvSession) {
+                // Always unmute the speaker to ensure we can hear the agent
+                if (uvSession.isSpeakerMuted) {
+                    console.log('🔊 Initial speaker unmute after joining call');
+                    uvSession.unmuteSpeaker();
+                }
+
+                // Unmute the mic to ensure we can be heard
+                if (uvSession.isMicMuted) {
+                    console.log('🎤 Initial mic unmute after joining call');
+                    uvSession.unmuteMic();
+                }
+            }
+        }, 1000); // Wait a second after joining to ensure all is set up
     } catch (error) {
         console.error('Error starting call:', error);
         callbacks.onStatusChange('error');
