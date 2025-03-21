@@ -13,7 +13,6 @@
 		Role,
 		type Transcript
 	} from '$lib/ultravox/callFunctions';
-	import { registerHominionTools } from '$lib/ultravox/toolImplementation';
 	import CallInterface from '$lib/components/CallInterface.svelte';
 
 	// Disable Server-Side Rendering since Tauri is client-only
@@ -146,19 +145,9 @@ Be friendly, concise, and helpful. Keep responses under 3 sentences when possibl
 						isCallActive =
 							status !== 'disconnected' && status !== 'call_ended' && status !== 'error';
 
-						// Register Hominio tools when call becomes active
-						if (isCallActive && typeof window !== 'undefined') {
-							type WindowWithCustomProps = Window &
-								typeof globalThis & {
-									registerHominionTools?: (session: any) => void;
-									__ULTRAVOX_SESSION?: any;
-								};
-
-							const windowWithProps = window as WindowWithCustomProps;
-
-							if (windowWithProps.registerHominionTools && windowWithProps.__ULTRAVOX_SESSION) {
-								windowWithProps.registerHominionTools(windowWithProps.__ULTRAVOX_SESSION);
-							}
+						// Log status changes but don't try to register tools here
+						if (isCallActive) {
+							console.log('📱 Call is now active with status:', status);
 						}
 					},
 					onTranscriptChange: (newTranscripts) => {
@@ -335,84 +324,13 @@ Be friendly, concise, and helpful. Keep responses under 3 sentences when possibl
 		}
 	});
 
-	// Define window interface with our custom properties
-	type WindowWithSession = Window &
-		typeof globalThis & {
-			registerHominionTools?: (session: unknown) => void;
-			__ULTRAVOX_SESSION?: unknown;
-		};
-
 	// Use $effect instead of $: for reactivity in Svelte 5 runes
 	$effect(() => {
 		if (callStatus === 'active' && typeof window !== 'undefined') {
-			console.log('📱 Call became active, attempting to register Hominio tools...');
-
-			const win = window as WindowWithSession;
-
-			// Ensure Ultravox session is available before registering tools
-			if (win.__ULTRAVOX_SESSION) {
-				try {
-					console.log('📱 Ultravox session found! Registering tools now...');
-
-					// Cast to unknown first to avoid type errors
-					const sessionWithToolAPI = win.__ULTRAVOX_SESSION as {
-						registerTool: (name: string, callback: (params: unknown) => Promise<any>) => void;
-						registerToolImplementation?: (
-							name: string,
-							callback: (params: unknown) => string
-						) => void;
-					};
-
-					// Verify the API is available
-					if (typeof sessionWithToolAPI.registerTool !== 'function') {
-						console.error('❌ registerTool is not a function on the Ultravox session!');
-					} else {
-						console.log('📱 registerTool API is available');
-					}
-
-					// Register all tools
-					registerHominionTools(sessionWithToolAPI);
-					console.log('📱 Hominio tools registration complete');
-
-					// Log registered tools for debugging
-					console.log('📱 Available tools registered:', [
-						'filterTodos',
-						'switchAgent',
-						'createTodo',
-						'toggleTodo',
-						'removeTodo',
-						'updateTodo'
-					]);
-				} catch (error) {
-					console.error('❌ Error registering Hominio tools:', error);
-				}
-			} else {
-				console.log('❌ ULTRAVOX_SESSION not available yet - will retry');
-
-				// Setup retry logic
-				const retryInterval = setInterval(() => {
-					if (win.__ULTRAVOX_SESSION) {
-						console.log('📱 Ultravox session now available, registering tools...');
-						clearInterval(retryInterval);
-
-						try {
-							const sessionWithToolAPI = win.__ULTRAVOX_SESSION as {
-								registerTool: (name: string, callback: (params: unknown) => Promise<any>) => void;
-							};
-							registerHominionTools(sessionWithToolAPI);
-							console.log('📱 Hominio tools registered successfully on retry');
-						} catch (error) {
-							console.error('❌ Error registering Hominio tools on retry:', error);
-						}
-					}
-				}, 1000);
-
-				// Clean up after 10 seconds if still not registered
-				setTimeout(() => {
-					clearInterval(retryInterval);
-					console.warn('⚠️ Gave up waiting for Ultravox session after 10 seconds');
-				}, 10000);
-			}
+			console.log(
+				'�� Call became active - tools should already be registered in startCall function'
+			);
+			// No tool registration here - it's already handled in callFunctions.ts:startCall
 		}
 	});
 

@@ -3,6 +3,7 @@
 	import { LoroDoc, type Value } from 'loro-crdt';
 	import type { ClientToolImplementation } from 'ultravox-client';
 	import { fade } from 'svelte/transition';
+	import { currentAgent } from '$lib/ultravox/toolImplementation';
 
 	// Initialize callStatus with the provided prop or default to 'off'
 	// Since we don't have access to parent callStatus directly, we'll use a local state
@@ -953,6 +954,9 @@ Remember: You are ${normalizedName} now. Respond in a ${personality} manner cons
 
 	// Following the pattern in askHominio.ts, register tools with window
 	onMount(() => {
+		// Set the default agent to Hominio (the orchestrator)
+		currentAgent.set('Hominio');
+
 		// Define Hominio tools in the global scope
 		if (typeof window !== 'undefined') {
 			// Expose the tool implementations directly on window
@@ -967,46 +971,18 @@ Remember: You are ${normalizedName} now. Respond in a ${personality} manner cons
 				switchAgent: switchAgentTool
 			};
 
-			// Create the registration function that Ultravox will call
-			(window as any).registerHominionTools = (session: any) => {
-				console.log('Registering Hominio todo tools with Ultravox session...');
+			// Log that tools are ready
+			console.log('🧩 Hominio tools exposed on window.__hominio_tools, ready for Ultravox');
+			console.log('🧩 Available tools:', Object.keys((window as any).__hominio_tools).join(', '));
 
-				if (session && typeof session.registerToolImplementation === 'function') {
-					try {
-						console.log('Registering createTodo tool...');
-						session.registerToolImplementation('createTodo', createTodoTool);
-
-						console.log('Registering toggleTodo tool...');
-						session.registerToolImplementation('toggleTodo', toggleTodoTool);
-
-						console.log('Registering removeTodo tool...');
-						session.registerToolImplementation('removeTodo', removeTodoTool);
-
-						console.log('Registering updateTodo tool...');
-						session.registerToolImplementation('updateTodo', updateTodoTool);
-
-						console.log('Registering filterTodos tool...');
-						session.registerToolImplementation('filterTodos', filterTodosTool);
-
-						console.log('Registering createList tool...');
-						session.registerToolImplementation('createList', createListTool);
-
-						console.log('Registering switchList tool...');
-						session.registerToolImplementation('switchList', switchListTool);
-
-						console.log('Registering switchAgent tool...');
-						session.registerToolImplementation('switchAgent', switchAgentTool);
-
-						console.log('Hominio todo tools registered successfully');
-					} catch (error) {
-						console.error('Error registering tools:', error);
-					}
-				} else {
-					console.error('Invalid Ultravox session or missing registerToolImplementation method');
-				}
-			};
-
-			console.log('Hominio tools ready for registration');
+			// Remove the redundant registration function that causes loops
+			// Ultravox will find the tools in window.__hominio_tools directly
+			if ((window as any).registerHominionTools) {
+				delete (window as any).registerHominionTools;
+				console.log(
+					'🧩 Removed redundant registerHominionTools function to prevent registration loops'
+				);
+			}
 
 			// Try to get the call status from the parent context
 			const checkCallStatus = () => {
