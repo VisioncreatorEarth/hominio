@@ -75,151 +75,30 @@ export function toggleMute(role: Role): void {
     }
 }
 
+// Force unmute speaker and microphone
+export function forceUnmuteSpeaker(): void {
+    if (!browser || !uvSession) {
+        console.error('uvSession is not initialized or not in browser environment');
+        return;
+    }
+
+    // Make sure speaker is unmuted
+    if (uvSession.isSpeakerMuted) {
+        console.log('🔊 Force unmuting speaker');
+        uvSession.unmuteSpeaker();
+    }
+
+    // Also make sure microphone is unmuted
+    if (uvSession.isMicMuted) {
+        console.log('🎤 Force unmuting microphone');
+        uvSession.unmuteMic();
+    }
+}
+
 // Define tools configuration following askHominio.ts pattern
 const tools = [
     {
-        temporaryTool: {
-            modelToolName: 'createTodo',
-            description: 'Create a new todo item. Use this tool when a todo needs to be created. NEVER emit text when doing this tool call.',
-            dynamicParameters: [
-                {
-                    name: 'todoText',
-                    location: 'PARAMETER_LOCATION_BODY',
-                    schema: {
-                        type: 'string',
-                        description: 'The text content of the todo task to create'
-                    },
-                    required: true
-                },
-                {
-                    name: 'tags',
-                    location: 'PARAMETER_LOCATION_BODY',
-                    schema: {
-                        type: 'string',
-                        description: 'Optional comma-separated list of tags (e.g. "work,urgent,home")'
-                    },
-                    required: false
-                }
-            ],
-            client: {}
-        }
-    },
-    {
-        temporaryTool: {
-            modelToolName: 'toggleTodo',
-            description: 'Toggle the completion status of a todo. Use this tool when a todo needs to be marked as complete or incomplete. NEVER emit text when doing this tool call.',
-            dynamicParameters: [
-                {
-                    name: 'todoId',
-                    location: 'PARAMETER_LOCATION_BODY',
-                    schema: {
-                        type: 'string',
-                        description: 'The ID of the todo to toggle (optional if todoText is provided)'
-                    },
-                    required: false
-                },
-                {
-                    name: 'todoText',
-                    location: 'PARAMETER_LOCATION_BODY',
-                    schema: {
-                        type: 'string',
-                        description: 'Text content to search for in todo items (optional if todoId is provided)'
-                    },
-                    required: false
-                }
-            ],
-            client: {}
-        }
-    },
-    {
-        temporaryTool: {
-            modelToolName: 'removeTodo',
-            description: 'Delete a todo from the list. Use this tool when a todo needs to be removed. NEVER emit text when doing this tool call.',
-            dynamicParameters: [
-                {
-                    name: 'todoId',
-                    location: 'PARAMETER_LOCATION_BODY',
-                    schema: {
-                        type: 'string',
-                        description: 'The ID of the todo to delete (optional if todoText is provided)'
-                    },
-                    required: false
-                },
-                {
-                    name: 'todoText',
-                    location: 'PARAMETER_LOCATION_BODY',
-                    schema: {
-                        type: 'string',
-                        description: 'Text content to search for in todo items (optional if todoId is provided)'
-                    },
-                    required: false
-                }
-            ],
-            client: {}
-        }
-    },
-    {
-        temporaryTool: {
-            modelToolName: 'updateTodo',
-            description: 'Update a todo\'s text or tags. Use this tool when a todo needs to be edited. NEVER emit text when doing this tool call.',
-            dynamicParameters: [
-                {
-                    name: 'todoId',
-                    location: 'PARAMETER_LOCATION_BODY',
-                    schema: {
-                        type: 'string',
-                        description: 'The ID of the todo to update (optional if todoText is provided)'
-                    },
-                    required: false
-                },
-                {
-                    name: 'todoText',
-                    location: 'PARAMETER_LOCATION_BODY',
-                    schema: {
-                        type: 'string',
-                        description: 'Current text content to search for (optional if todoId is provided)'
-                    },
-                    required: false
-                },
-                {
-                    name: 'newText',
-                    location: 'PARAMETER_LOCATION_BODY',
-                    schema: {
-                        type: 'string',
-                        description: 'The new text content for the todo'
-                    },
-                    required: true
-                },
-                {
-                    name: 'tags',
-                    location: 'PARAMETER_LOCATION_BODY',
-                    schema: {
-                        type: 'string',
-                        description: 'Optional comma-separated list of tags (e.g. "work,urgent,home")'
-                    },
-                    required: false
-                }
-            ],
-            client: {}
-        }
-    },
-    {
-        temporaryTool: {
-            modelToolName: 'filterTodos',
-            description: 'Filter todos by tag. Use this tool when a user wants to view todos with specific tags. NEVER emit text when doing this tool call.',
-            dynamicParameters: [
-                {
-                    name: 'tag',
-                    location: 'PARAMETER_LOCATION_BODY',
-                    schema: {
-                        type: 'string',
-                        description: 'The tag to filter by, or "all" to show all todos'
-                    },
-                    required: true
-                }
-            ],
-            client: {}
-        }
+        toolName: "hangUp"
     },
     {
         temporaryTool: {
@@ -231,7 +110,7 @@ const tools = [
                     location: 'PARAMETER_LOCATION_BODY',
                     schema: {
                         type: 'string',
-                        description: 'The name of the agent to switch to (e.g. "Ali", "Sam", "Taylor")'
+                        description: 'The name of the agent to switch to (e.g. "Mark", "Oliver", "Rajesh", "Hominio")'
                     },
                     required: true
                 }
@@ -240,6 +119,169 @@ const tools = [
         }
     }
 ];
+
+// Define the agent-specific tools that will be added during stage changes
+export const agentTools = {
+    Oliver: [
+        {
+            temporaryTool: {
+                modelToolName: 'createTodo',
+                description: 'Create a new todo item. Use this tool when a todo needs to be created. NEVER emit text when doing this tool call.',
+                dynamicParameters: [
+                    {
+                        name: 'todoText',
+                        location: 'PARAMETER_LOCATION_BODY',
+                        schema: {
+                            type: 'string',
+                            description: 'The text content of the todo task to create'
+                        },
+                        required: true
+                    },
+                    {
+                        name: 'tags',
+                        location: 'PARAMETER_LOCATION_BODY',
+                        schema: {
+                            type: 'string',
+                            description: 'Optional comma-separated list of tags (e.g. "work,urgent,home")'
+                        },
+                        required: false
+                    }
+                ],
+                client: {}
+            }
+        },
+        {
+            temporaryTool: {
+                modelToolName: 'toggleTodo',
+                description: 'Toggle the completion status of a todo. Use this tool when a todo needs to be marked as complete or incomplete. NEVER emit text when doing this tool call.',
+                dynamicParameters: [
+                    {
+                        name: 'todoText',
+                        location: 'PARAMETER_LOCATION_BODY',
+                        schema: {
+                            type: 'string',
+                            description: 'Text content to search for in todo items'
+                        },
+                        required: true
+                    }
+                ],
+                client: {}
+            }
+        },
+        {
+            temporaryTool: {
+                modelToolName: 'updateTodo',
+                description: 'Update a todo\'s text or tags. Use this tool when a todo needs to be edited. NEVER emit text when doing this tool call.',
+                dynamicParameters: [
+                    {
+                        name: 'todoText',
+                        location: 'PARAMETER_LOCATION_BODY',
+                        schema: {
+                            type: 'string',
+                            description: 'Current text content to search for'
+                        },
+                        required: true
+                    },
+                    {
+                        name: 'newText',
+                        location: 'PARAMETER_LOCATION_BODY',
+                        schema: {
+                            type: 'string',
+                            description: 'The new text content for the todo'
+                        },
+                        required: true
+                    },
+                    {
+                        name: 'tags',
+                        location: 'PARAMETER_LOCATION_BODY',
+                        schema: {
+                            type: 'string',
+                            description: 'Optional comma-separated list of tags'
+                        },
+                        required: false
+                    }
+                ],
+                client: {}
+            }
+        }
+    ],
+    Mark: [
+        {
+            temporaryTool: {
+                modelToolName: 'removeTodo',
+                description: 'Delete a todo from the list. Use this tool when a todo needs to be removed. NEVER emit text when doing this tool call.',
+                dynamicParameters: [
+                    {
+                        name: 'todoText',
+                        location: 'PARAMETER_LOCATION_BODY',
+                        schema: {
+                            type: 'string',
+                            description: 'Text content to search for in todo items'
+                        },
+                        required: true
+                    }
+                ],
+                client: {}
+            }
+        },
+        {
+            temporaryTool: {
+                modelToolName: 'filterTodos',
+                description: 'Filter todos by tag. Use this tool when a user wants to view todos with specific tags. NEVER emit text when doing this tool call.',
+                dynamicParameters: [
+                    {
+                        name: 'tag',
+                        location: 'PARAMETER_LOCATION_BODY',
+                        schema: {
+                            type: 'string',
+                            description: 'The tag to filter by, or "all" to show all todos'
+                        },
+                        required: true
+                    }
+                ],
+                client: {}
+            }
+        }
+    ],
+    Rajesh: [
+        {
+            temporaryTool: {
+                modelToolName: 'createList',
+                description: 'Create a new todo list. Use this tool when a user wants to create a new list. NEVER emit text when doing this tool call.',
+                dynamicParameters: [
+                    {
+                        name: 'listName',
+                        location: 'PARAMETER_LOCATION_BODY',
+                        schema: {
+                            type: 'string',
+                            description: 'The name to give to the new list'
+                        },
+                        required: true
+                    }
+                ],
+                client: {}
+            }
+        },
+        {
+            temporaryTool: {
+                modelToolName: 'switchList',
+                description: 'Switch to a different todo list. Use this tool when a user wants to change lists. NEVER emit text when doing this tool call.',
+                dynamicParameters: [
+                    {
+                        name: 'listName',
+                        location: 'PARAMETER_LOCATION_BODY',
+                        schema: {
+                            type: 'string',
+                            description: 'The name of the list to switch to'
+                        },
+                        required: true
+                    }
+                ],
+                client: {}
+            }
+        }
+    ]
+};
 
 // Create a call with Ultravox API
 async function createCall(callConfig: CallConfig): Promise<JoinUrlResponse> {
@@ -306,10 +348,44 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
             console.log('🔧 Registering client tool implementations with Ultravox session');
             const toolImpls = (window as Window & typeof globalThis & { __hominio_tools: Record<string, ClientToolImplementation> }).__hominio_tools;
 
+            // Track registered tools to ensure they are all properly set up
+            const registeredToolNames: string[] = [];
+
             // Register each tool with the Ultravox session
             for (const [toolName, toolImpl] of Object.entries(toolImpls)) {
                 console.log(`🔧 Registering tool: ${toolName}`);
-                uvSession.registerToolImplementation(toolName, toolImpl);
+                try {
+                    uvSession.registerToolImplementation(toolName, toolImpl);
+                    console.log(`✅ Successfully registered tool: ${toolName}`);
+                    registeredToolNames.push(toolName);
+                } catch (error) {
+                    console.error(`❌ Failed to register tool ${toolName}:`, error instanceof Error ? error.message : String(error));
+                }
+            }
+
+            // Log all registered tools
+            console.log('🔍 Registered tools:', registeredToolNames.join(', '));
+
+            // Double-check critical tools are registered
+            const expectedTools = Object.keys(toolImpls);
+            console.log('🔧 Expected tools:', expectedTools.join(', '));
+
+            // Try registering any missing tools again
+            for (const toolName of expectedTools) {
+                if (!registeredToolNames.includes(toolName)) {
+                    console.log(`⚠️ Re-attempting to register missing tool: ${toolName}`);
+                    try {
+                        const toolImpl = toolImpls[toolName];
+                        uvSession.registerToolImplementation(toolName, toolImpl);
+                        console.log(`✅ Successfully registered tool on retry: ${toolName}`);
+                    } catch (unknownError) {
+                        const errorMessage =
+                            unknownError instanceof Error
+                                ? unknownError.message
+                                : 'Unknown error during tool registration';
+                        console.error(`❌ Failed to register tool ${toolName} on retry:`, errorMessage);
+                    }
+                }
             }
         } else {
             console.warn('❌ No window.__hominio_tools found. Client tools will not work!');
@@ -353,6 +429,33 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
                         // Only update if it's changed
                         if (browser && get(currentAgent) !== newAgentName) {
                             currentAgent.set(newAgentName);
+
+                            // Re-register all client tools with the Ultravox session
+                            // after a short delay to ensure the stage change is complete
+                            setTimeout(() => {
+                                if (typeof window !== 'undefined' && window.__hominio_tools) {
+                                    console.log('🌟 Re-registering client tools after stage change');
+                                    type HominionTools = Record<string, ClientToolImplementation>;
+
+                                    // Cast with proper typing
+                                    const win = window as unknown as Window & typeof globalThis & {
+                                        __hominio_tools: HominionTools
+                                    };
+                                    const toolImpls = win.__hominio_tools;
+
+                                    // Register each tool with the session
+                                    for (const [toolName, impl] of Object.entries(toolImpls)) {
+                                        console.log(`🌟 Re-registering tool: ${toolName}`);
+                                        try {
+                                            uvSession?.registerToolImplementation(toolName, impl);
+                                            console.log(`✅ Successfully registered tool after stage change: ${toolName}`);
+                                        } catch (err) {
+                                            const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+                                            console.error(`❌ Failed to register tool ${toolName} after stage change: ${errorMsg}`);
+                                        }
+                                    }
+                                }
+                            }, 500);
                         }
                     }
                 }

@@ -4,6 +4,15 @@
 	import type { ClientToolImplementation } from 'ultravox-client';
 	import { fade } from 'svelte/transition';
 	import { currentAgent } from '$lib/ultravox/toolImplementation';
+	import { agentTools } from '$lib/ultravox/callFunctions';
+	import {
+		Role,
+		UltravoxSessionStatus,
+		startCall,
+		endCall,
+		toggleMute,
+		forceUnmuteSpeaker
+	} from '$lib/ultravox/callFunctions';
 
 	// Initialize callStatus with the provided prop or default to 'off'
 	// Since we don't have access to parent callStatus directly, we'll use a local state
@@ -876,6 +885,54 @@
 		}
 	};
 
+	// Define tools that should be available for each agent
+	function getToolsForAgent(agentName: string): string[] {
+		// Base tools available to all agents
+		const baseTools = ['switchAgent'];
+
+		// Agent-specific tools
+		const agentTools: Record<string, string[]> = {
+			Hominio: [], // Orchestrator - needs only basic tools
+			Oliver: ['createTodo', 'toggleTodo', 'updateTodo'],
+			Mark: ['removeTodo', 'filterTodos'],
+			Rajesh: ['createList', 'switchList']
+		};
+
+		// Combine base tools with agent-specific tools
+		return [...baseTools, ...(agentTools[agentName] || [])];
+	}
+
+	// Configure agent personalities, voices, and specialized areas
+	const agentConfigs: Record<
+		string,
+		{
+			personality: string;
+			voiceId: string;
+			specialty: string;
+		}
+	> = {
+		Hominio: {
+			personality: 'orchestrator',
+			voiceId: 'shimmer',
+			specialty: 'directing calls to specialized agents'
+		},
+		Mark: {
+			personality: 'efficiency-focused',
+			voiceId: 'nova',
+			specialty: 'todo list management and deletion'
+		},
+		Oliver: {
+			personality: 'creative and supportive',
+			voiceId: 'alloy',
+			specialty: 'creating and updating todos'
+		},
+		Rajesh: {
+			personality: 'analytical and detail-oriented',
+			voiceId: 'fable',
+			specialty: 'list management and organization'
+		}
+	};
+
 	// Client-side tool implementation for switchAgent
 	function switchAgentTool(params: any) {
 		try {
@@ -973,7 +1030,33 @@ Remember: You are ${normalizedName} now. Respond in a ${agent.personality} manne
 			const stageChangeData = {
 				systemPrompt: systemPrompt,
 				voice: agent.voiceId,
-				toolResultText: `I'm now switching you to ${normalizedName}...`
+				toolResultText: `I'm now switching you to ${normalizedName}...`,
+				selectedTools: [
+					{ toolName: 'hangUp' },
+					{
+						temporaryTool: {
+							modelToolName: 'switchAgent',
+							description:
+								'Switch to a different agent personality. Use this tool when a user asks to speak to a different agent.',
+							dynamicParameters: [
+								{
+									name: 'agentName',
+									location: 'PARAMETER_LOCATION_BODY',
+									schema: {
+										type: 'string',
+										description: 'The name of the agent to switch to'
+									},
+									required: true
+								}
+							],
+							client: {}
+						}
+					},
+					// Add agent-specific tools from the imported agentTools
+					...(normalizedName !== 'Hominio' && normalizedName in agentTools
+						? agentTools[normalizedName as keyof typeof agentTools]
+						: [])
+				]
 			};
 
 			// Create the properly formatted response object
@@ -1000,54 +1083,70 @@ Remember: You are ${normalizedName} now. Respond in a ${agent.personality} manne
 		// Set the default agent to Hominio (the orchestrator)
 		currentAgent.set('Hominio');
 
-		// Define Hominio tools in the global scope
-		if (typeof window !== 'undefined') {
-			// Expose the tool implementations directly on window
-			(window as any).__hominio_tools = {
-				createTodo: createTodoTool,
-				toggleTodo: toggleTodoTool,
-				removeTodo: removeTodoTool,
-				updateTodo: updateTodoTool,
-				filterTodos: filterTodosTool,
-				createList: createListTool,
-				switchList: switchListTool,
-				switchAgent: switchAgentTool
-			};
+		// Ensure tools are properly registered with Ultravox session
+		const registerToolsWithUltravox = () => {
+			if (typeof window !== 'undefined') {
+				// First, make sure tool implementations are exposed on window
+				(window as any).__hominio_tools = {
+					switchAgent: switchAgentTool,
+					createTodo: createTodoTool,
+					toggleTodo: toggleTodoTool,
+					removeTodo: removeTodoTool,
+					updateTodo: updateTodoTool,
+					filterTodos: filterTodosTool,
+					createList: createListTool,
+					switchList: switchListTool
+				};
 
-			// Log that tools are ready
-			console.log('🧩 Hominio tools exposed on window.__hominio_tools, ready for Ultravox');
-			console.log('🧩 Available tools:', Object.keys((window as any).__hominio_tools).join(', '));
+				// Log tools registration on window object
+				console.log('🧩 Hominio tools exposed on window.__hominio_tools');
+				console.log('🧩 Available tools:', Object.keys((window as any).__hominio_tools).join(', '));
 
-			// Remove the redundant registration function that causes loops
-			// Ultravox will find the tools in window.__hominio_tools directly
-			if ((window as any).registerHominionTools) {
-				delete (window as any).registerHominionTools;
-				console.log(
-					'🧩 Removed redundant registerHominionTools function to prevent registration loops'
-				);
-			}
-
-			// Try to get the call status from the parent context
-			const checkCallStatus = () => {
-				// Access Ultravox session from window if available
+				// Now, register them with current Ultravox session if it exists
 				if ((window as any).__ULTRAVOX_SESSION) {
-					const uvSession = (window as any).__ULTRAVOX_SESSION;
-					if (uvSession.status) {
-						callStatus = uvSession.status;
-					}
+					console.log('🧩 Found active Ultravox session, registering all tools');
+					const session = (window as any).__ULTRAVOX_SESSION;
+					const toolImpls = (window as any).__hominio_tools;
+
+					// Register each tool with the session
+					Object.entries(toolImpls).forEach(([name, impl]) => {
+						console.log(`🧩 Explicitly registering tool: ${name}`);
+						try {
+							session.registerToolImplementation(name, impl as any);
+							console.log(`✅ Successfully registered tool: ${name}`);
+						} catch (error) {
+							console.error(`❌ Error registering tool ${name}:`, error);
+						}
+					});
+					console.log('🧩 All tools registered with current Ultravox session');
+				} else {
+					console.warn('⚠️ No active Ultravox session found for registering tools');
 				}
-			};
+			}
+		};
 
-			// Initial check
-			checkCallStatus();
+		// Initial tool registration
+		registerToolsWithUltravox();
 
-			// Set up interval to periodically check call status
-			const statusInterval = setInterval(checkCallStatus, 1000);
-
-			return () => {
-				clearInterval(statusInterval);
-			};
+		// Remove any redundant registration function
+		if ((window as any).registerHominionTools) {
+			delete (window as any).registerHominionTools;
+			console.log('🧩 Removed redundant registerHominionTools function');
 		}
+
+		// Setup subscription to register tools whenever agent changes
+		currentAgent.subscribe((agentName) => {
+			console.log(`🧩 Agent changed to ${agentName}, ensuring tools are registered`);
+			registerToolsWithUltravox();
+		});
+
+		// Register tools periodically to handle async initialization issues
+		const toolRegistrationInterval = setInterval(() => {
+			if ((window as any).__ULTRAVOX_SESSION) {
+				console.log('🧩 Periodic tool registration check');
+				registerToolsWithUltravox();
+			}
+		}, 2000);
 
 		// Set up Loro change listener
 		const unsubscribe = todoDoc.subscribe(() => {
@@ -1064,6 +1163,7 @@ Remember: You are ${normalizedName} now. Respond in a ${agent.personality} manne
 
 		return () => {
 			unsubscribe();
+			clearInterval(toolRegistrationInterval);
 		};
 	});
 
