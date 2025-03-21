@@ -220,6 +220,24 @@ const tools = [
             ],
             client: {}
         }
+    },
+    {
+        temporaryTool: {
+            modelToolName: 'switchAgent',
+            description: 'Switch to a different agent personality. Use this tool when a user asks to speak to a different agent. NEVER emit text when doing this tool call.',
+            dynamicParameters: [
+                {
+                    name: 'agentName',
+                    location: 'PARAMETER_LOCATION_BODY',
+                    schema: {
+                        type: 'string',
+                        description: 'The name of the agent to switch to (e.g. "Ali", "Sam", "Taylor")'
+                    },
+                    required: true
+                }
+            ],
+            client: {}
+        }
     }
 ];
 
@@ -280,26 +298,62 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
         // Start up our Ultravox Session
         uvSession = new UltravoxSession({
             experimentalMessages: debugMessages
+            // Stages are supported by default in newer versions of Ultravox
         });
 
         // Register event listeners
+        console.log('🌟 Attempting to register stage_change event listener');
+        uvSession.addEventListener('stage_change', (evt: Event) => {
+            console.log('🌟 STAGE CHANGE EVENT RECEIVED', evt);
+
+            // Log detailed information about the event
+            const stageChangeEvent = evt as unknown as {
+                detail?: {
+                    stageId?: string;
+                    voiceId?: string;
+                    systemPrompt?: string;
+                }
+            };
+
+            if (stageChangeEvent?.detail) {
+                console.log('🌟 STAGE CHANGE DETAILS:', {
+                    stageId: stageChangeEvent.detail.stageId,
+                    voiceId: stageChangeEvent.detail.voiceId,
+                    systemPromptExcerpt: stageChangeEvent.detail.systemPrompt?.substring(0, 50) + '...'
+                });
+            } else {
+                console.log('🌟 STAGE CHANGE EVENT HAS NO DETAIL PROPERTY', JSON.stringify(evt));
+            }
+
+            // You could update UI or other state here when stage changes
+        });
+
+        // Add more logging for main events
         uvSession.addEventListener('status', () => {
+            console.log('📡 ULTRAVOX STATUS CHANGE:', uvSession?.status);
             callbacks.onStatusChange(uvSession?.status);
         });
 
         uvSession.addEventListener('transcripts', () => {
+            console.log('📝 TRANSCRIPTS UPDATED, count:', uvSession?.transcripts?.length);
             callbacks.onTranscriptChange(uvSession?.transcripts);
         });
 
         uvSession.addEventListener('experimental_message', (evt: Event) => {
             // Cast event to our expected type since the library's typings might not match exactly
             const msg = evt as unknown as UltravoxExperimentalMessageEvent;
+            console.log('🧪 EXPERIMENTAL MESSAGE:', msg);
             callbacks?.onDebugMessage?.(msg);
         });
 
         // Expose the session globally for client tools
         if (typeof window !== 'undefined') {
+            console.log('💾 Exposing Ultravox session globally for tool access');
             (window as Window & typeof globalThis & { __ULTRAVOX_SESSION: typeof uvSession }).__ULTRAVOX_SESSION = uvSession;
+
+            // Add this line to the window for debugging
+            console.log('🔍 Setting up debug flag for stage changes');
+            (window as Window & typeof globalThis & { __DEBUG_STAGE_CHANGES: boolean }).__DEBUG_STAGE_CHANGES = true;
         }
 
         // Join the call - tools are configured in the createCall function

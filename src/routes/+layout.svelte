@@ -106,6 +106,17 @@ You have access to the following tools that you MUST use when relevant:
    When to use: Whenever a user asks to switch to, view, or open a different list
    Example usage: switchList({"listName": "Personal"})
 
+8. switchAgent - Switch to a different personality
+   Parameters:
+     - agentName: string (REQUIRED) - The name of the agent to switch to
+   When to use: Whenever a user asks to speak to a different agent or assistant
+   Example usage: switchAgent({"agentName": "Mark"})
+
+Available Agents:
+- Mark: enthusiastic and playful (formerly known as Ali)
+- Emily: calm and methodical (formerly known as Sam)
+- Oliver: professional and efficient (formerly known as Taylor)
+
 IMPORTANT INSTRUCTIONS:
 1. You MUST use these tools directly without asking for confirmation
 2. Call the appropriate tool as soon as a user requests to create, toggle, delete, update, filter, or manage lists
@@ -118,27 +129,8 @@ IMPORTANT INSTRUCTIONS:
 7. For lists, default to the "Personal List" if no list is specified
 8. When creating a todo, you can specify which list it should go in, and a new list will be created if it doesn't exist
 9. When filtering todos, use the exact tag the user mentions or "all" to show all todos
-
-Example of proper usage:
-User: "Add a todo to buy milk"
-[You execute createTodo with todoText="buy milk", tags="shopping,personal" silently]
-You: "I've added 'buy milk' to your todo list with tags 'shopping' and 'personal'."
-
-User: "Create a new list for my vacation"
-[You execute createList with listName="vacation" silently]
-You: "I've created a new 'vacation' list for you."
-
-User: "Show me my work list"
-[You execute switchList with listName="work" silently]
-You: "I've switched to your 'Work' list."
-
-User: "Show me todos with the shopping tag"
-[You execute filterTodos with tag="shopping" silently]
-You: "I've filtered your todos to show items with the 'shopping' tag."
-
-User: "Show all todos"
-[You execute filterTodos with tag="all" silently]
-You: "I'm now showing all your todos."
+10. When a user asks to switch to a different personality or persona or they want to speak to Mark, Emily, or Oliver specifically, use the switchAgent tool
+11. Note that Mark was formerly known as Ali, Emily was formerly known as Sam, and Oliver was formerly known as Taylor, so handle these legacy names appropriately
 
 Be friendly, concise, and helpful. Keep responses under 3 sentences when possible.`,
 				model: 'fixie-ai/ultravox-70B',
@@ -353,20 +345,73 @@ Be friendly, concise, and helpful. Keep responses under 3 sentences when possibl
 	// Use $effect instead of $: for reactivity in Svelte 5 runes
 	$effect(() => {
 		if (callStatus === 'active' && typeof window !== 'undefined') {
-			console.log('Call became active, attempting to register Hominio tools...');
+			console.log('📱 Call became active, attempting to register Hominio tools...');
 
 			const win = window as WindowWithSession;
 
-			// Check if the registerHominionTools function is available on the window object
+			// Ensure Ultravox session is available before registering tools
 			if (win.__ULTRAVOX_SESSION) {
 				try {
-					console.log('Calling registerHominionTools with Ultravox session...');
-					registerHominionTools(win.__ULTRAVOX_SESSION);
+					console.log('📱 Ultravox session found! Registering tools now...');
+
+					// Cast to unknown first to avoid type errors
+					const sessionWithToolAPI = win.__ULTRAVOX_SESSION as {
+						registerTool: (name: string, callback: (params: unknown) => Promise<any>) => void;
+						registerToolImplementation?: (
+							name: string,
+							callback: (params: unknown) => string
+						) => void;
+					};
+
+					// Verify the API is available
+					if (typeof sessionWithToolAPI.registerTool !== 'function') {
+						console.error('❌ registerTool is not a function on the Ultravox session!');
+					} else {
+						console.log('📱 registerTool API is available');
+					}
+
+					// Register all tools
+					registerHominionTools(sessionWithToolAPI);
+					console.log('📱 Hominio tools registration complete');
+
+					// Log registered tools for debugging
+					console.log('📱 Available tools registered:', [
+						'filterTodos',
+						'switchAgent',
+						'createTodo',
+						'toggleTodo',
+						'removeTodo',
+						'updateTodo'
+					]);
 				} catch (error) {
-					console.error('Error registering Hominio tools:', error);
+					console.error('❌ Error registering Hominio tools:', error);
 				}
 			} else {
-				console.log('ULTRAVOX_SESSION not available yet');
+				console.log('❌ ULTRAVOX_SESSION not available yet - will retry');
+
+				// Setup retry logic
+				const retryInterval = setInterval(() => {
+					if (win.__ULTRAVOX_SESSION) {
+						console.log('📱 Ultravox session now available, registering tools...');
+						clearInterval(retryInterval);
+
+						try {
+							const sessionWithToolAPI = win.__ULTRAVOX_SESSION as {
+								registerTool: (name: string, callback: (params: unknown) => Promise<any>) => void;
+							};
+							registerHominionTools(sessionWithToolAPI);
+							console.log('📱 Hominio tools registered successfully on retry');
+						} catch (error) {
+							console.error('❌ Error registering Hominio tools on retry:', error);
+						}
+					}
+				}, 1000);
+
+				// Clean up after 10 seconds if still not registered
+				setTimeout(() => {
+					clearInterval(retryInterval);
+					console.warn('⚠️ Gave up waiting for Ultravox session after 10 seconds');
+				}, 10000);
 			}
 		}
 	});

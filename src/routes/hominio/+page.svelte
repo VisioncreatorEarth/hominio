@@ -875,6 +875,82 @@
 		}
 	};
 
+	// Client-side tool implementation for switchAgent
+	function switchAgentTool(params: any) {
+		try {
+			console.log('🔧 CLIENT: switchAgentTool called with params:', params);
+
+			const agentName = params.agentName || 'Hominio';
+			let normalizedName = agentName;
+
+			// Map legacy names to new names
+			if (agentName.toLowerCase() === 'ali') {
+				normalizedName = 'Mark';
+			} else if (agentName.toLowerCase() === 'sam') {
+				normalizedName = 'Emily';
+			} else if (agentName.toLowerCase() === 'taylor') {
+				normalizedName = 'Oliver';
+			}
+
+			console.log(`🔧 CLIENT: Switching to agent ${normalizedName}`);
+
+			// Get personality trait based on agent name
+			let personality = 'helpful and attentive';
+			let voiceId = 'b0e6b5c1-3100-44d5-8578-9015aa3023ae'; // Default voice
+
+			if (normalizedName === 'Mark') {
+				personality = 'enthusiastic and playful';
+				voiceId = '91fa9bcf-93c8-467c-8b29-973720e3f167';
+			} else if (normalizedName === 'Emily') {
+				personality = 'calm and methodical';
+				voiceId = '87691b77-0174-4808-b73c-30000b334e14';
+			} else if (normalizedName === 'Oliver') {
+				personality = 'professional and efficient';
+				voiceId = '3abe60f5-13ed-4e82-ac15-4391d9e5cd9d';
+			}
+
+			// Create personalized system prompt for the agent
+			const systemPrompt = `You are now ${normalizedName}, a friendly assistant for the Hominio todo app. 
+Your personality is more ${personality}. 
+
+Continue helping the user with their todo management tasks using the available tools.
+
+Remember: You are ${normalizedName} now. Respond in a ${personality} manner consistent with your character.`;
+
+			console.log('🔧 CLIENT: Created system prompt for new agent');
+
+			// Log activity
+			console.log(
+				`🔧 CLIENT: Logging switch to agent ${normalizedName} with personality ${personality}`
+			);
+
+			// CRITICAL - Format correction based on error message:
+			// "Client tool result must be a string or an object with string 'result' and 'responseType' properties"
+			const stageChangeData = {
+				systemPrompt: systemPrompt,
+				voice: voiceId,
+				toolResultText: `I'm now switching you to ${normalizedName}...`
+			};
+
+			// Create the properly formatted response object
+			const result = {
+				responseType: 'new-stage',
+				result: JSON.stringify(stageChangeData)
+			};
+
+			console.log('🚨 FIXED STAGE CHANGE RESPONSE (CLIENT):', JSON.stringify(result, null, 2));
+
+			return result;
+		} catch (error) {
+			console.error('❌ CLIENT ERROR in switchAgentTool:', error);
+			return {
+				success: false,
+				message: 'Failed to switch agent',
+				error: error instanceof Error ? error.message : 'Unknown error'
+			};
+		}
+	}
+
 	// Following the pattern in askHominio.ts, register tools with window
 	onMount(() => {
 		// Define Hominio tools in the global scope
@@ -887,7 +963,8 @@
 				updateTodo: updateTodoTool,
 				filterTodos: filterTodosTool,
 				createList: createListTool,
-				switchList: switchListTool
+				switchList: switchListTool,
+				switchAgent: switchAgentTool
 			};
 
 			// Create the registration function that Ultravox will call
@@ -916,6 +993,9 @@
 
 						console.log('Registering switchList tool...');
 						session.registerToolImplementation('switchList', switchListTool);
+
+						console.log('Registering switchAgent tool...');
+						session.registerToolImplementation('switchAgent', switchAgentTool);
 
 						console.log('Hominio todo tools registered successfully');
 					} catch (error) {
@@ -1220,6 +1300,21 @@
 											d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"
 										/>
 									</svg>
+								{:else if recentToolActivity.action === 'switchAgent'}
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										class="h-5 w-5 text-indigo-300"
+										fill="none"
+										viewBox="0 0 24 24"
+										stroke="currentColor"
+									>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											stroke-width="2"
+											d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+										/>
+									</svg>
 								{/if}
 							</div>
 							<div>
@@ -1238,6 +1333,8 @@
 										List Created
 									{:else if recentToolActivity.action === 'switchList'}
 										List Switched
+									{:else if recentToolActivity.action === 'switchAgent'}
+										Agent Switched
 									{/if}
 								</div>
 								<div class="text-xs text-indigo-300/80">
@@ -1490,6 +1587,28 @@
 						</div>
 						<div class="mt-1 text-xs text-white/70">Change current todo list</div>
 					</div>
+					<div class="rounded-lg border border-white/5 bg-white/5 p-3">
+						<div class="flex items-center gap-2">
+							<div class="rounded-full bg-teal-500/20 p-1.5">
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									class="h-3.5 w-3.5"
+									fill="none"
+									viewBox="0 0 24 24"
+									stroke="currentColor"
+								>
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="2"
+										d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+									/>
+								</svg>
+							</div>
+							<div class="text-xs font-medium text-white/80">Switch Agent</div>
+						</div>
+						<div class="mt-1 text-xs text-white/70">Change who you're speaking with</div>
+					</div>
 				</div>
 			</div>
 
@@ -1519,7 +1638,7 @@
 																			? 'bg-amber-500/20'
 																			: entry.action === 'switchList'
 																				? 'bg-cyan-500/20'
-																				: 'bg-gray-500/20'
+																				: 'bg-teal-500/20'
 													: 'bg-orange-500/20'
 											}`}
 										>
@@ -1628,6 +1747,21 @@
 														d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"
 													/>
 												</svg>
+											{:else if entry.action === 'switchAgent'}
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													class="h-3.5 w-3.5"
+													fill="none"
+													viewBox="0 0 24 24"
+													stroke="currentColor"
+												>
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														stroke-width="2"
+														d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+													/>
+												</svg>
 											{/if}
 										</div>
 										<div class="text-xs font-medium text-white/80 capitalize">
@@ -1635,7 +1769,9 @@
 												? 'create list'
 												: entry.action === 'switchList'
 													? 'switch list'
-													: entry.action}
+													: entry.action === 'switchAgent'
+														? 'switch agent'
+														: entry.action}
 										</div>
 										<div class="ml-auto text-[10px] text-white/50">
 											{new Date(entry.timestamp).toLocaleTimeString()}

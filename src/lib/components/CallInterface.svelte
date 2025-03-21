@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import type { Transcript } from '$lib/ultravox/callFunctions';
+	import { currentAgent } from '$lib/ultravox/toolImplementation';
 
 	let {
 		callStatus,
@@ -53,11 +54,35 @@
 		class="w-full max-w-md rounded-2xl border border-white/5 bg-white/5 p-6 shadow-xl backdrop-blur-md dark:bg-slate-900/10"
 	>
 		<div class="flex flex-col">
-			<div class="mb-4 flex items-center justify-between">
-				<h2 class="text-2xl font-bold text-white/95">Voice Call</h2>
-				<span class="rounded-full bg-white/5 px-3 py-1 text-sm font-medium text-white/80">
-					{formatStatus(callStatus)}
-				</span>
+			<!-- Agent Banner -->
+			<div class="mb-4 rounded-xl border border-teal-500/20 bg-teal-500/10 p-3">
+				<div class="flex items-center">
+					<div class="mr-3 rounded-full bg-teal-500/20 p-2">
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							class="h-5 w-5 text-teal-300"
+							fill="none"
+							viewBox="0 0 24 24"
+							stroke="currentColor"
+						>
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="2"
+								d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+							/>
+						</svg>
+					</div>
+					<div>
+						<div class="text-xs font-medium text-teal-300/80">CURRENT AGENT</div>
+						<div class="text-xl font-bold text-teal-100">{$currentAgent}</div>
+					</div>
+					<div class="ml-auto">
+						<span class="rounded-full bg-white/5 px-3 py-1 text-sm font-medium text-white/80">
+							{formatStatus(callStatus)}
+						</span>
+					</div>
+				</div>
 			</div>
 
 			<!-- Transcripts -->
@@ -71,7 +96,7 @@
 					{#each transcripts as transcript}
 						<div class="mb-3">
 							<span class="text-sm font-medium text-white/90">
-								{transcript.speaker === 'agent' ? 'Hominio:' : 'You:'}
+								{transcript.speaker === 'agent' ? $currentAgent + ':' : 'You:'}
 							</span>
 							<p class="text-white/80">{transcript.text}</p>
 						</div>
