@@ -1134,19 +1134,11 @@ Remember: You are ${normalizedName} now. Respond in a ${agent.personality} manne
 			console.log('🧩 Removed redundant registerHominionTools function');
 		}
 
-		// Setup subscription to register tools whenever agent changes
-		currentAgent.subscribe((agentName) => {
-			console.log(`🧩 Agent changed to ${agentName}, ensuring tools are registered`);
-			registerToolsWithUltravox();
-		});
-
-		// Register tools periodically to handle async initialization issues
-		const toolRegistrationInterval = setInterval(() => {
-			if ((window as any).__ULTRAVOX_SESSION) {
-				console.log('🧩 Periodic tool registration check');
-				registerToolsWithUltravox();
-			}
-		}, 2000);
+		// We no longer need to subscribe to agent changes or do periodic registration
+		// since tools are now directly passed in stage changes
+		console.log(
+			'🧩 Using direct tool specification in stage changes - periodic registration not needed'
+		);
 
 		// Set up Loro change listener
 		const unsubscribe = todoDoc.subscribe(() => {
@@ -1163,7 +1155,7 @@ Remember: You are ${normalizedName} now. Respond in a ${agent.personality} manne
 
 		return () => {
 			unsubscribe();
-			clearInterval(toolRegistrationInterval);
+			// No interval to clear anymore
 		};
 	});
 

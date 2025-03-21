@@ -1,4 +1,5 @@
 import { writable } from 'svelte/store';
+import { agentTools } from './callFunctions';
 
 // Create a store for the current filter
 export const currentFilter = writable('all');
@@ -133,12 +134,40 @@ Continue helping the user with their todo management tasks using the available t
 
 Remember: You are ${normalizedName} now. Respond in a ${agent.personality} manner consistent with your character.`;
 
+            // Get agent-specific tools
+            const agentSpecificTools = agentTools[normalizedName as keyof typeof agentTools] || [];
+            console.log(`🧩 Agent-specific tools:`, agentSpecificTools);
+
             // CRITICAL: Format tool result according to error message:
             // "Client tool result must be a string or an object with string 'result' and 'responseType' properties"
             const stageChangeData = {
                 systemPrompt: systemPrompt,
                 voice: agent.voiceId,
-                toolResultText: `I'm now switching you to ${normalizedName}...`
+                toolResultText: `I'm now switching you to ${normalizedName}...`,
+                selectedTools: [
+                    {
+                        toolName: "hangUp"
+                    },
+                    {
+                        temporaryTool: {
+                            modelToolName: 'switchAgent',
+                            description: 'Switch to a different agent personality. Use this tool when a user asks to speak to a different agent. NEVER emit text when doing this tool call.',
+                            dynamicParameters: [
+                                {
+                                    name: 'agentName',
+                                    location: 'PARAMETER_LOCATION_BODY',
+                                    schema: {
+                                        type: 'string',
+                                        description: 'The name of the agent to switch to (e.g. "Mark", "Oliver", "Rajesh", "Hominio")'
+                                    },
+                                    required: true
+                                }
+                            ],
+                            client: {}
+                        }
+                    },
+                    ...agentSpecificTools
+                ]
             };
 
             const toolResult = {
@@ -225,10 +254,37 @@ Continue helping the user with their todo management tasks using your available 
 
 Remember: You are ${normalizedName} now. Respond in a ${agent.personality} manner consistent with your character.`;
 
+        // Get agent-specific tools
+        const agentSpecificTools = agentTools[normalizedName as keyof typeof agentTools] || [];
+
         const stageChangeData = {
             systemPrompt,
             voice: agent.voiceId,
-            toolResultText: `I'm now switching you to ${normalizedName}...`
+            toolResultText: `I'm now switching you to ${normalizedName}...`,
+            selectedTools: [
+                {
+                    toolName: "hangUp"
+                },
+                {
+                    temporaryTool: {
+                        modelToolName: 'switchAgent',
+                        description: 'Switch to a different agent personality. Use this tool when a user asks to speak to a different agent.',
+                        dynamicParameters: [
+                            {
+                                name: 'agentName',
+                                location: 'PARAMETER_LOCATION_BODY',
+                                schema: {
+                                    type: 'string',
+                                    description: 'The name of the agent to switch to (e.g. "Mark", "Oliver", "Rajesh", "Hominio")'
+                                },
+                                required: true
+                            }
+                        ],
+                        client: {}
+                    }
+                },
+                ...agentSpecificTools
+            ]
         };
 
         return new Response(JSON.stringify(stageChangeData), {

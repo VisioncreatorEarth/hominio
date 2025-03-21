@@ -429,41 +429,16 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
                         // Only update if it's changed
                         if (browser && get(currentAgent) !== newAgentName) {
                             currentAgent.set(newAgentName);
+                            console.log(`🌟 Current agent updated to: ${newAgentName}`);
 
-                            // Re-register all client tools with the Ultravox session
-                            // after a short delay to ensure the stage change is complete
-                            setTimeout(() => {
-                                if (typeof window !== 'undefined' && window.__hominio_tools) {
-                                    console.log('🌟 Re-registering client tools after stage change');
-                                    type HominionTools = Record<string, ClientToolImplementation>;
-
-                                    // Cast with proper typing
-                                    const win = window as unknown as Window & typeof globalThis & {
-                                        __hominio_tools: HominionTools
-                                    };
-                                    const toolImpls = win.__hominio_tools;
-
-                                    // Register each tool with the session
-                                    for (const [toolName, impl] of Object.entries(toolImpls)) {
-                                        console.log(`🌟 Re-registering tool: ${toolName}`);
-                                        try {
-                                            uvSession?.registerToolImplementation(toolName, impl);
-                                            console.log(`✅ Successfully registered tool after stage change: ${toolName}`);
-                                        } catch (err) {
-                                            const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-                                            console.error(`❌ Failed to register tool ${toolName} after stage change: ${errorMsg}`);
-                                        }
-                                    }
-                                }
-                            }, 500);
+                            // No need to re-register tools - they are now provided directly in the stage change data
+                            console.log('🌟 Tools provided directly in stage change data, no manual re-registration needed');
                         }
                     }
                 }
             } else {
                 console.log('🌟 STAGE CHANGE EVENT HAS NO DETAIL PROPERTY', JSON.stringify(evt));
             }
-
-            // You could update UI or other state here when stage changes
 
             // Ensure speaker is unmuted after stage change
             if (uvSession && uvSession.isSpeakerMuted) {
