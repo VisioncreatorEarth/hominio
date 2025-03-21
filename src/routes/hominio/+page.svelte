@@ -36,9 +36,6 @@
 	let todoEntries = $state<[string, TodoItem][]>([]);
 	let newTodoText = $state('');
 	let newTodoTags = $state('');
-	let recentToolActivity = $state<{ action: string; message: string; timestamp: number } | null>(
-		null
-	);
 
 	// Add state variable for editing
 	let editingTodoId = $state<string | null>(null);
@@ -61,6 +58,10 @@
 		activeItem: null
 	});
 
+	// Get the shared recentToolActivity from the parent scope
+	// Ensure it's available in window for layout access
+	let recentToolActivity: { action: string; message: string; timestamp: number } | null = null;
+
 	// Add helper for tracking tool usage for UI feedback
 	function logToolActivity(action: string, message: string, success = true) {
 		// Update tool state
@@ -71,16 +72,24 @@
 			...toolState.history.slice(0, 9) // Keep last 10 entries
 		];
 
-		// Show recent activity indicator
+		// Show recent activity indicator in global state
 		recentToolActivity = {
 			action,
 			message,
 			timestamp: Date.now()
 		};
 
+		// Make available to the layout
+		if (typeof window !== 'undefined') {
+			(window as any).__recentToolActivity = recentToolActivity;
+		}
+
 		// Clear the notification after 3 seconds
 		setTimeout(() => {
 			recentToolActivity = null;
+			if (typeof window !== 'undefined') {
+				(window as any).__recentToolActivity = null;
+			}
 		}, 3000);
 
 		console.log(`Tool activity: ${action} - ${message}`);
@@ -1296,163 +1305,6 @@ Remember: You are ${normalizedName} now. Respond in a ${agent.personality} manne
 								</button>
 							{/each}
 						{/key}
-					</div>
-				</div>
-			{/if}
-
-			<!-- Tool Activity Notification -->
-			{#if recentToolActivity}
-				<div class="mb-6" transition:fade={{ duration: 300 }}>
-					<div class="rounded-xl border border-indigo-500/30 bg-indigo-500/10 p-4 backdrop-blur-sm">
-						<div class="flex items-center gap-3">
-							<div class="rounded-full bg-indigo-500/20 p-2">
-								{#if recentToolActivity.action === 'create'}
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										class="h-5 w-5 text-indigo-300"
-										fill="none"
-										viewBox="0 0 24 24"
-										stroke="currentColor"
-									>
-										<path
-											stroke-linecap="round"
-											stroke-linejoin="round"
-											stroke-width="2"
-											d="M12 6v6m0 0v6m0-6h6m-6 0H6"
-										/>
-									</svg>
-								{:else if recentToolActivity.action === 'toggle'}
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										class="h-5 w-5 text-indigo-300"
-										fill="none"
-										viewBox="0 0 24 24"
-										stroke="currentColor"
-									>
-										<path
-											stroke-linecap="round"
-											stroke-linejoin="round"
-											stroke-width="2"
-											d="M5 13l4 4L19 7"
-										/>
-									</svg>
-								{:else if recentToolActivity.action === 'edit'}
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										class="h-5 w-5 text-indigo-300"
-										fill="none"
-										viewBox="0 0 24 24"
-										stroke="currentColor"
-									>
-										<path
-											stroke-linecap="round"
-											stroke-linejoin="round"
-											stroke-width="2"
-											d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-										/>
-									</svg>
-								{:else if recentToolActivity.action === 'delete'}
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										class="h-5 w-5 text-indigo-300"
-										fill="none"
-										viewBox="0 0 24 24"
-										stroke="currentColor"
-									>
-										<path
-											stroke-linecap="round"
-											stroke-linejoin="round"
-											stroke-width="2"
-											d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-										/>
-									</svg>
-								{:else if recentToolActivity.action === 'filter'}
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										class="h-5 w-5 text-indigo-300"
-										fill="none"
-										viewBox="0 0 24 24"
-										stroke="currentColor"
-									>
-										<path
-											stroke-linecap="round"
-											stroke-linejoin="round"
-											stroke-width="2"
-											d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
-										/>
-									</svg>
-								{:else if recentToolActivity.action === 'createList'}
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										class="h-5 w-5 text-indigo-300"
-										fill="none"
-										viewBox="0 0 24 24"
-										stroke="currentColor"
-									>
-										<path
-											stroke-linecap="round"
-											stroke-linejoin="round"
-											stroke-width="2"
-											d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-										/>
-									</svg>
-								{:else if recentToolActivity.action === 'switchList'}
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										class="h-5 w-5 text-indigo-300"
-										fill="none"
-										viewBox="0 0 24 24"
-										stroke="currentColor"
-									>
-										<path
-											stroke-linecap="round"
-											stroke-linejoin="round"
-											stroke-width="2"
-											d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"
-										/>
-									</svg>
-								{:else if recentToolActivity.action === 'switchAgent'}
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										class="h-5 w-5 text-indigo-300"
-										fill="none"
-										viewBox="0 0 24 24"
-										stroke="currentColor"
-									>
-										<path
-											stroke-linecap="round"
-											stroke-linejoin="round"
-											stroke-width="2"
-											d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
-										/>
-									</svg>
-								{/if}
-							</div>
-							<div>
-								<div class="text-sm font-medium text-indigo-200">
-									{#if recentToolActivity.action === 'create'}
-										Task Created
-									{:else if recentToolActivity.action === 'toggle'}
-										Task Updated
-									{:else if recentToolActivity.action === 'edit'}
-										Task Edited
-									{:else if recentToolActivity.action === 'delete'}
-										Task Deleted
-									{:else if recentToolActivity.action === 'filter'}
-										Todos Filtered
-									{:else if recentToolActivity.action === 'createList'}
-										List Created
-									{:else if recentToolActivity.action === 'switchList'}
-										List Switched
-									{:else if recentToolActivity.action === 'switchAgent'}
-										Agent Switched
-									{/if}
-								</div>
-								<div class="text-xs text-indigo-300/80">
-									{recentToolActivity.message}
-								</div>
-							</div>
-						</div>
 					</div>
 				</div>
 			{/if}

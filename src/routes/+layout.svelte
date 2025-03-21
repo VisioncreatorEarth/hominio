@@ -14,6 +14,8 @@
 		type Transcript
 	} from '$lib/ultravox/callFunctions';
 	import CallInterface from '$lib/components/CallInterface.svelte';
+	import { currentAgent } from '$lib/ultravox/toolImplementation';
+	import { agentTools } from '$lib/ultravox/callFunctions';
 
 	// Disable Server-Side Rendering since Tauri is client-only
 	export const ssr = false;
@@ -38,6 +40,27 @@
 
 	// Loro document registry
 	let loroDocsRegistry = $state<Record<string, { doc: LoroDoc }>>({});
+
+	// Global state for notifications
+	let recentToolActivity = $state<{ action: string; message: string; timestamp: number } | null>(
+		null
+	);
+
+	// Use effect to monitor window.__recentToolActivity for changes
+	$effect(() => {
+		if (typeof window !== 'undefined') {
+			// Set up interval to check for notifications
+			const checkInterval = setInterval(() => {
+				const windowActivity = (window as any).__recentToolActivity;
+				if (windowActivity) {
+					recentToolActivity = windowActivity;
+				}
+			}, 300);
+
+			// Clear interval on cleanup
+			return () => clearInterval(checkInterval);
+		}
+	});
 
 	// Toggle modal state
 	async function toggleCall() {
@@ -406,41 +429,26 @@ Be friendly, concise, and helpful. Keep responses under 3 sentences when possibl
 
 		<!-- Centered Logo Button - more transparent -->
 		<div class="fixed bottom-0 left-1/2 z-50 -translate-x-1/2">
-			<button
-				class={`flex h-16 w-16 transform items-center justify-center shadow-lg backdrop-blur-sm transition-all duration-300 hover:scale-105 focus:outline-none
-					${
-						!isCallActive
-							? 'rounded-full bg-white/5 hover:bg-white/10'
-							: 'rounded-b-none bg-red-500/20 hover:bg-red-500/30'
-					}`}
-				onclick={toggleCall}
-			>
-				{#if !isCallActive}
+			{#if !isCallActive}
+				<button
+					class="flex h-16 w-16 transform items-center justify-center rounded-full bg-white/5 shadow-lg backdrop-blur-sm transition-all duration-300 hover:scale-105 hover:bg-white/10 focus:outline-none"
+					onclick={toggleCall}
+				>
 					<div class="h-12 w-12 overflow-hidden rounded-full bg-white/5 p-1">
 						<img src="/logo.png" alt="Hominio Logo" class="h-full w-full object-cover" />
 					</div>
-				{:else}
-					<svg
-						xmlns="http://www.w3.org/2000/svg"
-						class="h-8 w-8 text-white"
-						fill="none"
-						viewBox="0 0 24 24"
-						stroke="currentColor"
-					>
-						<path
-							stroke-linecap="round"
-							stroke-linejoin="round"
-							stroke-width="2"
-							d="M6 18L18 6M6 6l12 12"
-						/>
-					</svg>
-				{/if}
-			</button>
+				</button>
+			{/if}
 		</div>
 
 		<!-- Call Interface - When Call is Active -->
 		{#if isCallActive}
-			<CallInterface {callStatus} {transcripts} onEndCall={handleEndCall} />
+			<CallInterface
+				{callStatus}
+				{transcripts}
+				onEndCall={handleEndCall}
+				notification={recentToolActivity}
+			/>
 		{/if}
 	</div>
 </div>
