@@ -46,8 +46,10 @@
 
 			kernelData = response.data;
 
-			// Load the document directly using the content hash
-			await loadDoc(kernelData.registry.contentHash);
+			// Load the document if we have kernel data
+			if (kernelData?.registry?.contentHash) {
+				await loadDoc(kernelData.registry.contentHash);
+			}
 			error = null;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to connect to kernel';

@@ -1,42 +1,83 @@
 import { Elysia } from 'elysia';
-import { PGlite } from '@electric-sql/pglite';
-import { docStore, KERNEL_REGISTRY, initializeKernel } from '../KERNEL/loro';
+import { cors } from '@elysiajs/cors';
+import { hashService } from '$lib/KERNEL/hash-service';
+import { storageService } from '$lib/KERNEL/storage-service';
+import { LoroDoc } from 'loro-crdt';
 
-// Create an in-memory PGLite instance for storing snapshots
-// Using 'memory://' creates an in-memory database
-export const db = new PGlite('memory://');
+// Initialize kernel registry
+const kernelRegistry = new LoroDoc();
+const meta = kernelRegistry.getMap('meta');
+meta.set('type', 'kernel-registry');
+meta.set('version', '1.0.0');
 
-// Initialize the kernel with hello earth doc and store its references
-const { registryId, contentHash } = initializeKernel();
-console.log(`Kernel initialized with Hello Earth doc:
-  Registry ID: ${registryId}
-  Content Hash: ${contentHash}
-`);
+// Initialize registry content
+const registry = kernelRegistry.getMap('registry');
+registry.set('id', '0x000000000000000000');
+registry.set('contentHash', ''); // Will be set after storing root doc
 
-// Create a shared Elysia instance with the peer prefix
-export const app = new Elysia({ prefix: '/peer' })
-    // Root endpoint returns the KERNEL registry
-    .get('/', () => {
+// Initialize root document
+const rootDoc = new LoroDoc();
+const rootMeta = rootDoc.getMap('meta');
+rootMeta.set('type', 'kernel-root');
+rootMeta.set('version', '1.0.0');
+
+const rootContent = rootDoc.getMap('content');
+rootContent.set('message', 'Hello Earth');
+
+// Store root document and update registry
+async function initializeKernel() {
+    try {
+        // Hash and store root document
+        const rootHash = await hashService.hash(rootDoc);
+        await storageService.store(rootHash, rootDoc);
+
+        // Update registry with root hash
+        registry.set('contentHash', rootHash);
+
+        // Hash and store registry
+        const registryHash = await hashService.hash(kernelRegistry);
+        await storageService.store(registryHash, kernelRegistry);
+
+        console.log('Kernel initialized successfully');
+    } catch (error) {
+        console.error('Failed to initialize kernel:', error);
+    }
+}
+
+// Initialize kernel on startup
+initializeKernel();
+
+// Create Elysia app with CORS
+export const app = new Elysia()
+    .use(cors())
+    .get('/peer', async () => {
         return {
-            status: 'ok',
-            version: '0.1.0',
-            registry: KERNEL_REGISTRY
+            status: 'success',
+            version: '1.0.0',
+            registry: {
+                id: registry.get('id'),
+                contentHash: registry.get('contentHash')
+            }
         };
     })
-    // Get a specific doc by its content hash
-    .get('/docs/:cid', ({ params: { cid } }) => {
-        const doc = docStore.get(cid);
+    .get('/peer/docs/:contentHash', async ({ params: { contentHash } }) => {
+        try {
+            const doc = await storageService.load(contentHash);
+            if (!doc) {
+                throw new Error('Document not found');
+            }
 
-        if (!doc) {
+            return {
+                status: 'success',
+                data: doc.toJSON()
+            };
+        } catch (error) {
             return {
                 status: 'error',
-                message: `Document with hash ${cid} not found`
+                error: {
+                    message: error instanceof Error ? error.message : 'Failed to load document'
+                }
             };
         }
-
-        return {
-            status: 'ok',
-            data: doc.toJSON()
-        };
     });
 

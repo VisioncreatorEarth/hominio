@@ -25,6 +25,12 @@ export default defineConfig({
 		strictPort: true, // Fail if port is already in use
 		// Enable HTTPS for iOS if needed (comment out if not using HTTPS)
 		// https: true,
+		watch: {
+			ignored: [
+				'**/node_modules/**',
+				'**/.git/**'
+			]
+		}
 	},
 	optimizeDeps: {
 		exclude: ['loro-crdt', '@electric-sql/pglite', '@tauri-apps/api']
