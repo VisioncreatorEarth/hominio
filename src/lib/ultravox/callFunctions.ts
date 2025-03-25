@@ -1,6 +1,7 @@
 import { browser } from '$app/environment';
 import type { UltravoxSession as UVSession, UltravoxSessionStatus as UVStatus, Transcript as UVTranscript, ClientToolImplementation } from 'ultravox-client';
-import { baseTools, currentAgent, type AgentName } from './agents';
+import { currentAgent, type AgentName } from './agents';
+import { getActiveVibe } from './index';
 
 // Define types for our Ultravox integration
 export type CallConfig = {
@@ -100,10 +101,23 @@ export function forceUnmuteSpeaker(): void {
 // Create a call with Ultravox API
 async function createCall(callConfig: CallConfig): Promise<JoinUrlResponse> {
     try {
-        // Include all config fields including firstSpeaker in the request
+        // Get tools from the active vibe
+        const activeVibe = await getActiveVibe();
+
+        // Transform tools to the format expected by Ultravox API
+        // Only use temporaryTool field to avoid multiple "base_tool" oneof fields error
+        const formattedTools = activeVibe.resolvedCallTools.map(tool => {
+            // The API expects only one of: toolId, toolName, temporaryTool 
+            // (these are part of a oneof group in the protobuf)
+            return {
+                temporaryTool: tool.temporaryTool
+            };
+        });
+
+        // Include all config fields in the request with properly formatted tools
         const requestConfig = {
             ...callConfig,
-            selectedTools: baseTools
+            selectedTools: formattedTools
         };
 
         const response = await fetch('/callHominio', {

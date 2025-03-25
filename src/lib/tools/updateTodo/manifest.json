@@ -1,0 +1,47 @@
+{
+    "name": "updateTodo",
+    "temporaryTool": {
+        "modelToolName": "updateTodo",
+        "description": "Update an existing todo. Use this tool when a todo needs to be modified. NEVER emit text when doing this tool call.",
+        "dynamicParameters": [
+            {
+                "name": "todoText",
+                "location": "PARAMETER_LOCATION_BODY",
+                "schema": {
+                    "type": "string",
+                    "description": "Current text content to search for"
+                },
+                "required": true
+            },
+            {
+                "name": "newText",
+                "location": "PARAMETER_LOCATION_BODY",
+                "schema": {
+                    "type": "string",
+                    "description": "New text content for the todo"
+                },
+                "required": true
+            },
+            {
+                "name": "tags",
+                "location": "PARAMETER_LOCATION_BODY",
+                "schema": {
+                    "type": "string",
+                    "description": "Optional comma-separated list of new tags"
+                },
+                "required": false
+            },
+            {
+                "name": "todoId",
+                "location": "PARAMETER_LOCATION_BODY",
+                "schema": {
+                    "type": "string",
+                    "description": "ID of the todo item to update (if known)"
+                },
+                "required": false
+            }
+        ],
+        "client": {}
+    },
+    "implementationType": "client"
+}

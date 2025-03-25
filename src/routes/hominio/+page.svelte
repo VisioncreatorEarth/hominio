@@ -1,830 +1,53 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { LoroDoc, type Value } from 'loro-crdt';
 	import {
-		currentAgent,
-		agentConfigs,
-		createAgentStageChangeData,
-		type AgentName
-	} from '$lib/ultravox/agents';
-
-	// Define Todo interface
-	interface TodoItem {
-		id: string;
-		text: string;
-		completed: boolean;
-		createdAt: number;
-		tags: string[];
-		docId: string; // Which document/list this todo belongs to
-	}
-
-	// Initialize LoroDoc for todos
-	const todoDoc = new LoroDoc();
-	const todos = todoDoc.getMap('todos');
-
-	// State variables
-	let todoEntries = $state<[string, TodoItem][]>([]);
-	let newTodoText = $state('');
-	let newTodoTags = $state('');
-
-	// Create a simple store pattern for tool state
-	interface ToolState {
-		pendingAction: string | null;
-		lastActionTimestamp: number;
-		history: { action: string; success: boolean; message: string; timestamp: number }[];
-		activeItem: TodoItem | null;
-	}
-
-	// Create a tool state store with reactive properties
-	const toolState = $state<ToolState>({
-		pendingAction: null,
-		lastActionTimestamp: 0,
-		history: [],
-		activeItem: null
-	});
-
-	// Get the shared recentToolActivity from the parent scope
-	// Ensure it's available in window for layout access
-	let recentToolActivity: { action: string; message: string; timestamp: number } | null = null;
-
-	// Add helper for tracking tool usage for UI feedback
-	function logToolActivity(action: string, message: string, success = true) {
-		// Update tool state
-		toolState.pendingAction = null;
-		toolState.lastActionTimestamp = Date.now();
-		toolState.history = [
-			{ action, success, message, timestamp: Date.now() },
-			...toolState.history.slice(0, 9) // Keep last 10 entries
-		];
-
-		// Show recent activity indicator in global state
-		recentToolActivity = {
-			action,
-			message,
-			timestamp: Date.now()
-		};
-
-		// Make available to the layout
-		if (typeof window !== 'undefined') {
-			(window as any).__recentToolActivity = recentToolActivity;
-		}
-
-		// Clear the notification after 3 seconds
-		setTimeout(() => {
-			recentToolActivity = null;
-			if (typeof window !== 'undefined') {
-				(window as any).__recentToolActivity = null;
-			}
-		}, 3000);
-
-		console.log(`Tool activity: ${action} - ${message}`);
-		return { success, message };
-	}
-
-	// Initialize the list of Loro documents
-	let loroDocuments = $state<{ id: string; name: string; createdAt: number; numTodos: number }[]>([
-		{
-			id: 'personal',
-			name: 'Personal List',
-			createdAt: Date.now(),
-			numTodos: 0
-		}
-	]);
-
-	// Track the currently active document
-	let activeDocId = $state('personal');
-
-	// Get the active document name for display
-	function getActiveDocName(): string {
-		const activeDoc = loroDocuments.find((doc) => doc.id === activeDocId);
-		return activeDoc ? activeDoc.name : 'Personal List';
-	}
-
-	// Create a new document/list
-	function createLoroDocument(name: string): string {
-		const normalizedName = name.trim();
-		if (!normalizedName) return '';
-
-		// Generate a slugified ID from the name
-		const id = normalizedName.toLowerCase().replace(/[^a-z0-9]/g, '_');
-
-		// Check if a document with this ID already exists
-		if (loroDocuments.some((doc) => doc.id === id)) {
-			console.log(`Document with ID ${id} already exists`);
-			return id; // Return existing ID
-		}
-
-		// Create new document
-		const newDoc = {
-			id,
-			name: normalizedName,
-			createdAt: Date.now(),
-			numTodos: 0
-		};
-
-		loroDocuments = [...loroDocuments, newDoc];
-		return id;
-	}
-
-	// Switch to a specific document
-	function switchToDocument(docId: string): boolean {
-		console.log(`Switching to document: ${docId}`);
-		const targetDoc = loroDocuments.find((doc) => doc.id === docId);
-		if (targetDoc) {
-			activeDocId = docId;
-
-			// Reset any active filter when switching documents
-			selectedTag = null;
-
-			// Force a reactive update by directly updating todoEntries
-			const rawEntries = [...todos.entries()];
-			const typedEntries: [string, TodoItem][] = rawEntries.map((entry) => {
-				const key = entry[0] as string;
-				const value = entry[1] as unknown as TodoItem;
-				// Ensure docId exists (for backward compatibility)
-				if (!value.docId) value.docId = 'personal';
-				return [key, value];
-			});
-
-			// Immediately update todoEntries with filtered data for the new active document
-			todoEntries = typedEntries
-				.filter(([_, todo]) => todo.docId === activeDocId)
-				.sort((a, b) => b[1].createdAt - a[1].createdAt);
-
-			// Update document list counts
-			updateLoroDocuments();
-
-			console.log(`Switched to document: ${targetDoc.name}, found ${todoEntries.length} todos`);
-			return true;
-		}
-		console.log(`Document not found: ${docId}`);
-		return false;
-	}
-
-	// Update document list with count
-	function updateLoroDocuments() {
-		// Use a Map to store todo counts by document
-		const counts = new Map<string, number>();
-
-		// Count todos for each document
-		todoEntries.forEach(([_, todo]) => {
-			const docId = todo.docId || 'personal'; // Default to personal if not specified
-			const currentCount = counts.get(docId) || 0;
-			counts.set(docId, currentCount + 1);
-		});
-
-		// Update the documents list with the counts
-		loroDocuments = loroDocuments.map((doc) => ({
-			...doc,
-			numTodos: counts.get(doc.id) || 0
-		}));
-	}
-
-	// Add a new todo to the Loro document
-	function addTodo(text: string, tagsStr: string = '', docId: string = activeDocId): string {
-		if (!text.trim()) return '';
-
-		const todoId = crypto.randomUUID();
-		const tags = tagsStr
-			.split(',')
-			.map((tag) => tag.trim())
-			.filter((tag) => tag.length > 0);
-
-		const todoItem: TodoItem = {
-			id: todoId,
-			text: text.trim(),
-			completed: false,
-			createdAt: Date.now(),
-			tags,
-			docId // Store which document this belongs to
-		};
-
-		todos.set(todoId, todoItem as unknown as Value);
-		newTodoText = '';
-		newTodoTags = '';
-		updateTodoEntries();
-		return todoId;
-	}
-
-	// Toggle todo completion by ID
-	function toggleTodoById(id: string): boolean {
-		// Use proper Loro map entries method to check if id exists
-		const entries = [...todos.entries()];
-		const todoEntry = entries.find((entry) => entry[0] === id);
-
-		if (todoEntry) {
-			const value = todoEntry[1] as unknown as TodoItem;
-			todos.set(id, {
-				...value,
-				completed: !value.completed
-			} as unknown as Value);
-
-			updateTodoEntries();
-			return true;
-		}
-
-		return false;
-	}
-
-	// Find all todos matching text content
-	function findTodosByText(text: string): [string, TodoItem][] {
-		const entries = [...todos.entries()];
-		return entries
-			.filter((entry) => {
-				const todo = entry[1] as unknown as TodoItem;
-				return todo.text.toLowerCase().includes(text.toLowerCase());
-			})
-			.map((entry) => [entry[0] as string, entry[1] as unknown as TodoItem]);
-	}
-
-	// Update todo entries from Loro document
-	function updateTodoEntries() {
-		// Use entries() method to get the entries from the Loro map
-		const rawEntries = [...todos.entries()];
-
-		// Create properly typed entries with explicit casting
-		const typedEntries: [string, TodoItem][] = rawEntries.map((entry) => {
-			const key = entry[0] as string;
-			const value = entry[1] as unknown as TodoItem;
-			// Ensure docId exists (for backward compatibility)
-			if (!value.docId) value.docId = 'personal';
-			return [key, value];
-		});
-
-		// Filter for the active document and sort by creation date (newest first)
-		todoEntries = typedEntries
-			.filter(([_, todo]) => todo.docId === activeDocId)
-			.sort((a, b) => b[1].createdAt - a[1].createdAt);
-
-		// Update document list
-		updateLoroDocuments();
-	}
-
-	// Format date for display
-	function formatDate(timestamp: number): string {
-		return new Date(timestamp).toLocaleString();
-	}
-
-	// Function to get unique tags from all todos
-	function getAllUniqueTags(): string[] {
-		const uniqueTags = new Set<string>();
-
-		todoEntries.forEach(([_, todo]) => {
-			todo.tags.forEach((tag) => {
-				if (tag) uniqueTags.add(tag);
-			});
-		});
-
-		return Array.from(uniqueTags).sort();
-	}
-
-	// Function to filter todos by tag
-	let selectedTag = $state<string | null>(null);
-
-	function filterTodosByTag(tag: string | null) {
-		console.log(`Filtering todos by tag: ${tag}`);
-		selectedTag = tag;
-		// Force a reactive update by modifying the todoEntries array
-		// This ensures the UI updates when the filter changes
-		todoEntries = [...todoEntries];
-	}
-
-	// Tool implementations based on AskHominio.svelte pattern
-	// Ultravox client tool implementation for creating a todo
-	const createTodoTool = (parameters: any) => {
-		console.log('Called createTodo tool with parameters:', parameters);
-		try {
-			const { todoText, tags, listName } = parameters;
-			toolState.pendingAction = 'create';
-
-			// Check if we need to create in a specific list
-			let targetDocId = activeDocId;
-			if (listName && typeof listName === 'string') {
-				// Try to find a matching list (case insensitive)
-				const targetName = listName.trim().toLowerCase();
-				const matchingDoc = loroDocuments.find(
-					(doc) => doc.name.toLowerCase().includes(targetName) || doc.id.includes(targetName)
-				);
-
-				if (matchingDoc) {
-					targetDocId = matchingDoc.id;
-				} else {
-					// Create the list if it doesn't exist
-					const newId = createLoroDocument(listName.trim());
-					if (newId) {
-						targetDocId = newId;
-					}
-				}
-			}
-
-			if (typeof todoText === 'string' && todoText.trim()) {
-				const tagsStr = tags || '';
-				const newTodoId = addTodo(todoText.trim(), tagsStr, targetDocId);
-
-				// If the todo was added to a different list than the active one, switch to that list
-				if (targetDocId !== activeDocId) {
-					switchToDocument(targetDocId);
-				}
-
-				const targetListName =
-					loroDocuments.find((doc) => doc.id === targetDocId)?.name || 'Personal List';
-
-				const result = {
-					success: true,
-					message: `Created todo: "${todoText}"${tagsStr ? ' with tags: ' + tagsStr : ''} in ${targetListName}`
-				};
-
-				logToolActivity('create', result.message, true);
-				return JSON.stringify(result);
-			}
-
-			const result = {
-				success: false,
-				message: 'Invalid todo text provided'
-			};
-
-			logToolActivity('create', result.message, false);
-			return JSON.stringify(result);
-		} catch (error: unknown) {
-			console.error('Error in createTodo tool:', error);
-			const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-
-			const result = {
-				success: false,
-				message: `Error creating todo: ${errorMessage}`
-			};
-
-			logToolActivity('create', result.message, false);
-			return JSON.stringify(result);
-		}
-	};
-
-	// Ultravox client tool implementation for toggling a todo
-	const toggleTodoTool = (parameters: any) => {
-		console.log('Called toggleTodo tool with parameters:', parameters);
-		try {
-			const { todoId, todoText } = parameters;
-			toolState.pendingAction = 'toggle';
-
-			// Try by ID first
-			if (todoId && typeof todoId === 'string') {
-				console.log(`Attempting to toggle todo by ID: ${todoId}`);
-				const success = toggleTodoById(todoId);
-				if (success) {
-					const result = {
-						success: true,
-						message: `Toggled todo completion status`
-					};
-
-					logToolActivity('toggle', result.message, true);
-					return JSON.stringify(result);
-				}
-			}
-
-			// Try by text content
-			if (todoText && typeof todoText === 'string') {
-				console.log(`Attempting to toggle todo by text: ${todoText}`);
-
-				// Find all matching todos using the helper function
-				const matchingTodos = findTodosByText(todoText);
-
-				console.log(`Found ${matchingTodos.length} matching todos`);
-
-				// If we found exactly one match, toggle it
-				if (matchingTodos.length === 1) {
-					const [id, todo] = matchingTodos[0];
-					toggleTodoById(id);
-
-					const result = {
-						success: true,
-						message: `Toggled "${todo.text}" to ${!todo.completed ? 'complete' : 'incomplete'}`
-					};
-
-					logToolActivity('toggle', result.message, true);
-					return JSON.stringify(result);
-				}
-				// If multiple matches, return info about them
-				else if (matchingTodos.length > 1) {
-					const todoNames = matchingTodos.map(([_, todo]) => `"${todo.text}"`).join(', ');
-
-					const result = {
-						success: false,
-						message: `Found multiple matching todos: ${todoNames}. Please be more specific.`
-					};
-
-					logToolActivity('toggle', result.message, false);
-					return JSON.stringify(result);
-				}
-			}
-
-			// If we got here, we couldn't find a matching todo
-			const result = {
-				success: false,
-				message: 'Could not find a matching todo. Try a different description or create a new todo.'
-			};
-
-			logToolActivity('toggle', result.message, false);
-			return JSON.stringify(result);
-		} catch (error) {
-			console.error('Error in toggleTodo tool:', error);
-			const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-
-			const result = {
-				success: false,
-				message: `Error toggling todo: ${errorMessage}`
-			};
-
-			logToolActivity('toggle', result.message, false);
-			return JSON.stringify(result);
-		}
-	};
-
-	// Add a tool implementation for removing todos
-	const removeTodoTool = (parameters: any) => {
-		console.log('Called removeTodo tool with parameters:', parameters);
-		try {
-			const { todoId, todoText } = parameters;
-			toolState.pendingAction = 'delete';
-
-			// Try by ID first
-			if (todoId && typeof todoId === 'string') {
-				const entries = [...todos.entries()];
-				const todoEntry = entries.find((entry) => entry[0] === todoId);
-
-				if (todoEntry) {
-					const todo = todoEntry[1] as unknown as TodoItem;
-					todos.delete(todoId);
-					updateTodoEntries();
-
-					const result = {
-						success: true,
-						message: `Deleted todo: "${todo.text}"`
-					};
-
-					logToolActivity('delete', result.message, true);
-					return JSON.stringify(result);
-				}
-			}
-
-			// Try by text content
-			if (todoText && typeof todoText === 'string') {
-				// Find all matching todos
-				const matchingTodos = findTodosByText(todoText);
-
-				// If we found exactly one match, delete it
-				if (matchingTodos.length === 1) {
-					const [id, todo] = matchingTodos[0];
-					todos.delete(id);
-					updateTodoEntries();
-
-					const result = {
-						success: true,
-						message: `Deleted todo: "${todo.text}"`
-					};
-
-					return JSON.stringify(result);
-				}
-				// If multiple matches, return info about them
-				else if (matchingTodos.length > 1) {
-					const todoNames = matchingTodos.map(([_, todo]) => `"${todo.text}"`).join(', ');
-
-					const result = {
-						success: false,
-						message: `Found multiple matching todos: ${todoNames}. Please be more specific.`
-					};
-
-					return JSON.stringify(result);
-				}
-			}
-
-			// If we got here, we couldn't find a matching todo
-			const result = {
-				success: false,
-				message: 'Could not find a matching todo to delete. Try a different description.'
-			};
-
-			return JSON.stringify(result);
-		} catch (error) {
-			console.error('Error in removeTodo tool:', error);
-			const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-
-			const result = {
-				success: false,
-				message: `Error deleting todo: ${errorMessage}`
-			};
-
-			return JSON.stringify(result);
-		}
-	};
-
-	// Add a tool implementation for updating todos
-	const updateTodoTool = (parameters: any) => {
-		console.log('Called updateTodo tool with parameters:', parameters);
-		try {
-			const { todoId, todoText, newText, tags } = parameters;
-			toolState.pendingAction = 'edit';
-
-			// Try to find todo by ID first
-			if (todoId && typeof todoId === 'string') {
-				const entries = [...todos.entries()];
-				const todoEntry = entries.find((entry) => entry[0] === todoId);
-
-				if (todoEntry) {
-					const todo = todoEntry[1] as unknown as TodoItem;
-					todos.set(todoId, {
-						...todo,
-						text: newText || todo.text,
-						tags: tags
-							? tags
-									.split(',')
-									.map((t: string) => t.trim())
-									.filter((t: string) => t.length > 0)
-							: todo.tags
-					} as unknown as Value);
-
-					updateTodoEntries();
-
-					const result = {
-						success: true,
-						message: `Updated todo: "${newText || todo.text}"`
-					};
-
-					return JSON.stringify(result);
-				}
-			}
-
-			// Try by text content
-			if (todoText && typeof todoText === 'string' && newText) {
-				// Find all matching todos
-				const matchingTodos = findTodosByText(todoText);
-
-				// If we found exactly one match, update it
-				if (matchingTodos.length === 1) {
-					const [id, todo] = matchingTodos[0];
-
-					// Parse tags if provided
-					const updatedTags = tags
-						? tags
-								.split(',')
-								.map((t: string) => t.trim())
-								.filter((t: string) => t.length > 0)
-						: todo.tags;
-
-					todos.set(id, {
-						...todo,
-						text: newText,
-						tags: updatedTags
-					} as unknown as Value);
-
-					updateTodoEntries();
-
-					const result = {
-						success: true,
-						message: `Updated todo from "${todo.text}" to "${newText}"`
-					};
-
-					return JSON.stringify(result);
-				}
-				// If multiple matches, return info about them
-				else if (matchingTodos.length > 1) {
-					const todoNames = matchingTodos.map(([_, todo]) => `"${todo.text}"`).join(', ');
-
-					const result = {
-						success: false,
-						message: `Found multiple matching todos: ${todoNames}. Please be more specific.`
-					};
-
-					return JSON.stringify(result);
-				}
-			}
-
-			// If we got here, we couldn't find a matching todo
-			const result = {
-				success: false,
-				message: 'Could not find a matching todo to update. Try a different description.'
-			};
-
-			return JSON.stringify(result);
-		} catch (error: unknown) {
-			console.error('Error in updateTodo tool:', error);
-			const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-
-			const result = {
-				success: false,
-				message: `Error updating todo: ${errorMessage}`
-			};
-
-			return JSON.stringify(result);
-		}
-	};
-
-	// Add a tool implementation for filtering todos by tag
-	const filterTodosTool = (parameters: any) => {
-		console.log('Called filterTodos tool with parameters:', parameters);
-		try {
-			const { tag } = parameters;
-			toolState.pendingAction = 'filter';
-
-			if (tag === 'all' || tag === 'clear') {
-				// Reset filter to show all todos
-				console.log('Clearing filter to show all todos');
-				filterTodosByTag(null);
-				const result = {
-					success: true,
-					message: 'Showing all todos'
-				};
-				return JSON.stringify(result);
-			}
-
-			// Check if tag exists
-			const allTags = getAllUniqueTags();
-			console.log('Available tags:', allTags);
-
-			if (tag && typeof tag === 'string') {
-				// Try to find a matching tag (case insensitive)
-				const matchingTag = allTags.find((t) => t.toLowerCase() === tag.toLowerCase());
-
-				if (matchingTag) {
-					console.log(`Filtering by tag: ${matchingTag}`);
-					// Explicitly call the filterTodosByTag function with the matching tag
-					filterTodosByTag(matchingTag);
-
-					// Double-check that UI state has been updated properly
-					console.log(`Selected tag set to: ${selectedTag}`);
-
-					const result = {
-						success: true,
-						message: `Filtered todos by tag: "${matchingTag}"`
-					};
-					return JSON.stringify(result);
-				} else {
-					console.log(`Tag not found: ${tag}`);
-					const result = {
-						success: false,
-						message: `Tag "${tag}" not found. Available tags: ${allTags.length > 0 ? allTags.join(', ') : 'None'}`
-					};
-					return JSON.stringify(result);
-				}
-			}
-
-			// If no tag provided, list available tags
-			if (allTags.length > 0) {
-				const result = {
-					success: false,
-					message: `Available tags: ${allTags.join(', ')}`
-				};
-				return JSON.stringify(result);
-			} else {
-				const result = {
-					success: false,
-					message: 'No tags available yet'
-				};
-				return JSON.stringify(result);
-			}
-		} catch (error: unknown) {
-			console.error('Error in filterTodos tool:', error);
-			const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-
-			const result = {
-				success: false,
-				message: `Error filtering todos: ${errorMessage}`
-			};
-
-			return JSON.stringify(result);
-		}
-	};
-
-	// Client-side tool implementation for switchAgent
-	function switchAgentTool(params: any) {
-		try {
-			console.log('🔧 CLIENT: switchAgentTool called with params:', params);
-
-			const agentName = params.agentName || 'Hominio';
-			let normalizedName = agentName as string;
-
-			// Map legacy names to new names
-			if (agentName.toLowerCase() === 'sam') {
-				normalizedName = 'Oliver';
-			}
-
-			console.log(`🔧 CLIENT: Switching to agent ${normalizedName}`);
-
-			// Normalize to a valid AgentName
-			const validAgentName =
-				normalizedName in agentConfigs ? (normalizedName as AgentName) : ('Hominio' as AgentName);
-
-			// Update the current agent in the store directly
-			console.log(`🔧 CLIENT: Updating currentAgent store to: ${validAgentName}`);
-			currentAgent.set(validAgentName);
-
-			// Use the centralized function to create stage change data
-			const stageChangeData = createAgentStageChangeData(validAgentName);
-
-			// Create the properly formatted response object
-			const result = {
-				responseType: 'new-stage',
-				result: JSON.stringify(stageChangeData)
-			};
-
-			console.log('🚨 FIXED STAGE CHANGE RESPONSE (CLIENT):', JSON.stringify(result, null, 2));
-
-			return result;
-		} catch (error) {
-			console.error('❌ CLIENT ERROR in switchAgentTool:', error);
-			return {
-				success: false,
-				message: 'Failed to switch agent',
-				error: error instanceof Error ? error.message : 'Unknown error'
-			};
-		}
-	}
+		todos,
+		todoState,
+		todoDocuments,
+		toolState,
+		recentToolActivity,
+		initTodoStore,
+		cleanupTodoStore,
+		getActiveDocName,
+		getAllUniqueTags,
+		switchToDocument,
+		filterTodosByTag
+	} from '$lib/stores/todoStore';
+	import { currentAgent } from '$lib/ultravox/agents';
+	import { registerToolsFromRegistry } from '$lib/ultravox/loaders/toolLoader';
+
+	// Initialize the todo store and get the unsubscribe function
+	let unsubscribeTodo: () => void;
 
 	onMount(() => {
 		// Set the default agent to Hominio (the orchestrator)
 		currentAgent.set('Hominio');
 
-		// Ensure tools are properly registered with Ultravox session
-		const registerToolsWithUltravox = () => {
-			if (typeof window !== 'undefined') {
-				// First, make sure tool implementations are exposed on window
-				(window as any).__hominio_tools = {
-					switchAgent: switchAgentTool,
-					createTodo: createTodoTool,
-					toggleTodo: toggleTodoTool,
-					removeTodo: removeTodoTool,
-					updateTodo: updateTodoTool,
-					filterTodos: filterTodosTool
-				};
+		// Initialize the todo store
+		unsubscribeTodo = initTodoStore();
 
-				// Log tools registration on window object
-				console.log('🧩 Hominio tools exposed on window.__hominio_tools');
-				console.log('🧩 Available tools:', Object.keys((window as any).__hominio_tools).join(', '));
-
-				// Now, register them with current Ultravox session if it exists
-				if ((window as any).__ULTRAVOX_SESSION) {
-					console.log('🧩 Found active Ultravox session, registering all tools');
-					const session = (window as any).__ULTRAVOX_SESSION;
-					const toolImpls = (window as any).__hominio_tools;
-
-					// Register each tool with the session
-					Object.entries(toolImpls).forEach(([name, impl]) => {
-						console.log(`🧩 Explicitly registering tool: ${name}`);
-						try {
-							session.registerToolImplementation(name, impl as any);
-							console.log(`✅ Successfully registered tool: ${name}`);
-						} catch (error) {
-							console.error(`❌ Error registering tool ${name}:`, error);
-						}
-					});
-					console.log('🧩 All tools registered with current Ultravox session');
-				} else {
-					console.warn('⚠️ No active Ultravox session found for registering tools');
-				}
-			}
-		};
-
-		// Initial tool registration
-		registerToolsWithUltravox();
-
-		// Remove any redundant registration function
-		if ((window as any).registerHominionTools) {
-			delete (window as any).registerHominionTools;
-			console.log('🧩 Removed redundant registerHominionTools function');
-		}
-
-		// We no longer need to subscribe to agent changes or do periodic registration
-		// since tools are now directly passed in stage changes
-		console.log(
-			'🧩 Using direct tool specification in stage changes - periodic registration not needed'
-		);
-
-		// Set up Loro change listener
-		const unsubscribe = todoDoc.subscribe(() => {
-			updateTodoEntries();
-		});
-
-		// Add a welcome todo if none exist
-		const entries = [...todos.entries()];
-		if (entries.length === 0) {
-			addTodo('Welcome to Hominio Voice Todos! Ask the assistant to create or toggle tasks.');
-		}
-
-		updateTodoEntries();
-
-		return () => {
-			unsubscribe();
-			// No interval to clear anymore
-		};
-	});
-
-	// Clean up
-	onDestroy(() => {
-		// Clean up window references when component is destroyed
+		// Register tools with Ultravox
+		// This is important for voice commands to work
 		if (typeof window !== 'undefined') {
-			delete (window as any).__hominio_tools;
-			delete (window as any).registerHominionTools;
+			// Wait a short time for Ultravox to initialize
+			setTimeout(() => {
+				registerToolsFromRegistry();
+			}, 1000);
 		}
 	});
+
+	// Clean up on component destroy
+	onDestroy(() => {
+		if (unsubscribeTodo) {
+			unsubscribeTodo();
+		}
+		cleanupTodoStore();
+	});
+
+	// Format date for display
+	function formatDate(timestamp: number): string {
+		return new Date(timestamp).toLocaleString();
+	}
 </script>
 
 <div class="mx-auto grid max-w-full grid-cols-1 gap-6 lg:grid-cols-6 lg:px-4">
@@ -835,11 +58,11 @@
 			<div class="rounded-xl border border-white/10 bg-white/5 p-4 backdrop-blur-sm">
 				<h3 class="mb-3 text-lg font-semibold text-white/80">Todo Lists</h3>
 				<div class="space-y-3">
-					{#each loroDocuments as doc}
+					{#each $todoDocuments as doc}
 						<button
 							on:click={() => switchToDocument(doc.id)}
 							class={`w-full rounded-lg border ${
-								activeDocId === doc.id
+								$todoState.activeDocId === doc.id
 									? 'border-blue-500/30 bg-blue-500/10 text-blue-100'
 									: 'border-white/5 bg-white/5 hover:bg-white/10'
 							} p-3 text-left transition-colors`}
@@ -847,7 +70,7 @@
 							<div class="flex items-center gap-2">
 								<div
 									class={`rounded-full ${
-										activeDocId === doc.id ? 'bg-blue-500/30' : 'bg-blue-500/20'
+										$todoState.activeDocId === doc.id ? 'bg-blue-500/30' : 'bg-blue-500/20'
 									} p-1.5`}
 								>
 									<svg
@@ -891,7 +114,7 @@
 								<button
 									on:click={() => filterTodosByTag(tag)}
 									class={`rounded-lg border ${
-										selectedTag === tag
+										$todoState.selectedTag === tag
 											? 'border-purple-500/30 bg-purple-500/10 text-purple-100'
 											: 'border-white/5 bg-white/5 hover:bg-white/10'
 									} px-3 py-1 text-xs transition-colors`}
@@ -900,7 +123,7 @@
 								</button>
 							{/each}
 						{/key}
-						{#if selectedTag}
+						{#if $todoState.selectedTag}
 							<button
 								on:click={() => filterTodosByTag(null)}
 								class="rounded-lg border border-white/5 bg-white/5 px-3 py-1 text-xs text-white/60 hover:bg-white/10"
@@ -933,7 +156,7 @@
 						<button
 							on:click={() => filterTodosByTag(null)}
 							class={`rounded-lg px-3 py-1 text-sm transition-colors ${
-								selectedTag === null
+								$todoState.selectedTag === null
 									? 'bg-blue-500/30 text-white'
 									: 'bg-white/10 text-white/70 hover:bg-white/20'
 							}`}
@@ -945,7 +168,7 @@
 								<button
 									on:click={() => filterTodosByTag(tag)}
 									class={`rounded-lg px-3 py-1 text-sm transition-colors ${
-										selectedTag === tag
+										$todoState.selectedTag === tag
 											? 'bg-blue-500/30 text-white'
 											: 'bg-white/10 text-white/70 hover:bg-white/20'
 									}`}
@@ -960,15 +183,15 @@
 
 			<!-- Todo List -->
 			<div class="space-y-3">
-				{#if todoEntries.length === 0}
+				{#if $todos.length === 0}
 					<div
 						class="flex items-center justify-center rounded-xl border border-white/10 bg-white/5 p-12 text-white/60 backdrop-blur-sm"
 					>
 						No todos yet. Start by saying "Create a todo to..."
 					</div>
 				{:else}
-					{#key [todoEntries.length, selectedTag, activeDocId]}
-						{#each todoEntries.filter(([_, todo]) => selectedTag === null || todo.tags.includes(selectedTag)) as [id, todo] (id)}
+					{#key [$todos.length, $todoState.selectedTag, $todoState.activeDocId]}
+						{#each $todos.filter(([_, todo]) => $todoState.selectedTag === null || todo.tags.includes($todoState.selectedTag)) as [id, todo] (id)}
 							<div
 								class="rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm transition-colors hover:bg-white/10"
 							>
@@ -1227,10 +450,10 @@
 			<!-- Tool Status Area -->
 			<div class="mt-6 rounded-xl border border-white/10 bg-white/5 p-4 backdrop-blur-sm">
 				<h3 class="mb-3 text-lg font-semibold text-white/80">Recent Activity</h3>
-				{#if toolState.history.length > 0}
+				{#if $toolState.history.length > 0}
 					<div class="max-h-[calc(100vh-10rem)] overflow-y-auto pr-1">
 						<div class="space-y-3">
-							{#each toolState.history as entry, i}
+							{#each $toolState.history as entry, i}
 								<div class="rounded-lg border border-white/5 bg-white/5 p-3">
 									<div class="flex items-center gap-2">
 										<div

@@ -1,0 +1,20 @@
+{
+    "name": "hangUp",
+    "temporaryTool": {
+        "modelToolName": "hangUp",
+        "description": "End the current call. Use this when the user wants to end the conversation or when all tasks are complete. NEVER emit text when doing this tool call.",
+        "dynamicParameters": [
+            {
+                "name": "reason",
+                "location": "PARAMETER_LOCATION_BODY",
+                "schema": {
+                    "type": "string",
+                    "description": "Optional reason for ending the call"
+                },
+                "required": false
+            }
+        ],
+        "client": {}
+    },
+    "implementationType": "client"
+}

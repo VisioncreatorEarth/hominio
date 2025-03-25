@@ -1,0 +1,20 @@
+{
+    "name": "switchAgent",
+    "temporaryTool": {
+        "modelToolName": "switchAgent",
+        "description": "Switch to a different agent. Use this when the user explicitly asks to speak to a different AI assistant. NEVER emit text when doing this tool call.",
+        "dynamicParameters": [
+            {
+                "name": "agentName",
+                "location": "PARAMETER_LOCATION_BODY",
+                "schema": {
+                    "type": "string",
+                    "description": "The name of the agent to switch to"
+                },
+                "required": true
+            }
+        ],
+        "client": {}
+    },
+    "implementationType": "client"
+}

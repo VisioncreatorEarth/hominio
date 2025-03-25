@@ -1,0 +1,29 @@
+{
+    "name": "removeTodo",
+    "temporaryTool": {
+        "modelToolName": "removeTodo",
+        "description": "Delete a todo from the list. Use this tool when a todo needs to be removed. NEVER emit text when doing this tool call.",
+        "dynamicParameters": [
+            {
+                "name": "todoText",
+                "location": "PARAMETER_LOCATION_BODY",
+                "schema": {
+                    "type": "string",
+                    "description": "Text content to search for in todo items"
+                },
+                "required": true
+            },
+            {
+                "name": "todoId",
+                "location": "PARAMETER_LOCATION_BODY",
+                "schema": {
+                    "type": "string",
+                    "description": "ID of the todo item to remove (if known)"
+                },
+                "required": false
+            }
+        ],
+        "client": {}
+    },
+    "implementationType": "client"
+}

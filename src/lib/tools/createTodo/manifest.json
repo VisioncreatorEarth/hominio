@@ -1,0 +1,38 @@
+{
+    "name": "createTodo",
+    "temporaryTool": {
+        "modelToolName": "createTodo",
+        "description": "Create a new todo item. Use this tool when a todo needs to be created. NEVER emit text when doing this tool call.",
+        "dynamicParameters": [
+            {
+                "name": "todoText",
+                "location": "PARAMETER_LOCATION_BODY",
+                "schema": {
+                    "type": "string",
+                    "description": "The text content of the todo task to create"
+                },
+                "required": true
+            },
+            {
+                "name": "tags",
+                "location": "PARAMETER_LOCATION_BODY",
+                "schema": {
+                    "type": "string",
+                    "description": "Optional comma-separated list of tags (e.g. \"work,urgent,home\")"
+                },
+                "required": false
+            },
+            {
+                "name": "listName",
+                "location": "PARAMETER_LOCATION_BODY",
+                "schema": {
+                    "type": "string",
+                    "description": "Optional name of the list to create the todo in"
+                },
+                "required": false
+            }
+        ],
+        "client": {}
+    },
+    "implementationType": "client"
+}

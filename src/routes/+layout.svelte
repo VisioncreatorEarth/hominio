@@ -6,8 +6,8 @@
 	import { LoroDoc } from 'loro-crdt';
 	import { generateShortUUID } from '$lib/utils/uuid';
 	import { startCall, endCall, type Transcript } from '$lib/ultravox/callFunctions';
-	import { defaultCallConfig } from '$lib/ultravox/agents';
 	import CallInterface from '$lib/components/CallInterface.svelte';
+	import { initializeVibe, getActiveVibe } from '$lib/ultravox';
 
 	// Disable Server-Side Rendering since Tauri is client-only
 	export const ssr = false;
@@ -19,6 +19,7 @@
 
 	// Constants
 	const MAX_INIT_ATTEMPTS = 5;
+	const DEFAULT_VIBE = 'todos';
 
 	// Global state - use let for variables we need to update
 	let isInitializing = $state(false);
@@ -29,6 +30,7 @@
 	let isCallActive = $state(false);
 	let callStatus = $state<string>('off');
 	let transcripts = $state<Transcript[]>([]);
+	let isVibeInitialized = $state(false);
 
 	// Loro document registry
 	let loroDocsRegistry = $state<Record<string, { doc: LoroDoc }>>({});
@@ -54,6 +56,20 @@
 		}
 	});
 
+	// Initialize vibe
+	async function initVibe() {
+		try {
+			if (!isVibeInitialized) {
+				console.log('🔮 Initializing vibe:', DEFAULT_VIBE);
+				await initializeVibe(DEFAULT_VIBE);
+				isVibeInitialized = true;
+				console.log('✅ Vibe initialized successfully');
+			}
+		} catch (error) {
+			console.error('❌ Failed to initialize vibe:', error);
+		}
+	}
+
 	// Toggle modal state
 	async function toggleCall() {
 		if (isCallActive) {
@@ -66,11 +82,18 @@
 	// Handle starting a call
 	async function handleStartCall() {
 		try {
-			// Use the centralized configuration with the correct firstSpeaker value
+			// Make sure vibe is initialized
+			if (!isVibeInitialized) {
+				await initVibe();
+			}
+
+			// Get active vibe configuration
+			const vibe = await getActiveVibe(DEFAULT_VIBE);
+
+			// Build call config from vibe
 			const callConfig = {
-				...defaultCallConfig,
-				// Ensure firstSpeaker is properly set, don't remove it
-				firstSpeaker: 'FIRST_SPEAKER_USER'
+				...vibe.manifest.rootCallConfig,
+				systemPrompt: vibe.manifest.callSystemPrompt
 			};
 
 			await startCall(
@@ -80,7 +103,6 @@
 						isCallActive =
 							status !== 'disconnected' && status !== 'call_ended' && status !== 'error';
 
-						// Log status changes but don't try to register tools here
 						if (isCallActive) {
 							console.log('📱 Call is now active with status:', status);
 						}
@@ -216,6 +238,7 @@
 	// This helps ensure storage is ready before child components need it
 	if (typeof window !== 'undefined') {
 		initializeStorage();
+		initVibe(); // Initialize vibe as well
 	}
 
 	// Initialize on mount
@@ -224,6 +247,13 @@
 		if (!isStorageInitialized) {
 			initializeStorage().catch((error) => {
 				console.error('Failed to initialize Loro storage:', error);
+			});
+		}
+
+		// If vibe isn't initialized, try to initialize it
+		if (!isVibeInitialized) {
+			initVibe().catch((error) => {
+				console.error('Failed to initialize vibe:', error);
 			});
 		}
 
@@ -256,16 +286,6 @@
 		// End any active call
 		if (isCallActive) {
 			handleEndCall();
-		}
-	});
-
-	// Use $effect instead of $: for reactivity in Svelte 5 runes
-	$effect(() => {
-		if (callStatus === 'active' && typeof window !== 'undefined') {
-			console.log(
-				'�� Call became active - tools should already be registered in startCall function'
-			);
-			// No tool registration here - it's already handled in callFunctions.ts:startCall
 		}
 	});
 
