@@ -1,7 +1,0 @@
-{
-    "id": "hangUp",
-    "name": "Hang Up",
-    "description": "End the current call",
-    "modelToolName": "hangUp",
-    "parameters": []
-}
