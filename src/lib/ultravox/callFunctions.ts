@@ -11,6 +11,7 @@ export type CallConfig = {
     temperature?: number;
     maxDuration?: string;
     timeExceededMessage?: string;
+    firstSpeaker?: string;
 };
 
 export type JoinUrlResponse = {
@@ -99,7 +100,7 @@ export function forceUnmuteSpeaker(): void {
 // Create a call with Ultravox API
 async function createCall(callConfig: CallConfig): Promise<JoinUrlResponse> {
     try {
-        // Add tools configuration to the call request
+        // Include all config fields including firstSpeaker in the request
         const requestConfig = {
             ...callConfig,
             selectedTools: baseTools

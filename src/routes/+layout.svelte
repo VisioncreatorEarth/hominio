@@ -6,6 +6,7 @@
 	import { LoroDoc } from 'loro-crdt';
 	import { generateShortUUID } from '$lib/utils/uuid';
 	import { startCall, endCall, type Transcript } from '$lib/ultravox/callFunctions';
+	import { defaultCallConfig } from '$lib/ultravox/agents';
 	import CallInterface from '$lib/components/CallInterface.svelte';
 
 	// Disable Server-Side Rendering since Tauri is client-only
@@ -65,75 +66,11 @@
 	// Handle starting a call
 	async function handleStartCall() {
 		try {
-			const systemPrompt = `You are Hominio, a personal assistant for the user.
-
-You have access to the following tools that you MUST use when relevant:
-
-1. createTodo - Creates a new todo item
-   Parameters:
-     - todoText: string (REQUIRED) - The text content of the todo to create
-     - tags: string (REQUIRED) - Comma-separated list of tags (e.g. "work,home,urgent")
-   When to use: Whenever a user asks to create, add, or make a new task/todo
-   Example usage: createTodo({"todoText": "buy groceries", "tags": "shopping,errands"})
-
-2. toggleTodo - Toggles a todo's completion status
-   Parameters:
-     - todoText: string (REQUIRED) - Text to search for in todos
-   When to use: Whenever a user asks to mark, toggle, complete, or finish a task
-   Example usage: toggleTodo({"todoText": "groceries"})
-   
-3. removeTodo - Deletes a todo from the list
-   Parameters:
-     - todoText: string (REQUIRED) - Text to search for in todos
-   When to use: Whenever a user asks to delete, remove, or erase a task
-   Example usage: removeTodo({"todoText": "groceries"})
-
-4. updateTodo - Updates a todo's text or tags
-   Parameters:
-     - todoText: string (REQUIRED) - Current text to search for
-     - newText: string (REQUIRED) - The new text content for the todo
-     - tags: string (OPTIONAL) - Comma-separated list of new tags
-   When to use: Whenever a user asks to edit, update, modify, or change an existing todo
-   Example usage: updateTodo({"todoText": "buy milk", "newText": "buy almond milk", "tags": "shopping,health"})
-
-5. filterTodos - Filters todos by tag
-   Parameters:
-     - tag: string (REQUIRED) - The tag to filter by, or "all" to show all todos
-   When to use: Whenever a user asks to filter, show, or display todos with specific tags
-   Example usage: filterTodos({"tag": "shopping"}) or filterTodos({"tag": "all"})
-
-6. switchAgent - Switch to a different personality
-   Parameters:
-     - agentName: string (REQUIRED) - The name of the agent to switch to
-   When to use: Whenever a user asks to speak to a different agent or assistant
-   Example usage: switchAgent({"agentName": "Oliver"})
-
-Available Agents:
-- Oliver: Professional and efficient todo management specialist
-- Hominio: Helpful central orchestrator (that's me!)
-
-IMPORTANT INSTRUCTIONS:
-1. You MUST use these tools directly without asking for confirmation
-2. Call the appropriate tool as soon as a user requests to create, toggle, delete, update, or filter todos
-3. Execute the tool when needed WITHOUT typing out the function in your response
-4. AFTER the tool executes, respond with text confirming what you did
-5. DO NOT tell the user "I'll use the tool" - just USE it directly
-6. ALWAYS add tags to todos automatically based on the content:
-   - For time-sensitive items, add "urgent" or "important"
-   - If the user specifies specific tags, use those instead of or in addition to your automatic tags
-7. When filtering todos, use the exact tag the user mentions or "all" to show all todos
-8. When a user asks for todo management help, use the switchAgent tool to switch to Oliver
-9. As Hominio, direct users to Oliver for todo management tasks
-10. As Oliver, handle all todo operations directly
-
-Be friendly, concise, and helpful. Keep responses under 3 sentences when possible.`;
-
+			// Use the centralized configuration with the correct firstSpeaker value
 			const callConfig = {
-				systemPrompt: systemPrompt,
-				model: 'fixie-ai/ultravox-70B',
-				voice: 'b0e6b5c1-3100-44d5-8578-9015aa3023ae', // Jessica voice ID
-				languageHint: 'en', // English language hint
-				temperature: 0.7
+				...defaultCallConfig,
+				// Ensure firstSpeaker is properly set, don't remove it
+				firstSpeaker: 'FIRST_SPEAKER_USER'
 			};
 
 			await startCall(
@@ -350,50 +287,6 @@ Be friendly, concise, and helpful. Keep responses under 3 sentences when possibl
 
 	<!-- Main Content Container -->
 	<div class="relative z-10 flex h-screen flex-col">
-		<!-- Header with Navigation - more transparent -->
-		<!-- <header class="border-b border-white/5 bg-white/5 backdrop-blur-md">
-			<div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-				<div class="flex h-16 items-center justify-between">
-					<div class="flex items-center">
-						<div class="flex-shrink-0">
-							<a href="/" class="flex items-center">
-								<span class="text-xl font-medium text-white/95">homin.io</span>
-							</a>
-						</div>
-						<nav class="ml-10 flex items-baseline space-x-4">
-							<a
-								href="/hominio"
-								class="rounded-md px-3 py-2 text-sm font-medium text-white/80 transition-colors hover:bg-white/5 hover:text-white"
-							>
-								Hominio
-							</a>
-							<a
-								href="/todos"
-								class="rounded-md px-3 py-2 text-sm font-medium text-white/80 transition-colors hover:bg-white/5 hover:text-white"
-							>
-								Todos
-							</a>
-							<a
-								href="/docs"
-								class="rounded-md px-3 py-2 text-sm font-medium text-white/80 transition-colors hover:bg-white/5 hover:text-white"
-							>
-								Docs
-							</a>
-						</nav>
-					</div>
-
-					<div class="flex items-center gap-2">
-						<span
-							class={`inline-block h-2 w-2 rounded-full ${isStorageInitialized ? 'bg-emerald-400' : 'bg-red-400'}`}
-						></span>
-						<span class="text-xs text-white/70">
-							{isStorageInitialized ? 'Storage Ready' : 'Initializing Storage...'}
-						</span>
-					</div>
-				</div>
-			</div>
-		</header> -->
-
 		<!-- Main Content -->
 		<main class="flex-1 overflow-auto">
 			<div class="mx-auto w-full">

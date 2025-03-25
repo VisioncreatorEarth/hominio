@@ -39,12 +39,19 @@ export type SwitchAgentParams = {
     agentName?: string;
 };
 
-// Define agent config type
+// Define agent config type with base system prompt
 export type AgentConfig = {
     personality: string;
     voiceId: string;
     tools: string[];
     description: string;
+    baseSystemPrompt: string; // Base system prompt specific to this agent
+    // Add call configuration properties
+    model?: string;
+    languageHint?: string;
+    temperature?: number;
+    maxDuration?: string;
+    timeExceededMessage?: string;
 };
 
 // Define valid agent names
@@ -54,38 +61,39 @@ export type AgentName = 'Oliver' | 'Hominio';
 export const currentFilter = writable('all');
 export const currentAgent = writable<AgentName>('Hominio');
 
-// Centralized agent configurations
-export const agentConfigs: Record<AgentName, AgentConfig> = {
-    'Oliver': {
-        personality: 'professional and efficient',
-        voiceId: 'dcb65d6e-9a56-459e-bf6f-d97572e2fe64',
-        tools: [
-            'createTodo',
-            'toggleTodo',
-            'updateTodo',
-            'removeTodo',
-            'filterTodos',
-            'switchAgent'
-        ],
-        description: 'specialized in todo creation and management'
-    },
-    'Hominio': {
-        personality: 'helpful and attentive',
-        voiceId: 'b0e6b5c1-3100-44d5-8578-9015aa3023ae',
-        tools: ['switchAgent'],
-        description: 'central orchestrator'
-    }
-};
+// Define tool interfaces for better typing
+export interface ToolDefinition {
+    toolName: string;
+}
 
-// Base tool definitions that are always available
-export const baseTools = [
+export interface TemporaryToolDefinition {
+    temporaryTool: {
+        modelToolName: string;
+        description: string;
+        dynamicParameters: {
+            name: string;
+            location: string;
+            schema: {
+                type: string;
+                description: string;
+            };
+            required: boolean;
+        }[];
+        client: Record<string, unknown>;
+    };
+}
+
+export type ToolConfig = ToolDefinition | TemporaryToolDefinition;
+
+// System-wide default tools available to all agents
+export const baseTools: ToolConfig[] = [
     {
         toolName: "hangUp"
     },
     {
         temporaryTool: {
             modelToolName: 'switchAgent',
-            description: 'Switch to a different agent personality. Use this tool when a user asks to speak to a different agent. NEVER emit text when doing this tool call.',
+            description: 'Switch to a different agent personality. Use this tool when a user asks to speak to a different agent.',
             dynamicParameters: [
                 {
                     name: 'agentName',
@@ -102,8 +110,8 @@ export const baseTools = [
     }
 ];
 
-// Agent-specific tool definitions
-export const agentTools = {
+// Agent-specific tool definitions, excluding the system-wide default tools
+export const agentTools: Record<AgentName, ToolConfig[]> = {
     Oliver: [
         {
             temporaryTool: {
@@ -223,32 +231,167 @@ export const agentTools = {
             }
         }
     ],
-    Hominio: []
+    Hominio: [] // Orchestrator only needs the base tools (switchAgent, hangUp)
 };
 
-// Define tool interfaces for better typing
-export interface ToolDefinition {
-    toolName: string;
+// Unified agent configurations with base system prompts
+export const agentConfigs: Record<AgentName, AgentConfig> = {
+    'Oliver': {
+        personality: 'professional and efficient',
+        voiceId: 'dcb65d6e-9a56-459e-bf6f-d97572e2fe64',
+        tools: ['createTodo', 'toggleTodo', 'updateTodo', 'removeTodo', 'filterTodos', 'switchAgent'],
+        description: 'specialized in todo creation and management',
+        baseSystemPrompt: `You are Oliver, a professional and efficient todo management specialist.
+
+You specialize in:
+- Creating new todo items with appropriate tags
+- Toggling todo completion status
+- Updating existing todos
+- Removing todos
+- Filtering todos by tags
+
+You should use your specialized tools to directly help users manage their tasks without unnecessary conversation.
+
+Be direct, efficient, and helpful in your responses, focusing on getting the job done well.`
+    },
+    'Hominio': {
+        personality: 'helpful and attentive',
+        voiceId: 'b0e6b5c1-3100-44d5-8578-9015aa3023ae',
+        tools: ['switchAgent'],
+        description: 'central orchestrator',
+        baseSystemPrompt: `You are Hominio, the central orchestrator for the todo app.
+
+As the orchestrator, your primary role is to:
+- Welcome users to the Hominio todo app
+- Direct users to Oliver for specific todo management tasks
+- Explain the capabilities of the app
+- Answer general questions
+
+You should NOT try to directly handle todo creation, updating, or management yourself.
+Instead, use the switchAgent tool to direct users to Oliver when they need task management help.`
+    }
+};
+
+/**
+ * Build a complete system prompt for an agent by combining:
+ * 1. Their base system prompt from config
+ * 2. Dynamic tool information
+ * 3. Common instructions
+ */
+export function buildSystemPrompt(agentName: AgentName): string {
+    const agent = agentConfigs[agentName];
+
+    // Get tools description
+    let toolsDescription = '';
+    if (agentName === 'Oliver') {
+        toolsDescription = `
+1. createTodo - Creates a new todo item
+   Parameters:
+     - todoText: string (REQUIRED) - The text content of the todo to create
+     - tags: string (REQUIRED) - Comma-separated list of tags (e.g. "work,home,urgent")
+   When to use: Whenever a user asks to create, add, or make a new task/todo
+   Example usage: createTodo({"todoText": "buy groceries", "tags": "shopping,errands"})
+
+2. toggleTodo - Toggles a todo's completion status
+   Parameters:
+     - todoText: string (REQUIRED) - Text to search for in todos
+   When to use: Whenever a user asks to mark, toggle, complete, or finish a task
+   Example usage: toggleTodo({"todoText": "groceries"})
+   
+3. removeTodo - Deletes a todo from the list
+   Parameters:
+     - todoText: string (REQUIRED) - Text to search for in todos
+   When to use: Whenever a user asks to delete, remove, or erase a task
+   Example usage: removeTodo({"todoText": "groceries"})
+
+4. updateTodo - Updates a todo's text or tags
+   Parameters:
+     - todoText: string (REQUIRED) - Current text to search for
+     - newText: string (REQUIRED) - The new text content for the todo
+     - tags: string (OPTIONAL) - Comma-separated list of new tags
+   When to use: Whenever a user asks to edit, update, modify, or change an existing todo
+   Example usage: updateTodo({"todoText": "buy milk", "newText": "buy almond milk", "tags": "shopping,health"})
+
+5. filterTodos - Filters todos by tag
+   Parameters:
+     - tag: string (REQUIRED) - The tag to filter by, or "all" to show all todos
+   When to use: Whenever a user asks to filter, show, or display todos with specific tags
+   Example usage: filterTodos({"tag": "shopping"}) or filterTodos({"tag": "all"})`;
+    }
+
+    // Always add switchAgent tool description
+    toolsDescription += `
+${agentName === 'Hominio' ? '1' : '6'}. switchAgent - Switch to a different personality
+   Parameters:
+     - agentName: string (REQUIRED) - The name of the agent to switch to
+   When to use: Whenever a user asks to speak to a different agent or assistant
+   Example usage: switchAgent({"agentName": "Oliver"})`;
+
+    // Common instructions for both agents
+    const commonInstructions = `
+Available Agents:
+- Oliver: Professional and efficient todo management specialist
+- Hominio: Helpful central orchestrator
+
+IMPORTANT INSTRUCTIONS:
+1. You MUST use these tools directly without asking for confirmation
+2. Call the appropriate tool as soon as a user requests to create, toggle, delete, update, or filter todos
+3. Execute the tool when needed WITHOUT typing out the function in your response
+4. AFTER the tool executes, respond with text confirming what you did
+5. DO NOT tell the user "I'll use the tool" - just USE it directly
+6. ALWAYS add tags to todos automatically based on the content:
+   - For time-sensitive items, add "urgent" or "important"
+   - If the user specifies specific tags, use those instead of or in addition to your automatic tags
+7. When filtering todos, use the exact tag the user mentions or "all" to show all todos
+8. When a user asks for todo management help, use the switchAgent tool to switch to Oliver
+9. As Hominio, direct users to Oliver for todo management tasks
+10. As Oliver, handle all todo operations directly
+
+Be friendly, concise, and helpful. Keep responses under 3 sentences when possible.`;
+
+    // Combine all parts
+    return `${agent.baseSystemPrompt}
+
+You have access to the following tools that you MUST use when relevant:
+${toolsDescription}
+
+${commonInstructions}`;
 }
 
-export interface TemporaryToolDefinition {
-    temporaryTool: {
-        modelToolName: string;
-        description: string;
-        dynamicParameters: {
-            name: string;
-            location: string;
-            schema: {
-                type: string;
-                description: string;
-            };
-            required: boolean;
-        }[];
-        client: Record<string, unknown>;
-    };
+// Define call configuration types
+export interface CallConfiguration {
+    systemPrompt: string;
+    model: string;
+    voice: string;
+    languageHint: string;
+    temperature: number;
+    maxDuration?: string;
+    timeExceededMessage?: string;
+    firstSpeaker?: string;
+    // Other fields that can be changed with new stages
 }
 
-export type ToolConfig = ToolDefinition | TemporaryToolDefinition;
+// Default call configurations for the application
+export const defaultCallConfig: CallConfiguration = {
+    systemPrompt: buildSystemPrompt('Hominio'), // Start with Hominio as the default
+    model: 'fixie-ai/ultravox-70B',
+    voice: agentConfigs.Hominio.voiceId,
+    languageHint: 'en',
+    temperature: 0.7,
+    firstSpeaker: 'FIRST_SPEAKER_USER' // Corrected enum value for firstSpeaker
+};
+
+// Helper function to get a call config for a specific agent
+export function getAgentCallConfig(agentName: AgentName): CallConfiguration {
+    // Start with the default config
+    const config = { ...defaultCallConfig };
+
+    // Apply agent-specific configurations
+    config.voice = agentConfigs[agentName].voiceId;
+    config.systemPrompt = buildSystemPrompt(agentName);
+
+    return config;
+}
 
 // Helper function to create stage change data for an agent
 export function createAgentStageChangeData(agentName: AgentName): {
@@ -263,52 +406,19 @@ export function createAgentStageChangeData(agentName: AgentName): {
     // Get agent configuration
     const agent = agentConfigs[normalizedName];
 
-    // Get the specialized tools for this agent
-    const toolsDescription = agent.tools.filter(t => t !== 'switchAgent').join(', ');
+    // Build the system prompt with all needed components
+    const systemPrompt = buildSystemPrompt(normalizedName);
 
-    // Create personalized system prompt for the agent
-    const systemPrompt = `You are now ${normalizedName}, a friendly assistant for the Hominio todo app. 
-Your personality is more ${agent.personality}. 
-You are ${agent.description}.
-
-Your specialized tools are: ${toolsDescription || 'None'}. 
-You should always use the switchAgent tool to redirect users to the appropriate specialist when they need help outside your expertise.
-
-Guidelines based on your role:
-- Oliver: Handles all todo operations including creation, updating, deletion, and filtering
-- Hominio: Central orchestrator who directs users to Oliver for todo management tasks
-
-Continue helping the user with their todo management tasks using your available tools.
-
-Remember: You are ${normalizedName} now. Respond in a ${agent.personality} manner consistent with your character.`;
+    // Combine base tools with agent-specific tools if any
+    const selectedTools = [
+        ...baseTools,
+        ...(normalizedName in agentTools ? agentTools[normalizedName] : [])
+    ];
 
     return {
         systemPrompt,
         voice: agent.voiceId,
         toolResultText: `I'm now switching you to ${normalizedName}...`,
-        selectedTools: [
-            { toolName: 'hangUp' },
-            {
-                temporaryTool: {
-                    modelToolName: 'switchAgent',
-                    description:
-                        'Switch to a different agent personality. Use this tool when a user asks to speak to a different agent.',
-                    dynamicParameters: [
-                        {
-                            name: 'agentName',
-                            location: 'PARAMETER_LOCATION_BODY',
-                            schema: {
-                                type: 'string',
-                                description: 'The name of the agent to switch to'
-                            },
-                            required: true
-                        }
-                    ],
-                    client: {}
-                }
-            },
-            // Add agent-specific tools
-            ...(normalizedName in agentTools ? agentTools[normalizedName] : [])
-        ]
+        selectedTools
     };
 } 
