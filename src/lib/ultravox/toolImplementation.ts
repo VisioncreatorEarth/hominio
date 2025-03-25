@@ -38,18 +38,10 @@ type AgentConfig = {
 };
 
 // Define valid agent names
-type AgentName = 'Mark' | 'Emily' | 'Oliver' | 'Hominio' | 'Rajesh';
+type AgentName = 'Oliver' | 'Hominio';
 
 // Agent configuration with personality traits and voice IDs
 const agentConfig: Record<AgentName, AgentConfig> = {
-    'Mark': {
-        personality: 'enthusiastic and playful',
-        voiceId: '91fa9bcf-93c8-467c-8b29-973720e3f167'
-    },
-    'Emily': {
-        personality: 'calm and methodical',
-        voiceId: '87691b77-0174-4808-b73c-30000b334e14'
-    },
     'Oliver': {
         personality: 'professional and efficient',
         voiceId: 'dcb65d6e-9a56-459e-bf6f-d97572e2fe64'
@@ -57,10 +49,6 @@ const agentConfig: Record<AgentName, AgentConfig> = {
     'Hominio': {
         personality: 'helpful and attentive',
         voiceId: 'b0e6b5c1-3100-44d5-8578-9015aa3023ae' // Default Jessica voice
-    },
-    'Rajesh': {
-        personality: 'patient and detail-oriented',
-        voiceId: 'a0df06e1-d90a-444a-906a-b9c873796f4e' // Indian voice
     }
 };
 
@@ -99,25 +87,17 @@ export function registerHominionTools(session: UltravoxSessionInterface): void {
             const { agentName = 'Hominio' } = (params as SwitchAgentParams) || {};
             console.log(`🧩 TOOL CALLED: switchAgent with params:`, params);
 
-            // Map legacy names to new names
+            // Normalize agent name
             let normalizedName: AgentName = 'Hominio';
-
-            // Convert input to normalized name
-            if (agentName.toLowerCase() === 'ali') {
-                normalizedName = 'Mark';
-            } else if (agentName.toLowerCase() === 'sam') {
-                normalizedName = 'Emily';
-            } else if (agentName.toLowerCase() === 'taylor') {
+            if (agentName === 'Oliver') {
                 normalizedName = 'Oliver';
-            } else if (agentName === 'Mark' || agentName === 'Emily' || agentName === 'Oliver') {
-                normalizedName = agentName as AgentName;
             }
 
             // Get agent configuration
             const agent = agentConfig[normalizedName];
             console.log(`🧩 AGENT CONFIG:`, agent);
 
-            // Update the current agent in the store - important for UI updates
+            // Update the current agent in the store
             currentAgent.set(normalizedName);
             console.log(`🧩 Updated currentAgent store to: ${normalizedName}`);
 
@@ -138,8 +118,7 @@ Remember: You are ${normalizedName} now. Respond in a ${agent.personality} manne
             const agentSpecificTools = agentTools[normalizedName as keyof typeof agentTools] || [];
             console.log(`🧩 Agent-specific tools:`, agentSpecificTools);
 
-            // CRITICAL: Format tool result according to error message:
-            // "Client tool result must be a string or an object with string 'result' and 'responseType' properties"
+            // Format tool result
             const stageChangeData = {
                 systemPrompt: systemPrompt,
                 voice: agent.voiceId,
@@ -158,7 +137,7 @@ Remember: You are ${normalizedName} now. Respond in a ${agent.personality} manne
                                     location: 'PARAMETER_LOCATION_BODY',
                                     schema: {
                                         type: 'string',
-                                        description: 'The name of the agent to switch to (e.g. "Mark", "Oliver", "Rajesh", "Hominio")'
+                                        description: 'The name of the agent to switch to (e.g. "Oliver", "Hominio")'
                                     },
                                     required: true
                                 }
@@ -174,8 +153,6 @@ Remember: You are ${normalizedName} now. Respond in a ${agent.personality} manne
                 responseType: 'new-stage',
                 result: JSON.stringify(stageChangeData)
             };
-
-            console.log('🚨 FIXED STAGE CHANGE RESPONSE (SERVER):', JSON.stringify(toolResult, null, 2));
 
             return toolResult;
         } catch (error) {
@@ -200,15 +177,6 @@ export async function switchAgent(params: { agentName?: string }): Promise<Respo
         // Normalize agent name
         let normalizedName = (params.agentName || 'Hominio') as AgentName;
 
-        // Convert aliases/variations to standard names
-        if (normalizedName.toLowerCase() === 'ali') {
-            normalizedName = 'Mark';
-        } else if (normalizedName.toLowerCase() === 'sam') {
-            normalizedName = 'Oliver';
-        } else if (normalizedName.toLowerCase().includes('tech') || normalizedName.toLowerCase().includes('support')) {
-            normalizedName = 'Rajesh';
-        }
-
         // Make sure we have a valid enum value
         if (!(normalizedName in agentConfig)) {
             normalizedName = 'Hominio';
@@ -222,17 +190,13 @@ export async function switchAgent(params: { agentName?: string }): Promise<Respo
 
         // Create agent-specific descriptions
         const agentDescriptions = {
-            'Mark': 'specialized in deletion, filtering, and list management',
-            'Oliver': 'specialized in todo creation and management',
-            'Rajesh': 'technical support specialist who helps with app-related issues',
+            'Oliver': 'specialized in all todo operations including creation, management, filtering, and deletion',
             'Hominio': 'central orchestrator'
         };
 
         // Create specialized tool descriptions
         const toolDescriptions = {
-            'Mark': 'removeTodo, filterTodos, createList, switchList',
-            'Oliver': 'createTodo, toggleTodo, updateTodo',
-            'Rajesh': '',
+            'Oliver': 'createTodo, toggleTodo, updateTodo, removeTodo, filterTodos',
             'Hominio': ''
         };
 
@@ -245,10 +209,8 @@ Your specialized tools are: ${toolDescriptions[normalizedName as keyof typeof to
 You should always use the switchAgent tool to redirect users to the appropriate specialist when they need help outside your expertise.
 
 Guidelines based on your role:
-- Mark: Handles deletion tasks, filtering todos, and managing todo lists
-- Oliver: Handles creating, toggling, and updating todos
-- Rajesh: Technical support specialist who helps with app-related issues
-- Hominio: Central orchestrator who directs users to the appropriate specialist
+- Oliver: Handles all todo operations including creation, updating, deletion, and filtering
+- Hominio: Central orchestrator who directs users to Oliver for todo management tasks
 
 Continue helping the user with their todo management tasks using your available tools.
 

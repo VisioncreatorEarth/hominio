@@ -110,7 +110,7 @@ const tools = [
                     location: 'PARAMETER_LOCATION_BODY',
                     schema: {
                         type: 'string',
-                        description: 'The name of the agent to switch to (e.g. "Mark", "Oliver", "Rajesh", "Hominio")'
+                        description: 'The name of the agent to switch to (e.g. "Oliver", "Hominio")'
                     },
                     required: true
                 }
@@ -203,9 +203,7 @@ export const agentTools = {
                 ],
                 client: {}
             }
-        }
-    ],
-    Mark: [
+        },
         {
             temporaryTool: {
                 modelToolName: 'removeTodo',
@@ -243,44 +241,7 @@ export const agentTools = {
             }
         }
     ],
-    Rajesh: [
-        {
-            temporaryTool: {
-                modelToolName: 'createList',
-                description: 'Create a new todo list. Use this tool when a user wants to create a new list. NEVER emit text when doing this tool call.',
-                dynamicParameters: [
-                    {
-                        name: 'listName',
-                        location: 'PARAMETER_LOCATION_BODY',
-                        schema: {
-                            type: 'string',
-                            description: 'The name to give to the new list'
-                        },
-                        required: true
-                    }
-                ],
-                client: {}
-            }
-        },
-        {
-            temporaryTool: {
-                modelToolName: 'switchList',
-                description: 'Switch to a different todo list. Use this tool when a user wants to change lists. NEVER emit text when doing this tool call.',
-                dynamicParameters: [
-                    {
-                        name: 'listName',
-                        location: 'PARAMETER_LOCATION_BODY',
-                        schema: {
-                            type: 'string',
-                            description: 'The name of the list to switch to'
-                        },
-                        required: true
-                    }
-                ],
-                client: {}
-            }
-        }
-    ]
+    Hominio: []
 };
 
 // Create a call with Ultravox API
