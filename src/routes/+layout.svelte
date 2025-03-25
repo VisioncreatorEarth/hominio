@@ -4,18 +4,9 @@
 	import { loroStorage } from '$lib/stores/loroStorage';
 	import { loroPGLiteStorage } from '$lib/stores/loroPGLiteStorage';
 	import { LoroDoc } from 'loro-crdt';
-	import { generateUUID, generateShortUUID } from '$lib/utils/uuid';
-	import {
-		startCall,
-		endCall,
-		toggleMute,
-		UltravoxSessionStatus,
-		Role,
-		type Transcript
-	} from '$lib/ultravox/callFunctions';
+	import { generateShortUUID } from '$lib/utils/uuid';
+	import { startCall, endCall, type Transcript } from '$lib/ultravox/callFunctions';
 	import CallInterface from '$lib/components/CallInterface.svelte';
-	import { currentAgent } from '$lib/ultravox/toolImplementation';
-	import { agentTools } from '$lib/ultravox/callFunctions';
 
 	// Disable Server-Side Rendering since Tauri is client-only
 	export const ssr = false;
@@ -74,8 +65,7 @@
 	// Handle starting a call
 	async function handleStartCall() {
 		try {
-			const callConfig = {
-				systemPrompt: `You are Hominio, a personal assistant for the user.
+			const systemPrompt = `You are Hominio, a personal assistant for the user.
 
 You have access to the following tools that you MUST use when relevant:
 
@@ -136,7 +126,10 @@ IMPORTANT INSTRUCTIONS:
 9. As Hominio, direct users to Oliver for todo management tasks
 10. As Oliver, handle all todo operations directly
 
-Be friendly, concise, and helpful. Keep responses under 3 sentences when possible.`,
+Be friendly, concise, and helpful. Keep responses under 3 sentences when possible.`;
+
+			const callConfig = {
+				systemPrompt: systemPrompt,
 				model: 'fixie-ai/ultravox-70B',
 				voice: 'b0e6b5c1-3100-44d5-8578-9015aa3023ae', // Jessica voice ID
 				languageHint: 'en', // English language hint

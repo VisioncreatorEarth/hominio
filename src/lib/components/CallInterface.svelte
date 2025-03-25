@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import type { Transcript } from '$lib/ultravox/callFunctions';
-	import { currentAgent } from '$lib/ultravox/toolImplementation';
+	import { currentAgent, type AgentName } from '$lib/ultravox/agents';
 	import { fade } from 'svelte/transition';
 
 	let {
@@ -19,7 +19,7 @@
 	// State for transcript visibility
 	let isTranscriptVisible = $state(false);
 	let transcriptContainer: HTMLDivElement;
-	let displayedAgent = $state($currentAgent);
+	let displayedAgent = $state<AgentName>($currentAgent);
 	let isInterfaceVisible = $state(true);
 
 	// Close the entire interface
@@ -101,8 +101,9 @@
 
 					if (agentMatch && agentMatch[1]) {
 						console.log(`🎭 Detected new agent from stage change: ${agentMatch[1]}`);
-						// Update displayed agent
-						displayedAgent = agentMatch[1];
+						// Update displayed agent - cast to AgentName
+						const newAgent = agentMatch[1] as AgentName;
+						displayedAgent = newAgent;
 					}
 				}
 			});

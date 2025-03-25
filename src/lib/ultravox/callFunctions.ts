@@ -1,5 +1,6 @@
 import { browser } from '$app/environment';
 import type { UltravoxSession as UVSession, UltravoxSessionStatus as UVStatus, Transcript as UVTranscript, ClientToolImplementation } from 'ultravox-client';
+import { baseTools, currentAgent, type AgentName } from './agents';
 
 // Define types for our Ultravox integration
 export type CallConfig = {
@@ -95,162 +96,13 @@ export function forceUnmuteSpeaker(): void {
     }
 }
 
-// Define tools configuration following askHominio.ts pattern
-const tools = [
-    {
-        toolName: "hangUp"
-    },
-    {
-        temporaryTool: {
-            modelToolName: 'switchAgent',
-            description: 'Switch to a different agent personality. Use this tool when a user asks to speak to a different agent. NEVER emit text when doing this tool call.',
-            dynamicParameters: [
-                {
-                    name: 'agentName',
-                    location: 'PARAMETER_LOCATION_BODY',
-                    schema: {
-                        type: 'string',
-                        description: 'The name of the agent to switch to (e.g. "Oliver", "Hominio")'
-                    },
-                    required: true
-                }
-            ],
-            client: {}
-        }
-    }
-];
-
-// Define the agent-specific tools that will be added during stage changes
-export const agentTools = {
-    Oliver: [
-        {
-            temporaryTool: {
-                modelToolName: 'createTodo',
-                description: 'Create a new todo item. Use this tool when a todo needs to be created. NEVER emit text when doing this tool call.',
-                dynamicParameters: [
-                    {
-                        name: 'todoText',
-                        location: 'PARAMETER_LOCATION_BODY',
-                        schema: {
-                            type: 'string',
-                            description: 'The text content of the todo task to create'
-                        },
-                        required: true
-                    },
-                    {
-                        name: 'tags',
-                        location: 'PARAMETER_LOCATION_BODY',
-                        schema: {
-                            type: 'string',
-                            description: 'Optional comma-separated list of tags (e.g. "work,urgent,home")'
-                        },
-                        required: false
-                    }
-                ],
-                client: {}
-            }
-        },
-        {
-            temporaryTool: {
-                modelToolName: 'toggleTodo',
-                description: 'Toggle the completion status of a todo. Use this tool when a todo needs to be marked as complete or incomplete. NEVER emit text when doing this tool call.',
-                dynamicParameters: [
-                    {
-                        name: 'todoText',
-                        location: 'PARAMETER_LOCATION_BODY',
-                        schema: {
-                            type: 'string',
-                            description: 'Text content to search for in todo items'
-                        },
-                        required: true
-                    }
-                ],
-                client: {}
-            }
-        },
-        {
-            temporaryTool: {
-                modelToolName: 'updateTodo',
-                description: 'Update a todo\'s text or tags. Use this tool when a todo needs to be edited. NEVER emit text when doing this tool call.',
-                dynamicParameters: [
-                    {
-                        name: 'todoText',
-                        location: 'PARAMETER_LOCATION_BODY',
-                        schema: {
-                            type: 'string',
-                            description: 'Current text content to search for'
-                        },
-                        required: true
-                    },
-                    {
-                        name: 'newText',
-                        location: 'PARAMETER_LOCATION_BODY',
-                        schema: {
-                            type: 'string',
-                            description: 'The new text content for the todo'
-                        },
-                        required: true
-                    },
-                    {
-                        name: 'tags',
-                        location: 'PARAMETER_LOCATION_BODY',
-                        schema: {
-                            type: 'string',
-                            description: 'Optional comma-separated list of tags'
-                        },
-                        required: false
-                    }
-                ],
-                client: {}
-            }
-        },
-        {
-            temporaryTool: {
-                modelToolName: 'removeTodo',
-                description: 'Delete a todo from the list. Use this tool when a todo needs to be removed. NEVER emit text when doing this tool call.',
-                dynamicParameters: [
-                    {
-                        name: 'todoText',
-                        location: 'PARAMETER_LOCATION_BODY',
-                        schema: {
-                            type: 'string',
-                            description: 'Text content to search for in todo items'
-                        },
-                        required: true
-                    }
-                ],
-                client: {}
-            }
-        },
-        {
-            temporaryTool: {
-                modelToolName: 'filterTodos',
-                description: 'Filter todos by tag. Use this tool when a user wants to view todos with specific tags. NEVER emit text when doing this tool call.',
-                dynamicParameters: [
-                    {
-                        name: 'tag',
-                        location: 'PARAMETER_LOCATION_BODY',
-                        schema: {
-                            type: 'string',
-                            description: 'The tag to filter by, or "all" to show all todos'
-                        },
-                        required: true
-                    }
-                ],
-                client: {}
-            }
-        }
-    ],
-    Hominio: []
-};
-
 // Create a call with Ultravox API
 async function createCall(callConfig: CallConfig): Promise<JoinUrlResponse> {
     try {
         // Add tools configuration to the call request
         const requestConfig = {
             ...callConfig,
-            selectedTools: tools
+            selectedTools: baseTools
         };
 
         const response = await fetch('/callHominio', {
@@ -375,10 +227,6 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
 
                 // Update current agent if there's a system prompt change
                 if (stageChangeEvent.detail.systemPrompt) {
-                    // Import dynamically to avoid circular dependencies
-                    const { currentAgent } = await import('./toolImplementation');
-                    const { get } = await import('svelte/store');
-
                     // Try to extract agent name from system prompt
                     const systemPrompt = stageChangeEvent.detail.systemPrompt;
                     const agentMatch = systemPrompt.match(/You are now ([A-Za-z]+),/i);
@@ -388,12 +236,18 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
                         console.log(`🌟 Updating current agent to: ${newAgentName}`);
 
                         // Only update if it's changed
-                        if (browser && get(currentAgent) !== newAgentName) {
-                            currentAgent.set(newAgentName);
-                            console.log(`🌟 Current agent updated to: ${newAgentName}`);
+                        if (browser) {
+                            // Using the imported currentAgent store
+                            const { get } = await import('svelte/store');
+                            if (get(currentAgent) !== newAgentName) {
+                                // Cast to AgentName type for type safety
+                                const validAgentName = newAgentName as AgentName;
+                                currentAgent.set(validAgentName);
+                                console.log(`🌟 Current agent updated to: ${newAgentName}`);
 
-                            // No need to re-register tools - they are now provided directly in the stage change data
-                            console.log('🌟 Tools provided directly in stage change data, no manual re-registration needed');
+                                // No need to re-register tools - they are now provided directly in the stage change data
+                                console.log('🌟 Tools provided directly in stage change data, no manual re-registration needed');
+                            }
                         }
                     }
                 }

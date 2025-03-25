@@ -1,56 +1,10 @@
-import { writable } from 'svelte/store';
-import { agentTools } from './callFunctions';
+import { agentConfigs, createAgentStageChangeData, type AgentName, type ToolResponse, currentAgent, currentFilter } from './agents';
 
-// Create a store for the current filter
-export const currentFilter = writable('all');
-
-// Create a store for the current agent
-export const currentAgent = writable('Hominio');
-
-// Define types for Ultravox session and tool parameters
+// Define types for Ultravox session
 interface UltravoxSessionInterface {
     registerTool: (name: string, callback: (params: unknown) => Promise<ToolResponse>) => void;
     registerToolImplementation?: (name: string, callback: (params: unknown) => string) => void;
 }
-
-type FilterParams = {
-    tag?: string;
-};
-
-type SwitchAgentParams = {
-    agentName?: string;
-};
-
-type ToolResponse = {
-    success?: boolean;
-    message?: string;
-    error?: string;
-    responseType?: string;
-    systemPrompt?: string;
-    voice?: string;
-    toolResultText?: string;
-};
-
-// Define agent config type
-type AgentConfig = {
-    personality: string;
-    voiceId: string;
-};
-
-// Define valid agent names
-type AgentName = 'Oliver' | 'Hominio';
-
-// Agent configuration with personality traits and voice IDs
-const agentConfig: Record<AgentName, AgentConfig> = {
-    'Oliver': {
-        personality: 'professional and efficient',
-        voiceId: 'dcb65d6e-9a56-459e-bf6f-d97572e2fe64'
-    },
-    'Hominio': {
-        personality: 'helpful and attentive',
-        voiceId: 'b0e6b5c1-3100-44d5-8578-9015aa3023ae' // Default Jessica voice
-    }
-};
 
 // Function to register all Hominio tools with Ultravox
 export function registerHominionTools(session: UltravoxSessionInterface): void {
@@ -64,7 +18,8 @@ export function registerHominionTools(session: UltravoxSessionInterface): void {
     // Register the filterTodos tool
     session.registerTool('filterTodos', async (params: unknown) => {
         try {
-            const { tag = 'all' } = (params as FilterParams) || {};
+            // Use the tag parameter, defaulting to 'all'
+            const { tag = 'all' } = (params as { tag?: string }) || {};
             console.log(`Filtering todos by tag: ${tag}`);
 
             // Update the current filter in the store
@@ -84,7 +39,7 @@ export function registerHominionTools(session: UltravoxSessionInterface): void {
     // Register the switchAgent tool
     session.registerTool('switchAgent', async (params: unknown) => {
         try {
-            const { agentName = 'Hominio' } = (params as SwitchAgentParams) || {};
+            const { agentName = 'Hominio' } = (params as { agentName?: string }) || {};
             console.log(`🧩 TOOL CALLED: switchAgent with params:`, params);
 
             // Normalize agent name
@@ -92,10 +47,6 @@ export function registerHominionTools(session: UltravoxSessionInterface): void {
             if (agentName === 'Oliver') {
                 normalizedName = 'Oliver';
             }
-
-            // Get agent configuration
-            const agent = agentConfig[normalizedName];
-            console.log(`🧩 AGENT CONFIG:`, agent);
 
             // Update the current agent in the store
             currentAgent.set(normalizedName);
@@ -106,48 +57,8 @@ export function registerHominionTools(session: UltravoxSessionInterface): void {
                 (window as Window & typeof globalThis & { currentAgentName: string }).currentAgentName = normalizedName;
             }
 
-            // Determine the agent-specific system prompt
-            const systemPrompt = `You are now ${normalizedName}, a friendly assistant for the Hominio todo app. 
-Your personality is more ${agent.personality}. 
-
-Continue helping the user with their todo management tasks using the available tools.
-
-Remember: You are ${normalizedName} now. Respond in a ${agent.personality} manner consistent with your character.`;
-
-            // Get agent-specific tools
-            const agentSpecificTools = agentTools[normalizedName as keyof typeof agentTools] || [];
-            console.log(`🧩 Agent-specific tools:`, agentSpecificTools);
-
-            // Format tool result
-            const stageChangeData = {
-                systemPrompt: systemPrompt,
-                voice: agent.voiceId,
-                toolResultText: `I'm now switching you to ${normalizedName}...`,
-                selectedTools: [
-                    {
-                        toolName: "hangUp"
-                    },
-                    {
-                        temporaryTool: {
-                            modelToolName: 'switchAgent',
-                            description: 'Switch to a different agent personality. Use this tool when a user asks to speak to a different agent. NEVER emit text when doing this tool call.',
-                            dynamicParameters: [
-                                {
-                                    name: 'agentName',
-                                    location: 'PARAMETER_LOCATION_BODY',
-                                    schema: {
-                                        type: 'string',
-                                        description: 'The name of the agent to switch to (e.g. "Oliver", "Hominio")'
-                                    },
-                                    required: true
-                                }
-                            ],
-                            client: {}
-                        }
-                    },
-                    ...agentSpecificTools
-                ]
-            };
+            // Use the centralized function to create stage change data
+            const stageChangeData = createAgentStageChangeData(normalizedName);
 
             const toolResult = {
                 responseType: 'new-stage',
@@ -178,76 +89,15 @@ export async function switchAgent(params: { agentName?: string }): Promise<Respo
         let normalizedName = (params.agentName || 'Hominio') as AgentName;
 
         // Make sure we have a valid enum value
-        if (!(normalizedName in agentConfig)) {
+        if (!(normalizedName in agentConfigs)) {
             normalizedName = 'Hominio';
         }
 
         // Update the current agent in the store
         currentAgent.set(normalizedName);
 
-        // Get agent config
-        const agent = agentConfig[normalizedName];
-
-        // Create agent-specific descriptions
-        const agentDescriptions = {
-            'Oliver': 'specialized in all todo operations including creation, management, filtering, and deletion',
-            'Hominio': 'central orchestrator'
-        };
-
-        // Create specialized tool descriptions
-        const toolDescriptions = {
-            'Oliver': 'createTodo, toggleTodo, updateTodo, removeTodo, filterTodos',
-            'Hominio': ''
-        };
-
-        // Create a system prompt for the new agent
-        const systemPrompt = `You are now ${normalizedName}, a friendly assistant for the Hominio todo app. 
-Your personality is more ${agent.personality}. 
-You are ${agentDescriptions[normalizedName as keyof typeof agentDescriptions]}.
-
-Your specialized tools are: ${toolDescriptions[normalizedName as keyof typeof toolDescriptions] || 'None'}. 
-You should always use the switchAgent tool to redirect users to the appropriate specialist when they need help outside your expertise.
-
-Guidelines based on your role:
-- Oliver: Handles all todo operations including creation, updating, deletion, and filtering
-- Hominio: Central orchestrator who directs users to Oliver for todo management tasks
-
-Continue helping the user with their todo management tasks using your available tools.
-
-Remember: You are ${normalizedName} now. Respond in a ${agent.personality} manner consistent with your character.`;
-
-        // Get agent-specific tools
-        const agentSpecificTools = agentTools[normalizedName as keyof typeof agentTools] || [];
-
-        const stageChangeData = {
-            systemPrompt,
-            voice: agent.voiceId,
-            toolResultText: `I'm now switching you to ${normalizedName}...`,
-            selectedTools: [
-                {
-                    toolName: "hangUp"
-                },
-                {
-                    temporaryTool: {
-                        modelToolName: 'switchAgent',
-                        description: 'Switch to a different agent personality. Use this tool when a user asks to speak to a different agent.',
-                        dynamicParameters: [
-                            {
-                                name: 'agentName',
-                                location: 'PARAMETER_LOCATION_BODY',
-                                schema: {
-                                    type: 'string',
-                                    description: 'The name of the agent to switch to (e.g. "Mark", "Oliver", "Rajesh", "Hominio")'
-                                },
-                                required: true
-                            }
-                        ],
-                        client: {}
-                    }
-                },
-                ...agentSpecificTools
-            ]
-        };
+        // Use the centralized function to create stage change data
+        const stageChangeData = createAgentStageChangeData(normalizedName);
 
         return new Response(JSON.stringify(stageChangeData), {
             headers: { 'Content-Type': 'application/json' }

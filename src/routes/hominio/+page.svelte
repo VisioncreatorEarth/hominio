@@ -1,22 +1,12 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { LoroDoc, type Value } from 'loro-crdt';
-	import type { ClientToolImplementation } from 'ultravox-client';
-	import { fade } from 'svelte/transition';
-	import { currentAgent } from '$lib/ultravox/toolImplementation';
-	import { agentTools } from '$lib/ultravox/callFunctions';
 	import {
-		Role,
-		UltravoxSessionStatus,
-		startCall,
-		endCall,
-		toggleMute,
-		forceUnmuteSpeaker
-	} from '$lib/ultravox/callFunctions';
-
-	// Initialize callStatus with the provided prop or default to 'off'
-	// Since we don't have access to parent callStatus directly, we'll use a local state
-	let callStatus = $state('off');
+		currentAgent,
+		agentConfigs,
+		createAgentStageChangeData,
+		type AgentName
+	} from '$lib/ultravox/agents';
 
 	// Define Todo interface
 	interface TodoItem {
@@ -36,11 +26,6 @@
 	let todoEntries = $state<[string, TodoItem][]>([]);
 	let newTodoText = $state('');
 	let newTodoTags = $state('');
-
-	// Add state variable for editing
-	let editingTodoId = $state<string | null>(null);
-	let editingTodoText = $state('');
-	let editingTodoTags = $state('');
 
 	// Create a simple store pattern for tool state
 	interface ToolState {
@@ -101,12 +86,6 @@
 		{
 			id: 'personal',
 			name: 'Personal List',
-			createdAt: Date.now(),
-			numTodos: 0
-		},
-		{
-			id: 'work',
-			name: 'Work List',
 			createdAt: Date.now(),
 			numTodos: 0
 		}
@@ -281,83 +260,9 @@
 		updateLoroDocuments();
 	}
 
-	// Toggle todo completion by clicking
-	function toggleTodo(id: string) {
-		toggleTodoById(id);
-	}
-
-	// Edit a todo function
-	function startEditTodo(id: string, todo: TodoItem) {
-		editingTodoId = id;
-		editingTodoText = todo.text;
-		editingTodoTags = todo.tags.join(', ');
-	}
-
-	// Save edit function
-	function saveEditTodo() {
-		if (editingTodoId && editingTodoText.trim()) {
-			const entries = [...todos.entries()];
-			const todoEntry = entries.find((entry) => entry[0] === editingTodoId);
-
-			if (todoEntry) {
-				const value = todoEntry[1] as unknown as TodoItem;
-
-				// Parse tags from comma-separated string
-				const tags = editingTodoTags
-					.split(',')
-					.map((tag) => tag.trim())
-					.filter((tag) => tag.length > 0);
-
-				todos.set(editingTodoId, {
-					...value,
-					text: editingTodoText.trim(),
-					tags
-				} as unknown as Value);
-
-				logToolActivity('edit', `Todo updated to "${editingTodoText.trim()}"`);
-				updateTodoEntries();
-			}
-		}
-
-		// Reset editing state
-		editingTodoId = null;
-		editingTodoText = '';
-		editingTodoTags = '';
-	}
-
-	// Cancel edit function
-	function cancelEditTodo() {
-		editingTodoId = null;
-		editingTodoText = '';
-		editingTodoTags = '';
-	}
-
-	// Improved delete todo function with logging
-	function deleteTodo(id: string) {
-		// Find the todo text before deleting for the log message
-		const entries = [...todos.entries()];
-		const todoEntry = entries.find((entry) => entry[0] === id);
-
-		if (todoEntry) {
-			const todo = todoEntry[1] as unknown as TodoItem;
-			todos.delete(id);
-			updateTodoEntries();
-			logToolActivity('delete', `Todo "${todo.text}" was removed`);
-		}
-	}
-
 	// Format date for display
 	function formatDate(timestamp: number): string {
 		return new Date(timestamp).toLocaleString();
-	}
-
-	// Handle form submission
-	function handleSubmit(event: Event) {
-		event.preventDefault();
-		if (newTodoText.trim()) {
-			const todoId = addTodo(newTodoText, newTodoTags);
-			logToolActivity('create', `Todo "${newTodoText}" created successfully`);
-		}
 	}
 
 	// Function to get unique tags from all todos
@@ -577,7 +482,6 @@
 						message: `Deleted todo: "${todo.text}"`
 					};
 
-					logToolActivity('delete', result.message, true);
 					return JSON.stringify(result);
 				}
 				// If multiple matches, return info about them
@@ -589,7 +493,6 @@
 						message: `Found multiple matching todos: ${todoNames}. Please be more specific.`
 					};
 
-					logToolActivity('delete', result.message, false);
 					return JSON.stringify(result);
 				}
 			}
@@ -600,7 +503,6 @@
 				message: 'Could not find a matching todo to delete. Try a different description.'
 			};
 
-			logToolActivity('delete', result.message, false);
 			return JSON.stringify(result);
 		} catch (error) {
 			console.error('Error in removeTodo tool:', error);
@@ -611,7 +513,6 @@
 				message: `Error deleting todo: ${errorMessage}`
 			};
 
-			logToolActivity('delete', result.message, false);
 			return JSON.stringify(result);
 		}
 	};
@@ -648,7 +549,6 @@
 						message: `Updated todo: "${newText || todo.text}"`
 					};
 
-					logToolActivity('edit', result.message, true);
 					return JSON.stringify(result);
 				}
 			}
@@ -683,7 +583,6 @@
 						message: `Updated todo from "${todo.text}" to "${newText}"`
 					};
 
-					logToolActivity('edit', result.message, true);
 					return JSON.stringify(result);
 				}
 				// If multiple matches, return info about them
@@ -695,7 +594,6 @@
 						message: `Found multiple matching todos: ${todoNames}. Please be more specific.`
 					};
 
-					logToolActivity('edit', result.message, false);
 					return JSON.stringify(result);
 				}
 			}
@@ -706,7 +604,6 @@
 				message: 'Could not find a matching todo to update. Try a different description.'
 			};
 
-			logToolActivity('edit', result.message, false);
 			return JSON.stringify(result);
 		} catch (error: unknown) {
 			console.error('Error in updateTodo tool:', error);
@@ -717,7 +614,6 @@
 				message: `Error updating todo: ${errorMessage}`
 			};
 
-			logToolActivity('edit', result.message, false);
 			return JSON.stringify(result);
 		}
 	};
@@ -737,7 +633,6 @@
 					success: true,
 					message: 'Showing all todos'
 				};
-				logToolActivity('filter', result.message, true);
 				return JSON.stringify(result);
 			}
 
@@ -761,7 +656,6 @@
 						success: true,
 						message: `Filtered todos by tag: "${matchingTag}"`
 					};
-					logToolActivity('filter', result.message, true);
 					return JSON.stringify(result);
 				} else {
 					console.log(`Tag not found: ${tag}`);
@@ -769,7 +663,6 @@
 						success: false,
 						message: `Tag "${tag}" not found. Available tags: ${allTags.length > 0 ? allTags.join(', ') : 'None'}`
 					};
-					logToolActivity('filter', result.message, false);
 					return JSON.stringify(result);
 				}
 			}
@@ -780,14 +673,12 @@
 					success: false,
 					message: `Available tags: ${allTags.join(', ')}`
 				};
-				logToolActivity('filter', result.message, false);
 				return JSON.stringify(result);
 			} else {
 				const result = {
 					success: false,
 					message: 'No tags available yet'
 				};
-				logToolActivity('filter', result.message, false);
 				return JSON.stringify(result);
 			}
 		} catch (error: unknown) {
@@ -799,146 +690,7 @@
 				message: `Error filtering todos: ${errorMessage}`
 			};
 
-			logToolActivity('filter', result.message, false);
 			return JSON.stringify(result);
-		}
-	};
-
-	// Add a tool implementation for creating a new list
-	const createListTool = (parameters: any) => {
-		console.log('Called createList tool with parameters:', parameters);
-		try {
-			const { listName } = parameters;
-			toolState.pendingAction = 'createList';
-
-			if (typeof listName === 'string' && listName.trim()) {
-				const newId = createLoroDocument(listName.trim());
-				if (newId) {
-					const result = {
-						success: true,
-						message: `Created new list: "${listName}"`
-					};
-					logToolActivity('createList', result.message, true);
-					return JSON.stringify(result);
-				}
-			}
-
-			const result = {
-				success: false,
-				message: 'Invalid list name provided'
-			};
-			logToolActivity('createList', result.message, false);
-			return JSON.stringify(result);
-		} catch (error: unknown) {
-			console.error('Error in createList tool:', error);
-			const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-
-			const result = {
-				success: false,
-				message: `Error creating list: ${errorMessage}`
-			};
-			logToolActivity('createList', result.message, false);
-			return JSON.stringify(result);
-		}
-	};
-
-	// Add a tool implementation for switching between lists
-	const switchListTool = (parameters: any) => {
-		console.log('Called switchList tool with parameters:', parameters);
-		try {
-			const { listName } = parameters;
-			toolState.pendingAction = 'switchList';
-
-			if (typeof listName === 'string' && listName.trim()) {
-				// Try to find a matching list (case insensitive)
-				const targetName = listName.trim().toLowerCase();
-				const matchingDoc = loroDocuments.find(
-					(doc) => doc.name.toLowerCase().includes(targetName) || doc.id.includes(targetName)
-				);
-
-				if (matchingDoc) {
-					switchToDocument(matchingDoc.id);
-					const result = {
-						success: true,
-						message: `Switched to "${matchingDoc.name}" list`
-					};
-					logToolActivity('switchList', result.message, true);
-					return JSON.stringify(result);
-				} else {
-					const listNames = loroDocuments.map((doc) => `"${doc.name}"`).join(', ');
-					const result = {
-						success: false,
-						message: `Couldn't find a list matching "${listName}". Available lists: ${listNames}`
-					};
-					logToolActivity('switchList', result.message, false);
-					return JSON.stringify(result);
-				}
-			}
-
-			const result = {
-				success: false,
-				message: 'Invalid list name provided'
-			};
-			logToolActivity('switchList', result.message, false);
-			return JSON.stringify(result);
-		} catch (error: unknown) {
-			console.error('Error in switchList tool:', error);
-			const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-
-			const result = {
-				success: false,
-				message: `Error switching lists: ${errorMessage}`
-			};
-			logToolActivity('switchList', result.message, false);
-			return JSON.stringify(result);
-		}
-	};
-
-	// Define tools that should be available for each agent
-	function getToolsForAgent(agentName: string): string[] {
-		// Base tools available to all agents
-		const baseTools = ['switchAgent'];
-
-		// Agent-specific tools
-		const agentTools: Record<string, string[]> = {
-			Hominio: [], // Orchestrator - needs only basic tools
-			Oliver: ['createTodo', 'toggleTodo', 'updateTodo'],
-			Mark: ['removeTodo', 'filterTodos'],
-			Rajesh: ['createList', 'switchList']
-		};
-
-		// Combine base tools with agent-specific tools
-		return [...baseTools, ...(agentTools[agentName] || [])];
-	}
-
-	// Configure agent personalities, voices, and specialized areas
-	const agentConfigs: Record<
-		string,
-		{
-			personality: string;
-			voiceId: string;
-			specialty: string;
-		}
-	> = {
-		Hominio: {
-			personality: 'orchestrator',
-			voiceId: 'shimmer',
-			specialty: 'directing calls to specialized agents'
-		},
-		Mark: {
-			personality: 'efficiency-focused',
-			voiceId: 'nova',
-			specialty: 'todo list management and deletion'
-		},
-		Oliver: {
-			personality: 'creative and supportive',
-			voiceId: 'alloy',
-			specialty: 'creating and updating todos'
-		},
-		Rajesh: {
-			personality: 'analytical and detail-oriented',
-			voiceId: 'fable',
-			specialty: 'list management and organization'
 		}
 	};
 
@@ -951,122 +703,22 @@
 			let normalizedName = agentName as string;
 
 			// Map legacy names to new names
-			if (agentName.toLowerCase() === 'ali') {
-				normalizedName = 'Mark';
-			} else if (agentName.toLowerCase() === 'sam') {
+			if (agentName.toLowerCase() === 'sam') {
 				normalizedName = 'Oliver';
-			} else if (
-				agentName.toLowerCase().includes('tech') ||
-				agentName.toLowerCase().includes('support')
-			) {
-				normalizedName = 'Rajesh';
 			}
 
 			console.log(`🔧 CLIENT: Switching to agent ${normalizedName}`);
 
-			// Define agent configurations with tool specializations
-			type AgentConfig = {
-				personality: string;
-				voiceId: string;
-				tools: string[];
-				description: string;
-			};
-
-			const agentConfigs: Record<string, AgentConfig> = {
-				Mark: {
-					personality: 'enthusiastic and playful',
-					voiceId: '91fa9bcf-93c8-467c-8b29-973720e3f167',
-					tools: ['removeTodo', 'filterTodos', 'createList', 'switchList', 'switchAgent'],
-					description: 'specialized in deletion, filtering, and list management'
-				},
-				Oliver: {
-					personality: 'professional and efficient',
-					voiceId: 'dcb65d6e-9a56-459e-bf6f-d97572e2fe64',
-					tools: ['createTodo', 'toggleTodo', 'updateTodo', 'switchAgent'],
-					description: 'specialized in todo creation and management'
-				},
-				Rajesh: {
-					personality: 'patient and detail-oriented',
-					voiceId: 'a0df06e1-d90a-444a-906a-b9c873796f4e',
-					tools: ['switchAgent'],
-					description: 'technical support specialist who can help with app issues'
-				},
-				Hominio: {
-					personality: 'helpful and attentive',
-					voiceId: 'b0e6b5c1-3100-44d5-8578-9015aa3023ae',
-					tools: ['switchAgent'],
-					description: 'central orchestrator'
-				}
-			};
-
-			// Get the agent config or default to Hominio
-			const agent = agentConfigs[normalizedName] || agentConfigs['Hominio'];
-
-			// Get the specialized tools for this agent
-			const toolsDescription = agent.tools.filter((t: string) => t !== 'switchAgent').join(', ');
+			// Normalize to a valid AgentName
+			const validAgentName =
+				normalizedName in agentConfigs ? (normalizedName as AgentName) : ('Hominio' as AgentName);
 
 			// Update the current agent in the store directly
-			console.log(`🔧 CLIENT: Updating currentAgent store to: ${normalizedName}`);
-			currentAgent.set(normalizedName);
+			console.log(`🔧 CLIENT: Updating currentAgent store to: ${validAgentName}`);
+			currentAgent.set(validAgentName);
 
-			// Create personalized system prompt for the agent
-			const systemPrompt = `You are now ${normalizedName}, a friendly assistant for the Hominio todo app. 
-Your personality is more ${agent.personality}. 
-You are ${agent.description}.
-
-Your specialized tools are: ${toolsDescription || 'None'}. 
-You should always use the switchAgent tool to redirect users to the appropriate specialist when they need help outside your expertise.
-
-Guidelines based on your role:
-- Mark: Handles deletion tasks, filtering todos, and managing todo lists
-- Oliver: Handles creating, toggling, and updating todos
-- Rajesh: Technical support specialist who helps with app-related issues
-- Hominio: Central orchestrator who directs users to the appropriate specialist
-
-Continue helping the user with their todo management tasks using your available tools.
-
-Remember: You are ${normalizedName} now. Respond in a ${agent.personality} manner consistent with your character.`;
-
-			console.log('🔧 CLIENT: Created system prompt for new agent');
-
-			// Log activity
-			console.log(
-				`🔧 CLIENT: Logging switch to agent ${normalizedName} with personality ${agent.personality}`
-			);
-
-			// CRITICAL - Format correction based on error message:
-			// "Client tool result must be a string or an object with string 'result' and 'responseType' properties"
-			const stageChangeData = {
-				systemPrompt: systemPrompt,
-				voice: agent.voiceId,
-				toolResultText: `I'm now switching you to ${normalizedName}...`,
-				selectedTools: [
-					{ toolName: 'hangUp' },
-					{
-						temporaryTool: {
-							modelToolName: 'switchAgent',
-							description:
-								'Switch to a different agent personality. Use this tool when a user asks to speak to a different agent.',
-							dynamicParameters: [
-								{
-									name: 'agentName',
-									location: 'PARAMETER_LOCATION_BODY',
-									schema: {
-										type: 'string',
-										description: 'The name of the agent to switch to'
-									},
-									required: true
-								}
-							],
-							client: {}
-						}
-					},
-					// Add agent-specific tools from the imported agentTools
-					...(normalizedName !== 'Hominio' && normalizedName in agentTools
-						? agentTools[normalizedName as keyof typeof agentTools]
-						: [])
-				]
-			};
+			// Use the centralized function to create stage change data
+			const stageChangeData = createAgentStageChangeData(validAgentName);
 
 			// Create the properly formatted response object
 			const result = {
@@ -1087,7 +739,6 @@ Remember: You are ${normalizedName} now. Respond in a ${agent.personality} manne
 		}
 	}
 
-	// Following the pattern in askHominio.ts, register tools with window
 	onMount(() => {
 		// Set the default agent to Hominio (the orchestrator)
 		currentAgent.set('Hominio');
@@ -1102,9 +753,7 @@ Remember: You are ${normalizedName} now. Respond in a ${agent.personality} manne
 					toggleTodo: toggleTodoTool,
 					removeTodo: removeTodoTool,
 					updateTodo: updateTodoTool,
-					filterTodos: filterTodosTool,
-					createList: createListTool,
-					switchList: switchListTool
+					filterTodos: filterTodosTool
 				};
 
 				// Log tools registration on window object
