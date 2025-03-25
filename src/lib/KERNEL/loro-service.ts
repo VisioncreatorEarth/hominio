@@ -1,6 +1,7 @@
 import { LoroDoc } from 'loro-crdt';
 import { blake3 } from '@noble/hashes/blake3';
 import { bytesToHex } from '@noble/hashes/utils';
+import { syncService, CLIENT_PEER_ID, SERVER_PEER_ID } from './sync-service';
 
 // Create a content hash from a Loro-doc
 export function createContentHash(doc: LoroDoc): string {
@@ -21,20 +22,25 @@ export function createHelloEarthDoc(): { doc: LoroDoc; hash: string } {
     const doc = new LoroDoc();
 
     // Add metadata
-    const meta = doc.getMap('meta');
-    meta.set('@type', 'hello-earth');
-    meta.set('@version', '1.0.0');
-    meta.set('@created', new Date().toISOString());
+    doc.getMap('meta').set('@type', 'hello-earth');
+    doc.getMap('meta').set('@created', new Date().toISOString());
 
     // Add content
     const content = doc.getMap('content');
     content.set('message', 'Hello Earth!');
     content.set('description', 'This is the first Loro-doc in the Hominio kernel.');
 
-    // Generate content hash
-    const hash = createContentHash(doc);
+    // Initialize sync state
+    const docWithSync = syncService.initDocWithSyncState(doc);
 
-    return { doc, hash };
+    // Generate content hash
+    const hash = createContentHash(docWithSync);
+
+    // Update sync state for both peers
+    syncService.updateSyncState(docWithSync, hash, CLIENT_PEER_ID);
+    syncService.updateSyncState(docWithSync, hash, SERVER_PEER_ID);
+
+    return { doc: docWithSync, hash };
 }
 
 // Store for our Loro-docs (in-memory for now)
@@ -42,7 +48,7 @@ export const docStore = new Map<string, LoroDoc>();
 
 // KERNEL registry - just stores the content hash of the current root document
 export const KERNEL_REGISTRY = {
-    id: createRegistryId(),
+    id: '0x0000',  // Simplified ID for example
     contentHash: ''
 };
 

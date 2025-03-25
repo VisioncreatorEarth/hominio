@@ -1,141 +1,158 @@
 <script lang="ts">
-	import { hominio } from '$lib/client/hominio';
 	import { onMount } from 'svelte';
+	import { initializeKernel, KERNEL_REGISTRY, docStore } from '$lib/KERNEL/loro-service';
+	import { syncService, CLIENT_PEER_ID, SERVER_PEER_ID } from '$lib/KERNEL/sync-service';
+	import type { DocSyncState } from '$lib/KERNEL/sync-service';
 
-	interface KernelRegistry {
-		status: string;
-		version: string;
-		registry: {
-			id: string;
-			contentHash: string;
-		};
-	}
-
-	interface LoroDocResponse {
-		status: string;
-		data: {
-			meta: Record<string, string>;
-			content: Record<string, string>;
-		};
-	}
-
-	let loading = true;
-	let error: string | null = null;
-	let kernelData: KernelRegistry | null = null;
-	let currentDoc: LoroDocResponse | null = null;
-
-	async function loadDoc(contentHash: string) {
-		try {
-			const response = await hominio.peer.docs[contentHash].get();
-			if (response.error) {
-				throw new Error(response.error.message);
-			}
-			currentDoc = response.data;
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load document';
-		}
-	}
-
-	async function initializeKernel() {
-		try {
-			// Load the kernel registry
-			const response = await hominio.peer.get();
-			if (!response.data) {
-				throw new Error('Failed to load kernel registry');
-			}
-
-			kernelData = response.data;
-
-			// Load the document if we have kernel data
-			if (kernelData?.registry?.contentHash) {
-				await loadDoc(kernelData.registry.contentHash);
-			}
-			error = null;
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to connect to kernel';
-			kernelData = null;
-			currentDoc = null;
-		} finally {
-			loading = false;
-		}
-	}
+	let currentDoc: any;
+	let syncState: DocSyncState;
+	let metadata: Record<string, string> = {};
+	let content: Record<string, string> = {};
 
 	onMount(() => {
-		initializeKernel();
+		const kernel = initializeKernel();
+		currentDoc = kernel.doc;
+		updateSyncState();
+		updateDocContent();
 	});
+
+	function updateSyncState() {
+		if (currentDoc) {
+			syncState = syncService.getSyncState(currentDoc);
+		}
+	}
+
+	function updateDocContent() {
+		if (currentDoc) {
+			// Get metadata
+			const meta = currentDoc.getMap('meta');
+			metadata = {
+				type: meta.get('@type') as string,
+				created: meta.get('@created') as string
+			};
+
+			// Get content
+			const contentMap = currentDoc.getMap('content');
+			content = {
+				message: contentMap.get('message') as string,
+				description: contentMap.get('description') as string
+			};
+		}
+	}
+
+	function formatTime(timestamp: number): string {
+		return new Date(timestamp).toLocaleTimeString();
+	}
+
+	function truncateHash(hash: string): string {
+		return hash ? `${hash.slice(0, 6)}...${hash.slice(-6)}` : 'No hash';
+	}
 </script>
 
-<div class="min-h-screen bg-gray-900 p-4 text-white dark:bg-gray-950">
-	{#if loading}
-		<div class="text-center">
-			<div class="mx-auto h-8 w-8 animate-spin rounded-full border-t-2 border-emerald-500"></div>
-			<p class="mt-2">Initializing Kernel...</p>
-		</div>
-	{:else if error}
-		<div class="rounded-lg border border-red-500/20 bg-red-900/50 p-4 dark:bg-red-950/50">
-			<h2 class="font-bold text-red-400">Connection Error</h2>
-			<p>{error}</p>
-		</div>
-	{:else if kernelData && currentDoc}
-		<div class="space-y-6">
-			<!-- Kernel Registry -->
-			<div class="rounded-lg border border-emerald-500/20 bg-gray-800/50 p-4 dark:bg-gray-900/50">
-				<h2 class="mb-4 text-xl font-bold text-emerald-400">Kernel Registry</h2>
-				<div class="space-y-2">
-					<p>
-						<span class="text-emerald-300">Status:</span>
-						<span class="text-emerald-100">{kernelData.status}</span>
-					</p>
-					<p>
-						<span class="text-emerald-300">Version:</span>
-						<span class="text-emerald-100">{kernelData.version}</span>
-					</p>
-				</div>
-				<div class="mt-4">
-					<h3 class="mb-2 text-lg font-semibold text-emerald-300">Registry Entry</h3>
-					<div class="rounded bg-gray-900/50 p-3">
-						<p class="mb-2 font-mono text-sm">
-							<span class="text-emerald-300">Registry ID:</span>
-							<span class="ml-2 text-emerald-100">{kernelData.registry.id}</span>
-						</p>
-						<p class="font-mono text-sm">
-							<span class="text-emerald-300">Content Hash:</span>
-							<span class="ml-2 text-emerald-100">{kernelData.registry.contentHash}</span>
-						</p>
+<div class="min-h-screen bg-gray-900 p-8 text-white">
+	<div class="mx-auto max-w-6xl">
+		<h1 class="mb-8 text-3xl font-bold">Hominio Kernel</h1>
+
+		{#if currentDoc}
+			<div class="mb-8 rounded-lg bg-gray-800 p-6">
+				<h2 class="mb-4 text-xl font-semibold">Hello Earth Document</h2>
+
+				<!-- Two Column Layout -->
+				<div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+					<!-- Left Column: Document Data -->
+					<div class="space-y-4">
+						<!-- Content Hash Section -->
+						<div class="rounded border border-gray-700 p-4">
+							<h3 class="mb-2 text-lg font-medium">Content Hash</h3>
+							<p class="font-mono text-green-400">{truncateHash(syncState?.currentHash)}</p>
+							<p class="mt-1 text-sm text-gray-400">
+								Last Updated: {formatTime(syncState?.lastSyncedAt)}
+							</p>
+						</div>
+
+						<!-- Metadata Section -->
+						<div class="rounded border border-gray-700 p-4">
+							<h3 class="mb-2 text-lg font-medium">Metadata</h3>
+							<div class="space-y-2">
+								<p>
+									<span class="text-gray-400">Type:</span>
+									<span class="ml-2 font-mono text-blue-400">{metadata.type}</span>
+								</p>
+								<p>
+									<span class="text-gray-400">Created:</span>
+									<span class="ml-2 font-mono text-blue-400">{metadata.created}</span>
+								</p>
+							</div>
+						</div>
+
+						<!-- Content Section -->
+						<div class="rounded border border-gray-700 p-4">
+							<h3 class="mb-2 text-lg font-medium">Content</h3>
+							<div class="space-y-2">
+								<p>
+									<span class="text-gray-400">Message:</span>
+									<span class="ml-2 font-mono text-emerald-400">{content.message}</span>
+								</p>
+								<p>
+									<span class="text-gray-400">Description:</span>
+									<span class="ml-2 font-mono text-emerald-400">{content.description}</span>
+								</p>
+							</div>
+						</div>
+					</div>
+
+					<!-- Right Column: Sync Status -->
+					<div class="rounded border border-gray-700 p-4">
+						<h3 class="mb-4 text-lg font-medium">Peer Sync Status</h3>
+
+						<!-- Client Peer -->
+						<div class="mb-6">
+							<div class="flex items-center">
+								<div
+									class={`mr-2 h-3 w-3 rounded-full ${
+										syncService.isPeerSynced(currentDoc, CLIENT_PEER_ID)
+											? 'bg-green-500'
+											: 'bg-yellow-500'
+									}`}
+								></div>
+								<h4 class="font-medium">Client Peer</h4>
+							</div>
+							<div class="mt-2 space-y-1">
+								<p class="font-mono text-sm">{syncState?.peers.client.id}</p>
+								<p class="text-sm text-gray-400">
+									Last Sync: {formatTime(syncState?.peers.client.lastSyncedAt)}
+								</p>
+								<p class="font-mono text-sm text-gray-400">
+									Hash: {truncateHash(syncState?.peers.client.lastKnownHash)}
+								</p>
+							</div>
+						</div>
+
+						<!-- Server Peer -->
+						<div>
+							<div class="flex items-center">
+								<div
+									class={`mr-2 h-3 w-3 rounded-full ${
+										syncService.isPeerSynced(currentDoc, SERVER_PEER_ID)
+											? 'bg-green-500'
+											: 'bg-yellow-500'
+									}`}
+								></div>
+								<h4 class="font-medium">Server Peer</h4>
+							</div>
+							<div class="mt-2 space-y-1">
+								<p class="font-mono text-sm">{syncState?.peers.server.id}</p>
+								<p class="text-sm text-gray-400">
+									Last Sync: {formatTime(syncState?.peers.server.lastSyncedAt)}
+								</p>
+								<p class="font-mono text-sm text-gray-400">
+									Hash: {truncateHash(syncState?.peers.server.lastKnownHash)}
+								</p>
+							</div>
+						</div>
 					</div>
 				</div>
 			</div>
-
-			<!-- Current Document -->
-			<div class="rounded-lg border border-blue-500/20 bg-gray-800/50 p-4 dark:bg-gray-900/50">
-				<h2 class="mb-4 text-xl font-bold text-blue-400">Hello Earth Document</h2>
-
-				<!-- Metadata -->
-				<div class="mb-4">
-					<h3 class="mb-2 text-lg font-semibold text-blue-300">Metadata</h3>
-					<div class="space-y-2">
-						{#each Object.entries(currentDoc.data.meta) as [key, value]}
-							<p>
-								<span class="text-blue-300">{key}:</span>
-								<span class="ml-2 text-blue-100">{value}</span>
-							</p>
-						{/each}
-					</div>
-				</div>
-
-				<!-- Content -->
-				<div>
-					<h3 class="mb-2 text-lg font-semibold text-blue-300">Content</h3>
-					<div class="space-y-2">
-						{#each Object.entries(currentDoc.data.content) as [key, value]}
-							<p>
-								<span class="text-blue-300">{key}:</span>
-								<span class="ml-2 text-blue-100">{value}</span>
-							</p>
-						{/each}
-					</div>
-				</div>
-			</div>
-		</div>
-	{/if}
+		{/if}
+	</div>
 </div>
