@@ -1,15 +1,18 @@
 {
     "name": "filterTodos",
+    "skill": "Show tasks by tag",
+    "icon": "M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z",
+    "color": "purple",
     "temporaryTool": {
         "modelToolName": "filterTodos",
-        "description": "Filter todos by tag. Use this tool when a user wants to view todos with specific tags. NEVER emit text when doing this tool call.",
+        "description": "Filter the list of todos by tag. Use this tool when a specific category of todos needs to be shown. NEVER emit text when doing this tool call.",
         "dynamicParameters": [
             {
                 "name": "tag",
                 "location": "PARAMETER_LOCATION_BODY",
                 "schema": {
                     "type": "string",
-                    "description": "The tag to filter by, or \"all\" to show all todos"
+                    "description": "The tag to filter todos by (use \"all\" to show all todos)"
                 },
                 "required": true
             }

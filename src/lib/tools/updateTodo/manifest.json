@@ -1,15 +1,18 @@
 {
     "name": "updateTodo",
+    "skill": "Edit task text and tags",
+    "icon": "M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z",
+    "color": "indigo",
     "temporaryTool": {
         "modelToolName": "updateTodo",
-        "description": "Update an existing todo. Use this tool when a todo needs to be modified. NEVER emit text when doing this tool call.",
+        "description": "Update an existing todo item. Use this tool when a todo needs to be modified. NEVER emit text when doing this tool call.",
         "dynamicParameters": [
             {
-                "name": "todoText",
+                "name": "originalText",
                 "location": "PARAMETER_LOCATION_BODY",
                 "schema": {
                     "type": "string",
-                    "description": "Current text content to search for"
+                    "description": "The original text of the todo to update"
                 },
                 "required": true
             },
@@ -18,7 +21,7 @@
                 "location": "PARAMETER_LOCATION_BODY",
                 "schema": {
                     "type": "string",
-                    "description": "New text content for the todo"
+                    "description": "The new text for the todo"
                 },
                 "required": true
             },
@@ -27,16 +30,7 @@
                 "location": "PARAMETER_LOCATION_BODY",
                 "schema": {
                     "type": "string",
-                    "description": "Optional comma-separated list of new tags"
-                },
-                "required": false
-            },
-            {
-                "name": "todoId",
-                "location": "PARAMETER_LOCATION_BODY",
-                "schema": {
-                    "type": "string",
-                    "description": "ID of the todo item to update (if known)"
+                    "description": "Optional new comma-separated list of tags (e.g. \"work,urgent,home\")"
                 },
                 "required": false
             }

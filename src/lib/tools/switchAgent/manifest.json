@@ -1,15 +1,18 @@
 {
     "name": "switchAgent",
+    "skill": "Change who you're speaking with",
+    "icon": "M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z",
+    "color": "teal",
     "temporaryTool": {
         "modelToolName": "switchAgent",
-        "description": "Switch to a different agent. Use this when the user explicitly asks to speak to a different AI assistant. NEVER emit text when doing this tool call.",
+        "description": "Switch the current agent to another agent. Use this tool when the user wants to talk to a different agent. NEVER emit text when doing this tool call.",
         "dynamicParameters": [
             {
                 "name": "agentName",
                 "location": "PARAMETER_LOCATION_BODY",
                 "schema": {
                     "type": "string",
-                    "description": "The name of the agent to switch to"
+                    "description": "The name of the agent to switch to (e.g. \"Hominio\", \"Oliver\")"
                 },
                 "required": true
             }

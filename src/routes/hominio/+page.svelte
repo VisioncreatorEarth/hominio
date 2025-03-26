@@ -21,6 +21,9 @@
 	// Store for vibe data
 	let globalTools = $state<string[]>([]);
 	let agentTools = $state<Record<string, string[]>>({});
+	let toolSkills = $state<Record<string, string>>({});
+	let toolIcons = $state<Record<string, string>>({});
+	let toolColors = $state<Record<string, string>>({});
 	let loadingVibe = $state(true);
 
 	// Function to load vibe information
@@ -39,6 +42,10 @@
 			});
 
 			agentTools = toolsByAgent;
+
+			// Load tool data from manifests
+			await loadToolData([...globalTools, ...Object.values(toolsByAgent).flat()]);
+
 			loadingVibe = false;
 		} catch (error) {
 			console.error('Failed to load vibe info:', error);
@@ -46,53 +53,31 @@
 		}
 	}
 
-	// Function to get tool description
-	function getToolDescription(toolName: string): string {
-		const toolDescriptions: Record<string, string> = {
-			createTodo: 'Add new task with tags',
-			toggleTodo: 'Mark task complete/incomplete',
-			updateTodo: 'Edit task text and tags',
-			removeTodo: 'Delete task from list',
-			filterTodos: 'Show tasks by tag',
-			switchAgent: "Change who you're speaking with",
-			hangUp: 'End the current voice call'
-		};
+	// Function to load tool data from manifests
+	async function loadToolData(toolNames: string[]) {
+		const uniqueToolNames = [...new Set(toolNames)];
+		const skills: Record<string, string> = {};
+		const icons: Record<string, string> = {};
+		const colors: Record<string, string> = {};
 
-		return toolDescriptions[toolName] || 'Execute a voice command';
-	}
+		for (const toolName of uniqueToolNames) {
+			try {
+				const manifest = await import(`../../lib/tools/${toolName}/manifest.json`);
+				skills[toolName] = manifest.skill || '';
+				icons[toolName] =
+					manifest.icon || 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z';
+				colors[toolName] = manifest.color || 'amber';
+			} catch (error) {
+				console.error(`Failed to load manifest for ${toolName}:`, error);
+				skills[toolName] = '';
+				icons[toolName] = 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z';
+				colors[toolName] = 'amber';
+			}
+		}
 
-	// Function to get tool icon
-	function getToolIcon(toolName: string): string {
-		const iconPaths: Record<string, string> = {
-			createTodo: 'M12 6v6m0 0v6m0-6h6m-6 0H6',
-			toggleTodo: 'M5 13l4 4L19 7',
-			updateTodo:
-				'M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z',
-			removeTodo:
-				'M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16',
-			filterTodos:
-				'M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z',
-			switchAgent: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z',
-			hangUp:
-				'M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z'
-		};
-
-		return iconPaths[toolName] || 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z';
-	}
-
-	// Function to get tool color
-	function getToolColor(toolName: string): string {
-		const colorMap: Record<string, string> = {
-			createTodo: 'blue',
-			toggleTodo: 'green',
-			updateTodo: 'indigo',
-			removeTodo: 'red',
-			filterTodos: 'purple',
-			switchAgent: 'teal',
-			hangUp: 'rose'
-		};
-
-		return colorMap[toolName] || 'amber';
+		toolSkills = skills;
+		toolIcons = icons;
+		toolColors = colors;
 	}
 
 	// Function to handle Ultravox ready event
@@ -179,7 +164,7 @@
 										class="rounded-lg border border-white/5 bg-white/5 p-3 transition-colors hover:bg-white/10"
 									>
 										<div class="flex items-center gap-2">
-											<div class={`rounded-full bg-${getToolColor(toolName)}-500/20 p-1.5`}>
+											<div class={`rounded-full bg-${toolColors[toolName]}-500/20 p-1.5`}>
 												<svg
 													xmlns="http://www.w3.org/2000/svg"
 													class="h-3.5 w-3.5"
@@ -191,13 +176,15 @@
 														stroke-linecap="round"
 														stroke-linejoin="round"
 														stroke-width="2"
-														d={getToolIcon(toolName)}
+														d={toolIcons[toolName]}
 													/>
 												</svg>
 											</div>
 											<div class="text-xs font-medium text-white/80">{toolName}</div>
 										</div>
-										<div class="mt-1 text-xs text-white/70">{getToolDescription(toolName)}</div>
+										<div class="mt-1 text-xs text-white/70">
+											{toolSkills[toolName]}
+										</div>
 									</div>
 								{/each}
 							</div>
@@ -215,7 +202,7 @@
 											class="rounded-lg border border-white/5 bg-white/5 p-3 transition-colors hover:bg-white/10"
 										>
 											<div class="flex items-center gap-2">
-												<div class={`rounded-full bg-${getToolColor(toolName)}-500/20 p-1.5`}>
+												<div class={`rounded-full bg-${toolColors[toolName]}-500/20 p-1.5`}>
 													<svg
 														xmlns="http://www.w3.org/2000/svg"
 														class="h-3.5 w-3.5"
@@ -227,13 +214,15 @@
 															stroke-linecap="round"
 															stroke-linejoin="round"
 															stroke-width="2"
-															d={getToolIcon(toolName)}
+															d={toolIcons[toolName]}
 														/>
 													</svg>
 												</div>
 												<div class="text-xs font-medium text-white/80">{toolName}</div>
 											</div>
-											<div class="mt-1 text-xs text-white/70">{getToolDescription(toolName)}</div>
+											<div class="mt-1 text-xs text-white/70">
+												{toolSkills[toolName]}
+											</div>
 										</div>
 									{/each}
 								</div>

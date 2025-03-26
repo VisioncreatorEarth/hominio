@@ -1,5 +1,8 @@
 {
     "name": "createTodo",
+    "skill": "Add new task with tags",
+    "icon": "M12 6v6m0 0v6m0-6h6m-6 0H6",
+    "color": "blue",
     "temporaryTool": {
         "modelToolName": "createTodo",
         "description": "Create a new todo item. Use this tool when a todo needs to be created. NEVER emit text when doing this tool call.",
