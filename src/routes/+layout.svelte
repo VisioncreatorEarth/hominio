@@ -90,6 +90,22 @@
 			// Get active vibe configuration
 			const vibe = await getActiveVibe(DEFAULT_VIBE);
 
+			// Ensure tools are registered before starting call
+			if (typeof window !== 'undefined') {
+				// Trigger manual tool registration
+				const event = new Event('ultravox-ready');
+				window.dispatchEvent(event);
+
+				// Wait a moment for tools to register
+				await new Promise((resolve) => setTimeout(resolve, 100));
+
+				// Verify tools are registered
+				if (!(window as any).__hominio_tools) {
+					console.error('❌ Tools not registered properly. Aborting call start.');
+					return;
+				}
+			}
+
 			// Build call config from vibe
 			const callConfig = {
 				...vibe.manifest.rootCallConfig,

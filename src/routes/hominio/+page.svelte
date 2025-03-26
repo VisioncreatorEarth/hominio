@@ -18,23 +18,44 @@
 
 	// Initialize the todo store and get the unsubscribe function
 	let unsubscribeTodo: () => void;
+	let toolsRegistered = false;
 
-	onMount(() => {
+	// Function to handle Ultravox ready event
+	async function handleUltravoxReady() {
+		console.log('🔄 Ultravox ready event detected, registering tools...');
+		try {
+			await registerToolsFromRegistry();
+			toolsRegistered = true;
+			console.log('✅ Tools registered successfully');
+		} catch (error) {
+			console.error('❌ Failed to register tools:', error);
+		}
+	}
+
+	// Function to ensure tools are registered
+	async function ensureToolsRegistered() {
+		if (!toolsRegistered) {
+			if (window.__ULTRAVOX_SESSION?.registerTool) {
+				await handleUltravoxReady();
+			} else {
+				console.log('⏳ Waiting for Ultravox session...');
+			}
+		}
+		return toolsRegistered;
+	}
+
+	onMount(async () => {
 		// Set the default agent to Hominio (the orchestrator)
 		currentAgent.set('Hominio');
 
 		// Initialize the todo store
 		unsubscribeTodo = initTodoStore();
 
-		// Register tools with Ultravox immediately
-		// This is important for voice commands to work
-		registerToolsFromRegistry();
+		// Add event listener for Ultravox ready
+		window.addEventListener('ultravox-ready', handleUltravoxReady);
 
-		// Also register tools when Ultravox is loaded/reloaded
-		window.addEventListener('ultravox-ready', () => {
-			console.log('🔄 Ultravox ready event detected, registering tools...');
-			registerToolsFromRegistry();
-		});
+		// Try to register tools immediately if possible
+		await ensureToolsRegistered();
 	});
 
 	// Clean up on component destroy
@@ -45,9 +66,7 @@
 		cleanupTodoStore();
 
 		// Remove the event listener
-		window.removeEventListener('ultravox-ready', () => {
-			registerToolsFromRegistry();
-		});
+		window.removeEventListener('ultravox-ready', handleUltravoxReady);
 	});
 
 	// Format date for display
