@@ -2,7 +2,7 @@
  * Tool Loader - Dynamically loads tools and their implementations
  */
 import type { ToolDefinition } from '../types';
-import { toolRegistry } from '$lib/services/todoActions';
+import { toolRegistry } from '$lib/ultravox/todoActions';
 
 // Common types for Ultravox tool functions
 type ToolParams = Record<string, unknown>;

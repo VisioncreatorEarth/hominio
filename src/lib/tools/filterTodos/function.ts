@@ -4,7 +4,7 @@ import {
     filterTodosByTag,
     getAllUniqueTags,
     logToolActivity
-} from '$lib/stores/todoStore';
+} from '$lib/ultravox/todoStore';
 
 export function filterTodosImplementation(parameters: ToolParameters): string {
     console.log('Called filterTodos tool with parameters:', parameters);

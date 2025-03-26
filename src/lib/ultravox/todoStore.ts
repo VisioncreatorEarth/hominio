@@ -109,10 +109,6 @@ function updateDocuments() {
 // Set up subscribe to Loro doc changes
 export function initTodoStore() {
     // Add a welcome todo if none exist
-    const entries = [...todoMap.entries()];
-    if (entries.length === 0) {
-        addTodo('Welcome to Hominio Voice Todos! Ask the assistant to create or toggle tasks.');
-    }
 
     // Set up Loro change listener and update stores
     const unsubscribe = todoDoc.subscribe(() => {

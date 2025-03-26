@@ -6,7 +6,7 @@ import {
     switchToDocument,
     todoState,
     logToolActivity
-} from '$lib/stores/todoStore';
+} from '$lib/ultravox/todoStore';
 import { get } from 'svelte/store';
 
 export function createTodoImplementation(parameters: ToolParameters): string {

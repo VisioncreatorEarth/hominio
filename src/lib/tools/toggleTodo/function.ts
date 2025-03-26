@@ -4,7 +4,7 @@ import {
     toggleTodoById,
     findTodosByText,
     logToolActivity
-} from '$lib/stores/todoStore';
+} from '$lib/ultravox/todoStore';
 
 export function toggleTodoImplementation(parameters: ToolParameters): string {
     console.log('Called toggleTodo tool with parameters:', parameters);
