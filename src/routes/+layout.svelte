@@ -8,6 +8,7 @@
 	import { startCall, endCall, type Transcript } from '$lib/ultravox/callFunctions';
 	import CallInterface from '$lib/components/CallInterface.svelte';
 	import { initializeVibe, getActiveVibe } from '$lib/ultravox';
+	import { TODO_CALL_CONFIG } from '$lib/ultravox/callConfig';
 
 	// Disable Server-Side Rendering since Tauri is client-only
 	export const ssr = false;
@@ -105,12 +106,7 @@
 				}
 			}
 
-			// Build call config from vibe
-			const callConfig = {
-				...vibe.manifest.rootCallConfig,
-				systemPrompt: vibe.manifest.callSystemPrompt
-			};
-
+			// Use the immutable TODO_CALL_CONFIG - mutable properties will be added from the vibe in createCall
 			await startCall(
 				{
 					onStatusChange: (status) => {
@@ -128,7 +124,7 @@
 						}
 					}
 				},
-				callConfig
+				TODO_CALL_CONFIG
 			);
 		} catch (error) {
 			console.error('Failed to start call:', error);

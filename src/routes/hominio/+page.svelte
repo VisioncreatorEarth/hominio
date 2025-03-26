@@ -33,7 +33,7 @@
 			const vibe = await getActiveVibe();
 
 			// Get global call tools
-			globalTools = vibe.manifest.callTools || [];
+			globalTools = (vibe.manifest as any).vibeTools || [];
 
 			// Get tools by agent
 			const toolsByAgent: Record<string, string[]> = {};

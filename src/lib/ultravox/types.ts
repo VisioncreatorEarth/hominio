@@ -102,15 +102,12 @@ export interface ToolDefinition {
 export interface VibeManifest {
     name: string;
     description: string;
-    rootCallConfig: {
-        model: string;
-        firstSpeaker: string;
-        maxDuration: string;
-        languageHint: string;
-        temperature: number;
-    };
-    callSystemPrompt: string;
-    callTools: string[];
+    systemPrompt: string;
+    temperature?: number;
+    voice?: string;
+    languageHint?: string;
+    initialMessages?: string[];
+    vibeTools: string[];
     defaultAgent: string;
     agents: AgentConfig[];
 }

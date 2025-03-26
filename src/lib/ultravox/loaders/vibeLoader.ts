@@ -101,7 +101,7 @@ export async function loadVibe(vibeName: string): Promise<ResolvedVibe> {
 
         // Load all call tools
         const resolvedCallTools: ToolDefinition[] = [];
-        for (const toolName of manifest.default.callTools) {
+        for (const toolName of (manifest.default as any).vibeTools) {
             try {
                 const tool = await loadTool(toolName);
                 resolvedCallTools.push(tool);
@@ -123,7 +123,7 @@ export async function loadVibe(vibeName: string): Promise<ResolvedVibe> {
                     for (const toolName of agent.tools) {
                         try {
                             // Skip tools that are already loaded as call tools
-                            if (manifest.default.callTools.includes(toolName)) {
+                            if ((manifest.default as any).vibeTools.includes(toolName)) {
                                 continue;
                             }
 

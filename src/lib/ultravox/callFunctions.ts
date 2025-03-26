@@ -1,9 +1,13 @@
 import { browser } from '$app/environment';
 import type { UltravoxSession as UVSession, UltravoxSessionStatus as UVStatus, Transcript as UVTranscript, ClientToolImplementation } from 'ultravox-client';
 import { currentAgent, type AgentName } from './agents';
-import { getActiveVibe } from './index';
+import { createCall } from './createCall';
 
 // Define types for our Ultravox integration
+export type WebRtcMedium = { webRtc: Record<string, never> };
+export type TwilioMedium = { twilio: Record<string, unknown> };
+export type CallMedium = WebRtcMedium | TwilioMedium; // Only including the most common ones
+
 export type CallConfig = {
     systemPrompt: string;
     model?: string;
@@ -13,6 +17,11 @@ export type CallConfig = {
     maxDuration?: string;
     timeExceededMessage?: string;
     firstSpeaker?: string;
+    joinTimeout?: string;
+    inactivityMessages?: string[];
+    medium?: CallMedium | string; // Can be a string or object based on API requirements
+    recordingEnabled?: boolean;
+    initialMessages?: string[];
 };
 
 export type JoinUrlResponse = {
@@ -25,6 +34,7 @@ export type JoinUrlResponse = {
 
 // Re-export types from ultravox-client
 export { UltravoxSessionStatus } from 'ultravox-client';
+// export type { CallMedium }; // removed due to conflicts
 
 export enum Role {
     USER = 'user',
@@ -98,51 +108,6 @@ export function forceUnmuteSpeaker(): void {
     }
 }
 
-// Create a call with Ultravox API
-async function createCall(callConfig: CallConfig): Promise<JoinUrlResponse> {
-    try {
-        // Get tools from the active vibe
-        const activeVibe = await getActiveVibe();
-
-        // Transform tools to the format expected by Ultravox API
-        // Only use temporaryTool field to avoid multiple "base_tool" oneof fields error
-        const formattedTools = activeVibe.resolvedCallTools.map(tool => {
-            // The API expects only one of: toolId, toolName, temporaryTool 
-            // (these are part of a oneof group in the protobuf)
-            return {
-                temporaryTool: tool.temporaryTool
-            };
-        });
-
-        // Include all config fields in the request with properly formatted tools
-        const requestConfig = {
-            ...callConfig,
-            selectedTools: formattedTools
-        };
-
-        const response = await fetch('/callHominio', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(requestConfig),
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
-        }
-
-        const data: JoinUrlResponse = await response.json();
-        console.log(`Call created. Join URL: ${data.joinUrl}`);
-
-        return data;
-    } catch (error) {
-        console.error('Error creating call:', error);
-        throw error;
-    }
-}
-
 // Start a call
 export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig): Promise<void> {
     if (!browser) {
@@ -151,7 +116,7 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
     }
 
     try {
-        // Call our API to get a join URL
+        // Call our API to get a join URL using the imported createCall function
         const callData = await createCall(callConfig);
         const joinUrl = callData.joinUrl;
 

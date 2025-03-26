@@ -13,6 +13,9 @@ export { getAgentConfig, buildSystemPrompt, clearAgentCache } from './loaders/ag
 // Export stage manager
 export { getActiveVibe, resetActiveVibe, createAgentStageChangeData } from './stageManager';
 
+// Export call configuration
+export { DEFAULT_CALL_CONFIG, TODO_CALL_CONFIG, getBaseCallConfig } from './callConfig';
+
 /**
  * Initialize the vibe system with a specific vibe
  * @param vibeName The name of the vibe to load

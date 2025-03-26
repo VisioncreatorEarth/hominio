@@ -1,15 +1,10 @@
 {
     "name": "todos",
     "description": "Todo management voice application",
-    "rootCallConfig": {
-        "model": "fixie-ai/ultravox-70B",
-        "firstSpeaker": "FIRST_SPEAKER_USER",
-        "maxDuration": "600s",
-        "languageHint": "en",
-        "temperature": 0.7
-    },
-    "callSystemPrompt": "IMPORTANT INSTRUCTIONS:\n1. You MUST use these tools directly without asking for confirmation\n2. Call the appropriate tool as soon as a user requests them 3. Execute the tool when needed WITHOUT typing out the function in your response\n4. AFTER the tool executes, respond with text confirming what you did\n5. DO NOT tell the user \"I'll use the tool\" - just USE it directly\n6. As Hominio, direct users to Oliver for todo management task \n7. Keep responses under 3 sentences when possible. ",
-    "callTools": [
+    "systemPrompt": "IMPORTANT INSTRUCTIONS:\n1. You MUST use these tools directly without asking for confirmation\n2. Call the appropriate tool as soon as a user requests them 3. Execute the tool when needed WITHOUT typing out the function in your response\n4. AFTER the tool executes, respond with text confirming what you did\n5. DO NOT tell the user \"I'll use the tool\" - just USE it directly\n6. As Hominio, direct users to Oliver for todo management task \n7. Keep responses under 3 sentences when possible. ",
+    "temperature": 0.7,
+    "languageHint": "en",
+    "vibeTools": [
         "hangUp",
         "switchAgent"
     ],
