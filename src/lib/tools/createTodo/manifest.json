@@ -5,7 +5,7 @@
     "color": "blue",
     "temporaryTool": {
         "modelToolName": "createTodo",
-        "description": "Create a new todo item. Use this tool when a todo needs to be created. NEVER emit text when doing this tool call.",
+        "description": "Create a new todo item. Use this tool when a todo needs to be created. NEVER emit text when doing this tool call. ALWAYS add tags to todos automatically based on the content:\n   - For time-sensitive items, add \"urgent\" or \"important\"\n   - If the user specifies specific tags, use those instead of or in addition to your automatic tags\n",
         "dynamicParameters": [
             {
                 "name": "todoText",

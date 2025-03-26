@@ -24,7 +24,6 @@
 	// Global state - use let for variables we need to update
 	let isInitializing = $state(false);
 	let initAttempts = $state(0);
-	let activeDocumentsCount = $state(0);
 	let clientId = $state(generateShortUUID());
 	let isStorageInitialized = $state(false);
 	let isCallActive = $state(false);
@@ -211,12 +210,6 @@
 			}
 		};
 	}
-
-	// Set up effects for reactivity
-	$effect(() => {
-		// Update active documents count when the registry changes
-		activeDocumentsCount = Object.keys(loroDocsRegistry).length;
-	});
 
 	// Create the storage info object for context
 	function getStorageInfo() {

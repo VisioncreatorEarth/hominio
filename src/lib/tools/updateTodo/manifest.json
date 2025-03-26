@@ -5,14 +5,14 @@
     "color": "indigo",
     "temporaryTool": {
         "modelToolName": "updateTodo",
-        "description": "Update an existing todo item. Use this tool when a todo needs to be modified. NEVER emit text when doing this tool call.",
+        "description": "Update an existing todo item. Use this tool when a todo needs to be modified. The 'originalText' parameter is required (alternatively, 'todoText' is supported for backward compatibility). NEVER emit text when doing this tool call.",
         "dynamicParameters": [
             {
                 "name": "originalText",
                 "location": "PARAMETER_LOCATION_BODY",
                 "schema": {
                     "type": "string",
-                    "description": "The original text of the todo to update"
+                    "description": "The original text of the todo to update (can also use 'todoText' for backward compatibility)"
                 },
                 "required": true
             },

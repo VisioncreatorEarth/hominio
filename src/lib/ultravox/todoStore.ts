@@ -72,13 +72,13 @@ export function updateTodoEntries() {
 
     // Filter for the active document and sort by creation date (newest first)
     const filteredEntries = typedEntries
-        .filter(([_, todo]) => todo.docId === state.activeDocId)
+        .filter(([, todo]) => todo.docId === state.activeDocId)
         .sort((a, b) => b[1].createdAt - a[1].createdAt);
 
     // Update the store
     todos.set(filteredEntries);
 
-    // Update document list counts
+    // Update document list with counts
     updateDocuments();
 }
 
@@ -91,7 +91,7 @@ function updateDocuments() {
 
     // Count todos for each document
     const counts = new Map<string, number>();
-    allEntries.forEach(([_, todo]) => {
+    allEntries.forEach(([, todo]) => {
         const docId = todo.docId || 'personal';
         const currentCount = counts.get(docId) || 0;
         counts.set(docId, currentCount + 1);
@@ -204,6 +204,89 @@ export function findTodosByText(text: string): [string, TodoItem][] {
         .map((entry) => [entry[0] as string, entry[1] as unknown as TodoItem]);
 }
 
+// Function to find todo by exact or fuzzy match
+export function findTodoForUpdate(originalText: string): [string, TodoItem] | null {
+    const entries = [...todoMap.entries()];
+    const state = get(todoState);
+
+    // First try exact match (case insensitive)
+    const exactMatch = entries.find(
+        (entry) => {
+            const todo = entry[1] as unknown as TodoItem;
+            return (
+                todo.docId === state.activeDocId &&
+                todo.text.toLowerCase() === originalText.toLowerCase()
+            );
+        }
+    );
+
+    if (exactMatch) {
+        return [exactMatch[0] as string, exactMatch[1] as unknown as TodoItem];
+    }
+
+    // Next, try substring match
+    const substringMatches = entries.filter(
+        (entry) => {
+            const todo = entry[1] as unknown as TodoItem;
+            return (
+                todo.docId === state.activeDocId &&
+                (
+                    todo.text.toLowerCase().includes(originalText.toLowerCase()) ||
+                    originalText.toLowerCase().includes(todo.text.toLowerCase())
+                )
+            );
+        }
+    );
+
+    if (substringMatches.length === 1) {
+        const [id, value] = substringMatches[0];
+        return [id as string, value as unknown as TodoItem];
+    }
+
+    // If multiple matches, try to find the closest one
+    if (substringMatches.length > 1) {
+        // Sort by similarity (shorter difference in length = more similar)
+        substringMatches.sort((a, b) => {
+            const todoA = a[1] as unknown as TodoItem;
+            const todoB = b[1] as unknown as TodoItem;
+            const diffA = Math.abs(todoA.text.length - originalText.length);
+            const diffB = Math.abs(todoB.text.length - originalText.length);
+            return diffA - diffB;
+        });
+
+        const [id, value] = substringMatches[0];
+        return [id as string, value as unknown as TodoItem];
+    }
+
+    return null;
+}
+
+// Function to update a todo with new text and tags
+export function updateTodo(id: string, newText: string, tagsStr?: string): boolean {
+    const todoEntry = todoMap.get(id);
+
+    if (todoEntry) {
+        const todo = todoEntry as unknown as TodoItem;
+        const tags = tagsStr
+            ? tagsStr
+                .split(',')
+                .map((tag) => tag.trim())
+                .filter((tag) => tag.length > 0)
+            : todo.tags;
+
+        todoMap.set(id, {
+            ...todo,
+            text: newText.trim(),
+            tags
+        } as unknown as Value);
+
+        updateTodoEntries();
+        return true;
+    }
+
+    return false;
+}
+
 export function createLoroDocument(name: string): string {
     const normalizedName = name.trim();
     if (!normalizedName) return '';
@@ -250,16 +333,14 @@ export function filterTodosByTag(tag: string | null) {
 }
 
 export function getAllUniqueTags(): string[] {
-    const uniqueTags = new Set<string>();
     const currentTodos = get(todos);
+    const allTags = new Set<string>();
 
-    currentTodos.forEach(([_, todo]) => {
-        todo.tags.forEach((tag) => {
-            if (tag) uniqueTags.add(tag);
-        });
+    currentTodos.forEach(([, todo]) => {
+        todo.tags.forEach((tag) => allTags.add(tag));
     });
 
-    return Array.from(uniqueTags).sort();
+    return [...allTags];
 }
 
 // Returns the currently active document name
