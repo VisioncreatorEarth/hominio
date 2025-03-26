@@ -1,9 +1,40 @@
 import { loadVibe } from './loaders/vibeLoader';
 import { buildSystemPrompt } from './loaders/agentLoader';
 import type { AgentName, ToolDefinition } from './types';
+import { GLOBAL_CALL_TOOLS } from './globalTools';
+import { loadTool } from './loaders/toolLoader';
 
 // Cache the currently active vibe
 let activeVibe: Awaited<ReturnType<typeof loadVibe>> | null = null;
+
+// Cache for global tools to avoid reloading
+let globalToolsCache: ToolDefinition[] = [];
+
+/**
+ * Load global tools that should be available in all stages
+ * @returns Array of resolved global tool definitions
+ */
+async function loadGlobalTools(): Promise<ToolDefinition[]> {
+    // Use cache if available
+    if (globalToolsCache.length > 0) {
+        return globalToolsCache;
+    }
+
+    // Load all global tools
+    const resolvedGlobalTools: ToolDefinition[] = [];
+    for (const toolName of GLOBAL_CALL_TOOLS) {
+        try {
+            const tool = await loadTool(toolName);
+            resolvedGlobalTools.push(tool);
+        } catch (error) {
+            console.error(`❌ Failed to load global tool "${toolName}":`, error);
+        }
+    }
+
+    // Cache for future use
+    globalToolsCache = resolvedGlobalTools;
+    return resolvedGlobalTools;
+}
 
 /**
  * Load or get a vibe by name
@@ -46,13 +77,18 @@ export async function createAgentStageChangeData(agentName: AgentName) {
     // Collect all tools available to this agent
     const agentTools = agent.resolvedTools || [];
 
-    // Common tools from call config
+    // Common tools from call config (vibe tools)
     const callTools = vibe.resolvedCallTools || [];
 
+    // Load global tools that should always be available
+    const globalTools = await loadGlobalTools();
+
     // Combine all tools the agent should have access to
+    // Put global tools first for priority
     const selectedTools: ToolDefinition[] = [
-        ...callTools,
-        ...agentTools
+        ...globalTools,      // Global tools always available
+        ...callTools,        // Vibe-specific call tools 
+        ...agentTools        // Agent-specific tools
     ];
 
     // Build the system prompt using the agentLoader

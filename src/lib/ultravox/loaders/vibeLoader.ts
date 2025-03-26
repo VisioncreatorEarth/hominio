@@ -78,6 +78,7 @@ declare global {
  */
 import type { AgentConfig, ResolvedVibe, ToolDefinition, VibeManifest } from '../types';
 import { loadTool } from './toolLoader';
+import { GLOBAL_CALL_TOOLS, isGlobalCallTool } from '../globalTools';
 
 /**
  * In-memory cache for loaded vibes to avoid reloading
@@ -99,16 +100,38 @@ export async function loadVibe(vibeName: string): Promise<ResolvedVibe> {
         // Load the manifest
         const manifest = await import(`../../vibes/${vibeName}/manifest.json`) as { default: VibeManifest };
 
-        // Load all call tools
+        // Load global tools first - these are always included
+        const resolvedGlobalTools: ToolDefinition[] = [];
+        for (const toolName of GLOBAL_CALL_TOOLS) {
+            try {
+                const tool = await loadTool(toolName);
+                resolvedGlobalTools.push(tool);
+                console.log(`✅ Loaded global tool: ${toolName}`);
+            } catch (error) {
+                console.error(`❌ Failed to load global tool "${toolName}":`, error);
+            }
+        }
+
+        // Load vibe-specific call tools
         const resolvedCallTools: ToolDefinition[] = [];
         for (const toolName of (manifest.default as any).vibeTools) {
+            // Skip if it's already loaded as a global tool
+            if (isGlobalCallTool(toolName)) {
+                console.log(`ℹ️ Skipping vibe tool "${toolName}" as it's already loaded as global tool`);
+                continue;
+            }
+
             try {
                 const tool = await loadTool(toolName);
                 resolvedCallTools.push(tool);
+                console.log(`✅ Loaded vibe call tool: ${toolName}`);
             } catch (error) {
-                console.error(`❌ Failed to load call tool "${toolName}":`, error);
+                console.error(`❌ Failed to load vibe call tool "${toolName}":`, error);
             }
         }
+
+        // Combine global and vibe-specific call tools
+        const allCallTools = [...resolvedGlobalTools, ...resolvedCallTools];
 
         // Load tools for each agent and attach them to agent configs
         const resolvedAgents: AgentConfig[] = [];
@@ -122,13 +145,14 @@ export async function loadVibe(vibeName: string): Promise<ResolvedVibe> {
                 if (Array.isArray(agent.tools)) {
                     for (const toolName of agent.tools) {
                         try {
-                            // Skip tools that are already loaded as call tools
-                            if ((manifest.default as any).vibeTools.includes(toolName)) {
+                            // Skip tools that are already loaded as call or global tools
+                            if ((manifest.default as any).vibeTools.includes(toolName) || isGlobalCallTool(toolName)) {
                                 continue;
                             }
 
                             const tool = await loadTool(toolName);
                             agentConfig.resolvedTools.push(tool);
+                            console.log(`✅ Loaded agent tool: ${toolName}`);
                         } catch (error) {
                             console.error(`❌ Failed to load agent tool "${toolName}":`, error);
                         }
@@ -151,7 +175,7 @@ export async function loadVibe(vibeName: string): Promise<ResolvedVibe> {
         // Create the resolved vibe
         const resolvedVibe: ResolvedVibe = {
             manifest: manifest.default,
-            resolvedCallTools,
+            resolvedCallTools: allCallTools, // Use combined call tools including globals
             resolvedAgents,
             defaultAgent
         };
@@ -159,8 +183,10 @@ export async function loadVibe(vibeName: string): Promise<ResolvedVibe> {
         // Cache the resolved vibe
         vibeCache.set(vibeName, resolvedVibe);
 
+        // Log tool information
         console.log(`✅ Loaded vibe: ${vibeName}`);
-        console.log(`📋 Call tools: ${resolvedCallTools.map(t => t.name).join(', ')}`);
+        console.log(`📋 Global tools: ${resolvedGlobalTools.map(t => t.name).join(', ')}`);
+        console.log(`📋 Vibe call tools: ${resolvedCallTools.map(t => t.name).join(', ')}`);
         console.log(`👤 Agents: ${resolvedAgents.map(a => a.name).join(', ')}`);
         console.log(`🎯 Default agent: ${defaultAgent.name}`);
 

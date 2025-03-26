@@ -12,14 +12,15 @@
 	} from '$lib/ultravox/todoStore';
 	import { currentAgent } from '$lib/ultravox/agents';
 	import { registerToolsFromRegistry } from '$lib/ultravox/loaders/toolLoader';
-	import { getActiveVibe } from '$lib/ultravox';
+	import { getActiveVibe, GLOBAL_CALL_TOOLS } from '$lib/ultravox';
 
 	// Initialize the todo store and get the unsubscribe function
 	let unsubscribeTodo: () => void;
 	let toolsRegistered = false;
 
 	// Store for vibe data
-	let globalTools = $state<string[]>([]);
+	let globalSkills = $state<string[]>([]);
+	let vibeSkills = $state<string[]>([]);
 	let agentTools = $state<Record<string, string[]>>({});
 	let toolSkills = $state<Record<string, string>>({});
 	let toolIcons = $state<Record<string, string>>({});
@@ -32,8 +33,11 @@
 			loadingVibe = true;
 			const vibe = await getActiveVibe();
 
-			// Get global call tools
-			globalTools = (vibe.manifest as any).vibeTools || [];
+			// Get global skills (from globalTools.ts)
+			globalSkills = [...GLOBAL_CALL_TOOLS];
+
+			// Get vibe-specific skills
+			vibeSkills = (vibe.manifest as any).vibeTools || [];
 
 			// Get tools by agent
 			const toolsByAgent: Record<string, string[]> = {};
@@ -44,7 +48,7 @@
 			agentTools = toolsByAgent;
 
 			// Load tool data from manifests
-			await loadToolData([...globalTools, ...Object.values(toolsByAgent).flat()]);
+			await loadToolData([...globalSkills, ...vibeSkills, ...Object.values(toolsByAgent).flat()]);
 
 			loadingVibe = false;
 		} catch (error) {
@@ -154,14 +158,14 @@
 						<span class="ml-3 text-sm text-white/70">Loading skills...</span>
 					</div>
 				{:else}
-					<!-- Global Tools Section -->
-					{#if globalTools.length > 0}
+					<!-- Global Skills Section -->
+					{#if globalSkills.length > 0}
 						<div class="mb-4">
-							<h4 class="mb-2 text-sm font-semibold text-white/60">Global Commands</h4>
+							<h4 class="mb-2 text-sm font-semibold text-white/60">Global Skills</h4>
 							<div class="space-y-3">
-								{#each globalTools as toolName}
+								{#each globalSkills as toolName}
 									<div
-										class="rounded-lg border border-white/5 bg-white/5 p-3 transition-colors hover:bg-white/10"
+										class="rounded-lg border border-white/5 bg-cyan-900/20 p-3 transition-colors hover:bg-white/10"
 									>
 										<div class="flex items-center gap-2">
 											<div class={`rounded-full bg-${toolColors[toolName]}-500/20 p-1.5`}>
@@ -191,7 +195,44 @@
 						</div>
 					{/if}
 
-					<!-- Agent-Specific Tools -->
+					<!-- Vibe Skills Section -->
+					{#if vibeSkills.length > 0}
+						<div class="mb-4">
+							<h4 class="mb-2 text-sm font-semibold text-white/60">Vibe Skills</h4>
+							<div class="space-y-3">
+								{#each vibeSkills as toolName}
+									<div
+										class="rounded-lg border border-white/5 bg-indigo-900/20 p-3 transition-colors hover:bg-white/10"
+									>
+										<div class="flex items-center gap-2">
+											<div class={`rounded-full bg-${toolColors[toolName]}-500/20 p-1.5`}>
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													class="h-3.5 w-3.5"
+													fill="none"
+													viewBox="0 0 24 24"
+													stroke="currentColor"
+												>
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														stroke-width="2"
+														d={toolIcons[toolName]}
+													/>
+												</svg>
+											</div>
+											<div class="text-xs font-medium text-white/80">{toolName}</div>
+										</div>
+										<div class="mt-1 text-xs text-white/70">
+											{toolSkills[toolName]}
+										</div>
+									</div>
+								{/each}
+							</div>
+						</div>
+					{/if}
+
+					<!-- Agent-Specific Skills -->
 					{#each Object.entries(agentTools) as [agentName, tools]}
 						{#if tools.length > 0}
 							<div class="mt-5">

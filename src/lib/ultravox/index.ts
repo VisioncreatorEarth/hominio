@@ -16,6 +16,9 @@ export { getActiveVibe, resetActiveVibe, createAgentStageChangeData } from './st
 // Export call configuration
 export { DEFAULT_CALL_CONFIG, TODO_CALL_CONFIG, getBaseCallConfig } from './callConfig';
 
+// Export global tools configuration
+export { GLOBAL_CALL_TOOLS, isGlobalCallTool } from './globalTools';
+
 /**
  * Initialize the vibe system with a specific vibe
  * @param vibeName The name of the vibe to load

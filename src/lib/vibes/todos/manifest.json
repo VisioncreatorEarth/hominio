@@ -5,7 +5,6 @@
     "temperature": 0.7,
     "languageHint": "en",
     "vibeTools": [
-        "hangUp",
         "switchAgent"
     ],
     "defaultAgent": "Hominio",
