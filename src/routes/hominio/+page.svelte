@@ -26,14 +26,15 @@
 		// Initialize the todo store
 		unsubscribeTodo = initTodoStore();
 
-		// Register tools with Ultravox
+		// Register tools with Ultravox immediately
 		// This is important for voice commands to work
-		if (typeof window !== 'undefined') {
-			// Wait a short time for Ultravox to initialize
-			setTimeout(() => {
-				registerToolsFromRegistry();
-			}, 1000);
-		}
+		registerToolsFromRegistry();
+
+		// Also register tools when Ultravox is loaded/reloaded
+		window.addEventListener('ultravox-ready', () => {
+			console.log('🔄 Ultravox ready event detected, registering tools...');
+			registerToolsFromRegistry();
+		});
 	});
 
 	// Clean up on component destroy
@@ -42,6 +43,11 @@
 			unsubscribeTodo();
 		}
 		cleanupTodoStore();
+
+		// Remove the event listener
+		window.removeEventListener('ultravox-ready', () => {
+			registerToolsFromRegistry();
+		});
 	});
 
 	// Format date for display

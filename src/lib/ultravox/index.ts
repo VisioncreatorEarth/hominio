@@ -7,7 +7,7 @@ export * from './types';
 
 // Export loaders
 export { loadVibe, registerVibeTools } from './loaders/vibeLoader';
-export { loadTool, registerTools, clearToolCache } from './loaders/toolLoader';
+export { loadTool, registerTools, registerToolsFromRegistry, clearToolCache } from './loaders/toolLoader';
 export { getAgentConfig, buildSystemPrompt, clearAgentCache } from './loaders/agentLoader';
 
 // Export stage manager

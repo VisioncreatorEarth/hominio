@@ -5,9 +5,21 @@ import type { ToolDefinition } from '../types';
 import { toolRegistry } from '$lib/services/todoActions';
 
 // Common types for Ultravox tool functions
-type ToolParameters = Record<string, unknown>;
-type ToolResponse = Record<string, unknown> | string;
-type ToolImplementation = (params: ToolParameters) => ToolResponse | Promise<ToolResponse>;
+type ToolParams = Record<string, unknown>;
+type ToolImplementation = (params: ToolParams) => Promise<unknown> | unknown;
+
+// Define Ultravox session interface
+interface UltravoxSession {
+    registerTool: (name: string, impl: ToolImplementation) => void;
+}
+
+// Declare global window interface
+declare global {
+    interface Window {
+        __ULTRAVOX_SESSION?: UltravoxSession;
+        __hominio_tools?: Record<string, ToolImplementation>;
+    }
+}
 
 /**
  * In-memory cache for tool definitions to avoid reloading
@@ -62,11 +74,81 @@ export async function loadTool(toolName: string): Promise<ToolDefinition> {
 }
 
 /**
+ * Ensure tools are available globally for Ultravox
+ */
+function exposeToolsGlobally(): void {
+    if (typeof window === 'undefined') return;
+
+    // Create tools object with implementations
+    const tools = Object.entries(toolRegistry).reduce((acc, [name, implementation]) => {
+        acc[name] = implementation;
+        return acc;
+    }, {} as Record<string, ToolImplementation>);
+
+    // Define the tools property
+    Object.defineProperty(window, '__hominio_tools', {
+        value: tools,
+        writable: true,
+        enumerable: true,
+        configurable: true
+    });
+
+    console.log('🔗 Tools exposed globally:', Object.keys(tools).join(', '));
+}
+
+/**
+ * Register tools with the Ultravox session
+ */
+function registerToolsWithUltravox(session: { registerTool: (name: string, impl: ToolImplementation) => void }): void {
+    const registeredTools: string[] = [];
+
+    for (const [toolName, implementation] of Object.entries(toolRegistry)) {
+        try {
+            // Register the tool with proper error handling
+            session.registerTool(toolName, async (params: ToolParams) => {
+                try {
+                    console.log(`🔧 Running tool: ${toolName}`, params);
+                    const result = await Promise.resolve(implementation(params));
+
+                    // Handle string results (usually JSON)
+                    if (typeof result === 'string') {
+                        try {
+                            return JSON.parse(result);
+                        } catch {
+                            return {
+                                success: false,
+                                message: `Failed to parse result from ${toolName}`
+                            };
+                        }
+                    }
+
+                    return result;
+                } catch (error) {
+                    console.error(`❌ Error executing ${toolName}:`, error);
+                    return {
+                        success: false,
+                        message: `Error executing ${toolName}: ${error instanceof Error ? error.message : String(error)}`
+                    };
+                }
+            });
+            registeredTools.push(toolName);
+            console.log(`✅ Registered tool with Ultravox: ${toolName}`);
+        } catch (error) {
+            console.error(`❌ Failed to register tool "${toolName}":`, error);
+        }
+    }
+
+    if (registeredTools.length > 0) {
+        console.log('📋 Registered tools:', registeredTools.join(', '));
+    }
+}
+
+/**
  * Register tools with the Ultravox session
  * @param tools Array of loaded tool definitions
  */
 export function registerTools(tools: ToolDefinition[]): void {
-    if (typeof window === 'undefined' || !window.__ULTRAVOX_SESSION) {
+    if (typeof window === 'undefined' || !window.__ULTRAVOX_SESSION?.registerTool) {
         console.warn('⚠️ No Ultravox session available to register tools');
         return;
     }
@@ -78,15 +160,14 @@ export function registerTools(tools: ToolDefinition[]): void {
     for (const tool of tools) {
         if (tool.implementation) {
             try {
-                if (session.registerToolImplementation) {
-                    // Type cast the implementation to match what Ultravox expects
-                    const implementationFn = (params: unknown) => tool.implementation?.(params as ToolParameters);
-                    session.registerToolImplementation(tool.name, implementationFn);
-                    registeredTools.push(tool.name);
-                    console.log(`✅ Registered tool with Ultravox session: ${tool.name}`);
-                } else {
-                    console.warn(`⚠️ registerToolImplementation not available for tool "${tool.name}"`);
-                }
+                // Wrap the implementation to ensure it returns a Promise
+                const wrappedImpl = async (params: ToolParams) => {
+                    const result = await Promise.resolve(tool.implementation!(params));
+                    return result;
+                };
+                session.registerTool(tool.name, wrappedImpl);
+                registeredTools.push(tool.name);
+                console.log(`✅ Registered tool with Ultravox session: ${tool.name}`);
             } catch (error) {
                 console.error(`❌ Failed to register tool "${tool.name}":`, error);
             }
@@ -108,57 +189,38 @@ export function registerToolsFromRegistry(): void {
         return;
     }
 
-    console.log('🧩 Registering Hominio tools with Ultravox...');
+    // First expose tools globally
+    exposeToolsGlobally();
 
-    // Check if Ultravox exists
-    if (!window.__ULTRAVOX_SESSION) {
-        console.warn('⚠️ Ultravox session not found yet, will retry in 2 seconds');
-        // Try again in 2 seconds
-        setTimeout(registerToolsFromRegistry, 2000);
-        return;
-    }
-
-    const toolNames = Object.keys(toolRegistry);
-    console.log(`Found ${toolNames.length} tools in registry: ${toolNames.join(', ')}`);
-
-    // Make each tool available via window.__hominio_tools
-    // This is crucial for backward compatibility with Ultravox
-    if (typeof window !== 'undefined') {
-        (window as any).__hominio_tools = toolRegistry;
-        console.log('🔗 Exposed tools via window.__hominio_tools');
-    }
-
-    // Directly register tools with Ultravox session
-    const session = window.__ULTRAVOX_SESSION;
-    for (const [toolName, implementation] of Object.entries(toolRegistry)) {
-        try {
-            // For all tools, register them using the standard API
-            if (session.registerTool) {
-                session.registerTool(toolName, async (params: unknown) => {
-                    console.log(`Running tool: ${toolName}`, params);
-                    // Type cast params to what our implementation expects
-                    const result = implementation(params as ToolParameters);
-
-                    if (typeof result === 'string') {
-                        try {
-                            return JSON.parse(result);
-                        } catch {
-                            return { success: false, message: "Failed to parse tool result" };
-                        }
-                    }
-
-                    return result;
-                });
-                console.log(`✅ Registered tool with Ultravox: ${toolName}`);
-            } else {
-                console.warn(`❌ Cannot register tool ${toolName}: registerTool method not available`);
-            }
-        } catch (error) {
-            console.error(`❌ Failed to register tool "${toolName}":`, error);
+    // Function to attempt registration
+    const attemptRegistration = () => {
+        const session = window.__ULTRAVOX_SESSION;
+        if (session?.registerTool) {
+            console.log('🧩 Found Ultravox session, registering tools...');
+            registerToolsWithUltravox(session);
+            console.log('🎉 Tool registration complete');
+            return true;
         }
-    }
+        console.log('⏳ Waiting for Ultravox session...');
+        return false;
+    };
 
-    console.log('🎉 All Hominio tools registered successfully with Ultravox!');
+    // Try registration immediately
+    if (!attemptRegistration()) {
+        // If failed, retry every second for up to 10 seconds
+        let attempts = 0;
+        const maxAttempts = 10;
+
+        const retryInterval = setInterval(() => {
+            attempts++;
+            if (attemptRegistration() || attempts >= maxAttempts) {
+                clearInterval(retryInterval);
+                if (attempts >= maxAttempts) {
+                    console.warn('⚠️ Failed to register tools after maximum attempts');
+                }
+            }
+        }, 1000);
+    }
 }
 
 /**
