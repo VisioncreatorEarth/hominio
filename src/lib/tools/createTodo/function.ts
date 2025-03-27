@@ -15,7 +15,7 @@ export async function execute(inputs: {
 }): Promise<{ success: boolean; message: string }> {
     try {
         // Get operations for todo schema
-        const { create, query } = loroAPI.getOperations<TodoItem>('todo');
+        const { query } = loroAPI.getOperations<TodoItem>('todo');
 
         // Check for duplicate
         const existing = query(todo => todo.text === inputs.text.trim());
@@ -28,14 +28,25 @@ export async function execute(inputs: {
             ? inputs.tags.split(',').map(t => t.trim()).filter(t => t.length > 0)
             : [];
 
-        // Create the todo
-        const id = create({
+        // Get direct access to the document and map using the new generic helper
+        const { map } = loroAPI.getSchemaDetails('todo');
+
+        // Create a new todo item with UUID
+        const id = crypto.randomUUID();
+        const todoItem = {
+            id,
             text: inputs.text.trim(),
             completed: false,
             createdAt: Date.now(),
             tags,
             docId: inputs.docId || 'personal' // Default list
-        });
+        };
+
+        // Add the item to the map
+        map.set(id, todoItem);
+
+        // Force update the store manually
+        loroAPI.updateStoreForSchema('todo');
 
         console.log(`Todo created with ID: ${id}`);
         return logToolActivity('createTodo', `Todo created: ${inputs.text}`);

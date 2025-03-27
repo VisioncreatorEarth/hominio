@@ -24,11 +24,8 @@ export async function execute(inputs: {
                 return logToolActivity('deleteTodo', 'Todo not found', false);
             }
 
-            // Force rebuild of the collection and properly delete
-            // This bypasses the collection management in loroAPI and directly manipulates the document
-            const todoSchema = await import('$lib/docs/schemas/todo').then(m => m.default);
-            const doc = loroAPI.getDoc(todoSchema.docName);
-            const map = doc.getMap(todoSchema.collectionName);
+            // Get direct access to the document and map using the new generic helper
+            const { map } = loroAPI.getSchemaDetails('todo');
 
             // Get all keys and check if our ID is among them
             const keys = Array.from(map.keys());
@@ -62,10 +59,8 @@ export async function execute(inputs: {
             // We have exactly one match
             const [id, todo] = matchingTodos[0];
 
-            // Force rebuild of the collection and properly delete
-            const todoSchema = await import('$lib/docs/schemas/todo').then(m => m.default);
-            const doc = loroAPI.getDoc(todoSchema.docName);
-            const map = doc.getMap(todoSchema.collectionName);
+            // Get direct access to the document and map using the new generic helper
+            const { map } = loroAPI.getSchemaDetails('todo');
 
             // Get all keys and check if our ID is among them
             const keys = Array.from(map.keys());

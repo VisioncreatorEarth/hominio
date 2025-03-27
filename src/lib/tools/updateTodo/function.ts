@@ -18,7 +18,7 @@ export async function execute(inputs: {
 }): Promise<{ success: boolean; message: string }> {
     try {
         // Get operations for todo schema
-        const { update, get, query } = loroAPI.getOperations<TodoItem>('todo');
+        const { get, query } = loroAPI.getOperations<TodoItem>('todo');
 
         // Prepare update data
         const updateData: Partial<TodoItem> = {};
@@ -50,13 +50,25 @@ export async function execute(inputs: {
                 return logToolActivity('updateTodo', 'Todo not found', false);
             }
 
-            // Update the todo
-            const success = update(inputs.todoId, updateData);
+            // Get direct access to the document and map using the new generic helper
+            const { map } = loroAPI.getSchemaDetails('todo');
 
-            if (success) {
+            // Get all keys and check if our ID is among them
+            const keys = Array.from(map.keys());
+            if (keys.includes(inputs.todoId)) {
+                // Get the current item and merge with updates
+                const currentItem = map.get(inputs.todoId) as Record<string, unknown>;
+                const updatedItem = { ...currentItem, ...updateData };
+
+                // Update the item
+                map.set(inputs.todoId, updatedItem);
+
+                // Force update the store manually
+                loroAPI.updateStoreForSchema('todo');
+
                 return logToolActivity('updateTodo', `Todo updated successfully`);
             } else {
-                return logToolActivity('updateTodo', 'Failed to update todo', false);
+                return logToolActivity('updateTodo', `Todo with ID ${inputs.todoId} not found in map`, false);
             }
         }
 
@@ -76,12 +88,26 @@ export async function execute(inputs: {
 
             // We have exactly one match
             const [id, todo] = matchingTodos[0];
-            const success = update(id, updateData);
 
-            if (success) {
+            // Get direct access to the document and map using the new generic helper
+            const { map } = loroAPI.getSchemaDetails('todo');
+
+            // Get all keys and check if our ID is among them
+            const keys = Array.from(map.keys());
+            if (keys.includes(id)) {
+                // Get the current item and merge with updates
+                const currentItem = map.get(id) as Record<string, unknown>;
+                const updatedItem = { ...currentItem, ...updateData };
+
+                // Update the item
+                map.set(id, updatedItem);
+
+                // Force update the store manually
+                loroAPI.updateStoreForSchema('todo');
+
                 return logToolActivity('updateTodo', `Todo "${todo.text}" updated successfully`);
             } else {
-                return logToolActivity('updateTodo', 'Failed to update todo', false);
+                return logToolActivity('updateTodo', `Todo with ID ${id} not found in map`, false);
             }
         }
 
@@ -117,15 +143,23 @@ export function updateTodoImplementation(parameters: ToolParameters): string {
 
         // Extract parameters with safer type checking
         const todoId = parsedParams.todoId as string | undefined;
-        const todoText = parsedParams.todoText as string | undefined;
+        const originalText = parsedParams.originalText as string | undefined;
         const newText = parsedParams.newText as string | undefined;
-        const completed = typeof parsedParams.completed === 'boolean' ? parsedParams.completed : undefined;
+        const completedStr = parsedParams.completed as string | boolean | undefined;
         const tags = parsedParams.tags as string | undefined;
+
+        // Handle the completed parameter which might be a string "true"/"false"
+        let completed: boolean | undefined = undefined;
+        if (typeof completedStr === 'boolean') {
+            completed = completedStr;
+        } else if (typeof completedStr === 'string') {
+            completed = completedStr.toLowerCase() === 'true';
+        }
 
         // Call the new implementation with appropriate parameters
         execute({
             todoId,
-            text: todoText,
+            text: originalText,
             newText,
             completed,
             tags

@@ -486,6 +486,125 @@ export class LoroAPI {
     }
 
     /**
+     * Generic update helper that handles the common pattern of updating an item in a map
+     * This provides a more reliable way to update items than the generic operations
+     * @param schemaName Name of the schema
+     * @param id ID of the item to update
+     * @param updateFn Function that returns the updated item
+     * @returns Whether the update was successful
+     */
+    updateItem<T>(schemaName: string, id: string, updateFn: (currentItem: T) => T): boolean {
+        try {
+            const schema = this.schemaRegistry.get(schemaName);
+            if (!schema) return false;
+
+            // Only implemented for map container types for now
+            if (schema.containerType !== 'map' && schema.containerType !== undefined) {
+                console.warn(`updateItem only supports map container types currently`);
+                return false;
+            }
+
+            const doc = this.getDoc(schema.docName);
+            const map = doc.getMap(schema.collectionName);
+
+            // Check if the item exists
+            const keys = Array.from(map.keys());
+            if (!keys.includes(id)) return false;
+
+            // Get current item and apply update
+            const currentItem = map.get(id) as unknown as T;
+            const updatedItem = updateFn(currentItem);
+
+            // Set the updated item back in the map
+            map.set(id, updatedItem as unknown as Value);
+
+            // Force update the store
+            this.updateStore(schemaName);
+
+            return true;
+        } catch (error) {
+            console.error(`Error updating item in ${schemaName}:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * Generic delete helper that handles the common pattern of deleting an item from a map
+     * This provides a more reliable way to delete items than the generic operations
+     * @param schemaName Name of the schema
+     * @param id ID of the item to delete
+     * @returns Whether the deletion was successful
+     */
+    deleteItem(schemaName: string, id: string): boolean {
+        try {
+            const schema = this.schemaRegistry.get(schemaName);
+            if (!schema) return false;
+
+            // Only implemented for map container types for now
+            if (schema.containerType !== 'map' && schema.containerType !== undefined) {
+                console.warn(`deleteItem only supports map container types currently`);
+                return false;
+            }
+
+            const doc = this.getDoc(schema.docName);
+            const map = doc.getMap(schema.collectionName);
+
+            // Check if the item exists
+            const keys = Array.from(map.keys());
+            if (!keys.includes(id)) return false;
+
+            // Delete the item
+            map.delete(id);
+
+            // Force update the store
+            this.updateStore(schemaName);
+
+            return true;
+        } catch (error) {
+            console.error(`Error deleting item from ${schemaName}:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * Generic create helper that handles the common pattern of creating an item in a map
+     * This provides a more reliable way to create items than the generic operations
+     * @param schemaName Name of the schema
+     * @param item Item to create (should include an id field)
+     * @returns The ID of the created item, or null if creation failed
+     */
+    createItem<T extends { id?: string }>(schemaName: string, item: T): string | null {
+        try {
+            const schema = this.schemaRegistry.get(schemaName);
+            if (!schema) return null;
+
+            // Only implemented for map container types for now
+            if (schema.containerType !== 'map' && schema.containerType !== undefined) {
+                console.warn(`createItem only supports map container types currently`);
+                return null;
+            }
+
+            const doc = this.getDoc(schema.docName);
+            const map = doc.getMap(schema.collectionName);
+
+            // Ensure item has an ID
+            const id = item.id || crypto.randomUUID();
+            const itemWithId = { ...item, id };
+
+            // Add the item to the map
+            map.set(id, itemWithId as unknown as Value);
+
+            // Force update the store
+            this.updateStore(schemaName);
+
+            return id;
+        } catch (error) {
+            console.error(`Error creating item in ${schemaName}:`, error);
+            return null;
+        }
+    }
+
+    /**
      * Update all stores associated with a document
      * @param docName Name of the document
      */
@@ -495,6 +614,28 @@ export class LoroAPI {
                 this.updateStore(schemaName);
             }
         }
+    }
+
+    /**
+     * Get schema details, document and map collection for a schema
+     * This is a helper method to avoid hardcoded imports in tool functions
+     * @param schemaName Name of the schema
+     * @returns Object with schema info, document and map
+     */
+    getSchemaDetails(schemaName: string): {
+        schema: SchemaDefinition;
+        doc: LoroDoc;
+        map: LoroMap<Record<string, unknown>>;
+    } {
+        const schema = this.schemaRegistry.get(schemaName);
+        if (!schema) {
+            throw new Error(`Schema not found: ${schemaName}`);
+        }
+
+        const doc = this.getDoc(schema.docName);
+        const map = doc.getMap(schema.collectionName);
+
+        return { schema, doc, map };
     }
 }
 
