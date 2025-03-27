@@ -5,7 +5,7 @@
     "color": "purple",
     "temporaryTool": {
         "modelToolName": "filterTodos",
-        "description": "Filter the list of todos by tag. Use this tool when a specific category of todos needs to be shown. NEVER emit text when doing this tool call. 10. As Oliver, handle all todo operations directly\n\nBe friendly, concise, and helpful. When filtering todos, use the exact tag the user mentions or \"all\" to show all todos\n",
+        "description": "Filter the list of todos by tag. Use this tool when a specific category of todos needs to be shown. NEVER emit text when doing this tool call. When filtering todos, use the exact tag the user mentions or \"all\" to show all todos\n",
         "dynamicParameters": [
             {
                 "name": "tag",

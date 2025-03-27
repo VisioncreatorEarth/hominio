@@ -2,8 +2,8 @@
 	import { onMount } from 'svelte';
 	import type { Transcript } from '$lib/ultravox/callFunctions';
 	import { currentAgent, type AgentName } from '$lib/ultravox/agents';
-	import { fade } from 'svelte/transition';
 	import { toolState } from '$lib/ultravox/todoStore';
+	import { fade, fly } from 'svelte/transition';
 
 	let {
 		callStatus,
@@ -145,6 +145,7 @@
 </script>
 
 {#if isInterfaceVisible}
+	<!-- Single row layout with 3 columns -->
 	<div class="fixed inset-x-0 bottom-0 z-40 flex justify-center">
 		<div
 			class="w-full max-w-md rounded-2xl border border-white/5 bg-white/10 p-4 shadow-xl backdrop-blur-md dark:bg-slate-900/20"

@@ -2,6 +2,10 @@ import { browser } from '$app/environment';
 import type { UltravoxSession as UVSession, UltravoxSessionStatus as UVStatus, Transcript as UVTranscript, ClientToolImplementation } from 'ultravox-client';
 import { currentAgent, type AgentName } from './agents';
 import { createCall } from './createCall';
+import type { UltravoxSession as ClientUltravoxSession } from 'ultravox-client';
+import type { UltravoxSession } from './types';
+import type { Transcript } from './types';
+import type { CallCallbacks } from './types';
 
 // Define types for our Ultravox integration
 export type WebRtcMedium = { webRtc: Record<string, never> };
@@ -41,11 +45,6 @@ export enum Role {
     AGENT = 'agent'
 }
 
-export type Transcript = {
-    speaker: 'agent' | 'user';
-    text: string;
-};
-
 export type UltravoxExperimentalMessageEvent = {
     message: {
         message: string;
@@ -59,9 +58,9 @@ const debugMessages: Set<string> = new Set(["debug"]);
 
 // Call callbacks interface
 export interface CallCallbacks {
-    onStatusChange: (status: UVStatus | string | undefined) => void;
-    onTranscriptChange: (transcripts: UVTranscript[] | undefined) => void;
-    onDebugMessage?: (message: UltravoxExperimentalMessageEvent) => void;
+    onStatusChange: (status: string | undefined) => void;
+    onTranscriptChange: (transcripts: unknown[] | undefined) => void;
+    onDebugMessage?: (message: unknown) => void;
 }
 
 // Toggle mic/speaker mute state
@@ -107,6 +106,9 @@ export function forceUnmuteSpeaker(): void {
         uvSession.unmuteMic();
     }
 }
+
+// Track last processed transcript to prevent loops
+let lastProcessedTranscriptCount = 0;
 
 // Start a call
 export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig, vibeId = 'home'): Promise<void> {
@@ -256,13 +258,26 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
         });
 
         uvSession.addEventListener('transcripts', () => {
-            console.log('📝 TRANSCRIPTS UPDATED, count:', uvSession?.transcripts?.length);
-            callbacks.onTranscriptChange(uvSession?.transcripts);
+            const transcripts = uvSession?.transcripts;
+            const currentCount = transcripts?.length || 0;
 
-            // Ensure speaker is unmuted when transcripts update (agent likely about to speak)
-            if (uvSession && uvSession.isSpeakerMuted) {
-                console.log('🔊 Unmuting speaker after transcript update');
-                uvSession.unmuteSpeaker();
+            // Only process if we have new transcripts and not in a feedback loop
+            if (currentCount > lastProcessedTranscriptCount) {
+                console.log('📝 NEW TRANSCRIPTS, count:', currentCount - lastProcessedTranscriptCount);
+
+                // Update the processed count
+                lastProcessedTranscriptCount = currentCount;
+
+                // Only send the new transcripts to the callback
+                callbacks.onTranscriptChange(transcripts);
+
+                // Ensure speaker is unmuted when transcripts update (agent likely about to speak)
+                if (uvSession && uvSession.isSpeakerMuted) {
+                    console.log('🔊 Unmuting speaker after transcript update');
+                    uvSession.unmuteSpeaker();
+                }
+            } else {
+                console.log('🔄 Skipping duplicate transcript update');
             }
         });
 

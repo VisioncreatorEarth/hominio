@@ -56,6 +56,10 @@ export const toolState = writable<ToolState>({
 });
 export const recentToolActivity = writable<{ action: string; message: string; timestamp: number } | null>(null);
 
+// Track last logged activity to prevent duplicates
+let lastLoggedActivity: { action: string; message: string; timestamp: number; id: string } | null = null;
+const activityQueue: Set<string> = new Set(); // Track activities in progress
+
 // Helper to update the todos store from the LoroDoc
 export function updateTodoEntries() {
     const rawEntries = [...todoMap.entries()];
@@ -64,7 +68,9 @@ export function updateTodoEntries() {
     // Create properly typed entries with explicit casting
     const typedEntries: [string, TodoItem][] = rawEntries.map((entry) => {
         const key = entry[0] as string;
-        const value = entry[1] as unknown as TodoItem;
+        const rawValue = entry[1] as unknown;
+        // Ensure the value is an object before accessing properties
+        const value = (typeof rawValue === 'object' && rawValue !== null ? rawValue : {}) as TodoItem;
         // Ensure docId exists (for backward compatibility)
         if (!value.docId) value.docId = 'personal';
         return [key, value];
@@ -84,9 +90,7 @@ export function updateTodoEntries() {
 
 // Update document list with counts
 function updateDocuments() {
-    const allEntries = [...todoMap.entries()].map(
-        (entry) => [entry[0], entry[1] as unknown as TodoItem] as [string, TodoItem]
-    );
+    const allEntries = [...todoMap.entries()];
     const docs = get(todoDocuments);
 
     // Count todos for each document
@@ -121,13 +125,39 @@ export function initTodoStore() {
 
 // Helper for tracking tool usage for UI feedback
 export function logToolActivity(action: string, message: string, success = true) {
+    const timestamp = Date.now();
+    const activityId = crypto.randomUUID(); // Generate unique ID for each activity
+
+    // Check if this activity is already being processed
+    const activityKey = `${action}-${message}`;
+    if (activityQueue.has(activityKey)) {
+        console.log('Activity already in progress:', { action, message });
+        return { success, message };
+    }
+
+    // Add to queue and remove after processing
+    activityQueue.add(activityKey);
+    setTimeout(() => activityQueue.delete(activityKey), 3000);
+
+    // Check if this is a duplicate activity within a short time window (1 second)
+    if (lastLoggedActivity &&
+        lastLoggedActivity.action === action &&
+        lastLoggedActivity.message === message &&
+        timestamp - lastLoggedActivity.timestamp < 1000) {
+        console.log('Skipping duplicate activity:', { action, message });
+        return { success, message };
+    }
+
+    // Update last logged activity
+    lastLoggedActivity = { action, message, timestamp, id: activityId };
+
     toolState.update(state => {
         const newState = {
             ...state,
             pendingAction: null,
-            lastActionTimestamp: Date.now(),
+            lastActionTimestamp: timestamp,
             history: [
-                { action, success, message, timestamp: Date.now() },
+                { action, success, message, timestamp },
                 ...state.history.slice(0, 9) // Keep last 10 entries
             ]
         };
@@ -136,19 +166,26 @@ export function logToolActivity(action: string, message: string, success = true)
 
     // Show recent activity indicator in global state
     const activity = {
+        id: activityId,
         action,
         message,
-        timestamp: Date.now()
+        timestamp
     };
 
     recentToolActivity.set(activity);
 
     // Clear the notification after 3 seconds
     setTimeout(() => {
-        recentToolActivity.set(null);
+        // Only clear if this is still the current notification
+        recentToolActivity.update(current => {
+            if (current?.id === activityId) {
+                return null;
+            }
+            return current;
+        });
     }, 3000);
 
-    console.log(`Tool activity: ${action} - ${message}`);
+    console.log(`Tool activity: ${action} - ${message} (${activityId})`);
     return { success, message };
 }
 
