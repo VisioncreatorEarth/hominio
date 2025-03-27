@@ -9,6 +9,7 @@ export * from './types';
 export { loadVibe, registerVibeTools } from './loaders/vibeLoader';
 export { loadTool, registerTools, registerToolsFromRegistry, clearToolCache } from './loaders/toolLoader';
 export { getAgentConfig, buildSystemPrompt, clearAgentCache } from './loaders/agentLoader';
+export { loadVibeComponent, clearComponentCache } from './loaders/viewLoader';
 
 // Export stage manager
 export { getActiveVibe, resetActiveVibe, createAgentStageChangeData } from './stageManager';

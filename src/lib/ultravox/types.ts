@@ -107,6 +107,7 @@ export interface VibeManifest {
     voice?: string;
     languageHint?: string;
     initialMessages?: string[];
+    view: string;
     vibeTools: string[];
     defaultAgent: string;
     agents: AgentConfig[];

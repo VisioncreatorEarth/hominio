@@ -1,18 +1,16 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import {
-		todos,
-		todoState,
-		toolState,
-		initTodoStore,
-		cleanupTodoStore,
-		getActiveDocName,
-		getAllUniqueTags,
-		filterTodosByTag
-	} from '$lib/ultravox/todoStore';
+	import { todoState, toolState, initTodoStore, cleanupTodoStore } from '$lib/ultravox/todoStore';
 	import { currentAgent } from '$lib/ultravox/agents';
 	import { registerToolsFromRegistry } from '$lib/ultravox/loaders/toolLoader';
-	import { getActiveVibe, GLOBAL_CALL_TOOLS } from '$lib/ultravox';
+	import {
+		getActiveVibe,
+		GLOBAL_CALL_TOOLS,
+		loadVibeComponent,
+		clearComponentCache,
+		initializeVibe
+	} from '$lib/ultravox';
+	import type { ComponentType, SvelteComponent } from 'svelte';
 
 	// Initialize the todo store and get the unsubscribe function
 	let unsubscribeTodo: () => void;
@@ -27,11 +25,17 @@
 	let toolColors = $state<Record<string, string>>({});
 	let loadingVibe = $state(true);
 
+	// Store for dynamic component
+	let vibeComponent = $state<any>(null);
+	let vibeComponentName = $state<string>('');
+	let loadingComponent = $state(true);
+
 	// Function to load vibe information
 	async function loadVibeInfo() {
 		try {
 			loadingVibe = true;
 			const vibe = await getActiveVibe();
+			console.log('🔍 Active vibe:', vibe.manifest.name);
 
 			// Get global skills (from globalTools.ts)
 			globalSkills = [...GLOBAL_CALL_TOOLS];
@@ -50,10 +54,44 @@
 			// Load tool data from manifests
 			await loadToolData([...globalSkills, ...vibeSkills, ...Object.values(toolsByAgent).flat()]);
 
+			// Get the view component from the vibe
+			const viewName = (vibe.manifest as any).view;
+			console.log(`🎮 Vibe view component name from manifest: "${viewName}"`);
+			console.log(`🎮 Currently set component name: "${vibeComponentName}"`);
+
+			// Don't change component name if already set directly
+			// This preserves our direct setting in switchVibe
+
+			// Load the component
+			await loadVibeComponentUI();
+
 			loadingVibe = false;
 		} catch (error) {
-			console.error('Failed to load vibe info:', error);
+			console.error('❌ Failed to load vibe info:', error);
 			loadingVibe = false;
+		}
+	}
+
+	// Function to load the dynamic vibe component
+	async function loadVibeComponentUI() {
+		loadingComponent = true;
+		try {
+			if (vibeComponentName === 'CounterView') {
+				// Direct import for CounterView
+				const module = await import('$lib/components/CounterView.svelte');
+				vibeComponent = module.default;
+				console.log(`📱 Directly loaded CounterView component`);
+			} else {
+				// Default to TodoView
+				const module = await import('$lib/components/TodoView.svelte');
+				vibeComponent = module.default;
+				console.log(`📱 Directly loaded TodoView component`);
+			}
+		} catch (error) {
+			console.error(`❌ Failed to load vibe component "${vibeComponentName}":`, error);
+			vibeComponent = null;
+		} finally {
+			loadingComponent = false;
 		}
 	}
 
@@ -108,9 +146,54 @@
 		return toolsRegistered;
 	}
 
-	// Format date for display
-	function formatDate(timestamp: number): string {
-		return new Date(timestamp).toLocaleString();
+	// Function to handle vibe switching
+	async function switchVibe(vibeName: string) {
+		loadingVibe = true;
+		console.log(`🔄 Switching to ${vibeName} vibe...`);
+		try {
+			// Reset state first
+			vibeComponent = null;
+
+			// Set component name directly based on vibe
+			if (vibeName === 'counter') {
+				vibeComponentName = 'CounterView';
+				console.log('⚠️ Setting component to CounterView directly');
+			} else {
+				vibeComponentName = 'TodoView';
+				console.log('⚠️ Setting component to TodoView directly');
+			}
+
+			loadingComponent = true;
+
+			// Clear component cache to force reload
+			clearComponentCache();
+			console.log('🧹 Component cache cleared');
+
+			// Initialize the new vibe
+			console.log(`🚀 Initializing ${vibeName} vibe...`);
+			await initializeVibe(vibeName);
+
+			// Reload vibe info
+			console.log('📋 Loading vibe data...');
+			await loadVibeInfo();
+			console.log(`✅ Successfully switched to ${vibeName} vibe`);
+		} catch (error) {
+			console.error(`❌ Failed to initialize ${vibeName} vibe:`, error);
+			loadingVibe = false;
+		}
+	}
+
+	// Debug function to inspect manifest
+	async function debugVibeManifest() {
+		try {
+			const vibe = await getActiveVibe();
+			console.log('🔎 DEBUGGING VIBE MANIFEST');
+			console.log('Name:', vibe.manifest.name);
+			console.log('View:', (vibe.manifest as any).view);
+			console.log('Full manifest:', vibe.manifest);
+		} catch (error) {
+			console.error('Debug error:', error);
+		}
 	}
 
 	onMount(async () => {
@@ -146,6 +229,59 @@
 	<!-- Left sidebar for Skills -->
 	<div class="lg:col-span-1">
 		<div class="sticky top-6 p-4">
+			<!-- Vibe Selector -->
+			<div class="mb-4 rounded-xl border border-white/10 bg-white/5 p-4 backdrop-blur-sm">
+				<h3 class="mb-3 text-lg font-semibold text-white/80">Select Vibe</h3>
+				{#if loadingVibe}
+					<div class="flex items-center justify-center py-3">
+						<div
+							class="h-5 w-5 animate-spin rounded-full border-2 border-white/20 border-t-white/80"
+						></div>
+						<span class="ml-3 text-sm text-white/70">Switching vibe...</span>
+					</div>
+				{:else}
+					<div class="space-y-2">
+						<button
+							on:click={() => switchVibe('todos')}
+							class="w-full rounded-lg bg-indigo-500/30 py-2 text-sm font-medium text-white/90 transition-all hover:bg-indigo-500/50"
+						>
+							Todo Vibe
+						</button>
+						<button
+							on:click={() => switchVibe('counter')}
+							class="w-full rounded-lg bg-blue-500/30 py-2 text-sm font-medium text-white/90 transition-all hover:bg-blue-500/50"
+						>
+							Counter Vibe
+						</button>
+						<button
+							on:click={debugVibeManifest}
+							class="mt-4 w-full rounded-lg bg-orange-500/30 py-2 text-xs font-medium text-white/90 transition-all hover:bg-orange-500/50"
+						>
+							Debug Manifest
+						</button>
+						<button
+							on:click={async () => {
+								loadingComponent = true;
+								vibeComponent = null;
+								vibeComponentName = 'CounterView';
+								try {
+									const module = await import('$lib/components/CounterView.svelte');
+									vibeComponent = module.default;
+									console.log('Force loaded CounterView');
+								} catch (e) {
+									console.error('Failed to load CounterView:', e);
+								} finally {
+									loadingComponent = false;
+								}
+							}}
+							class="w-full rounded-lg bg-red-500/30 py-2 text-xs font-medium text-white/90 transition-all hover:bg-red-500/50"
+						>
+							Force CounterView
+						</button>
+					</div>
+				{/if}
+			</div>
+
 			<!-- Skills Section -->
 			<div class="rounded-xl border border-white/10 bg-white/5 p-4 backdrop-blur-sm">
 				<h3 class="mb-3 text-lg font-semibold text-white/80">Available Skills</h3>
@@ -275,128 +411,20 @@
 		</div>
 	</div>
 
-	<!-- Main content area (centered, takes 4/6 of space on larger screens) -->
+	<!-- Main content area - Dynamically loaded vibe component -->
 	<div class="lg:col-span-4">
-		<div class="mx-auto max-w-7xl p-4 sm:p-6">
-			<!-- Header -->
-			<div class="mb-8 text-center">
-				<h1 class="text-3xl font-bold text-white/95">Hominio Voice Todos</h1>
-				<p class="mt-2 text-white/70">
-					Currently viewing <span class="font-semibold text-blue-300">{getActiveDocName()}</span>
-				</p>
-			</div>
-
-			<!-- Tags Filter -->
-			{#if getAllUniqueTags().length > 0}
-				<div class="mb-6 rounded-xl border border-white/10 bg-white/5 p-4 backdrop-blur-sm">
-					<h3 class="mb-2 text-sm font-medium text-white/70">Filter by tag:</h3>
-					<div class="flex flex-wrap gap-2">
-						<button
-							on:click={() => filterTodosByTag(null)}
-							class={`rounded-lg px-3 py-1 text-sm transition-colors ${
-								$todoState.selectedTag === null
-									? 'bg-blue-500/30 text-white'
-									: 'bg-white/10 text-white/70 hover:bg-white/20'
-							}`}
-						>
-							All
-						</button>
-						{#key getAllUniqueTags().join(',')}
-							{#each getAllUniqueTags() as tag}
-								<button
-									on:click={() => filterTodosByTag(tag)}
-									class={`rounded-lg px-3 py-1 text-sm transition-colors ${
-										$todoState.selectedTag === tag
-											? 'bg-blue-500/30 text-white'
-											: 'bg-white/10 text-white/70 hover:bg-white/20'
-									}`}
-								>
-									{tag}
-								</button>
-							{/each}
-						{/key}
-					</div>
-				</div>
-			{/if}
-
-			<!-- Todo List -->
-			<div class="space-y-3">
-				{#if $todos.length === 0}
+		{#if loadingComponent || !vibeComponent}
+			<div class="flex h-64 items-center justify-center">
+				<div class="flex flex-col items-center">
 					<div
-						class="flex items-center justify-center rounded-xl border border-white/10 bg-white/5 p-12 text-white/60 backdrop-blur-sm"
-					>
-						No todos yet. Start by saying "Create a todo to..."
-					</div>
-				{:else}
-					{#key [$todos.length, $todoState.selectedTag, $todoState.activeDocId]}
-						{#each $todos.filter(([_, todo]) => $todoState.selectedTag === null || todo.tags.includes($todoState.selectedTag)) as [id, todo] (id)}
-							<div
-								class="rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm transition-colors hover:bg-white/10"
-							>
-								<div class="flex flex-col p-4">
-									<div class="flex items-center justify-between">
-										<div class="flex min-w-0 flex-1 items-center gap-4">
-											<div
-												class={`flex h-6 w-6 items-center justify-center rounded-full border transition-colors ${
-													todo.completed
-														? 'border-green-500 bg-green-500/20 text-green-400'
-														: 'border-white/20 bg-white/5 text-transparent'
-												}`}
-											>
-												{#if todo.completed}
-													<svg
-														xmlns="http://www.w3.org/2000/svg"
-														class="h-4 w-4"
-														fill="none"
-														viewBox="0 0 24 24"
-														stroke="currentColor"
-													>
-														<path
-															stroke-linecap="round"
-															stroke-linejoin="round"
-															stroke-width="2.5"
-															d="M5 13l4 4L19 7"
-														/>
-													</svg>
-												{/if}
-											</div>
-											<span
-												class={todo.completed
-													? 'truncate text-white/50 line-through'
-													: 'truncate text-white/90'}
-											>
-												{todo.text}
-											</span>
-										</div>
-										<span class="text-xs text-white/40">
-											{formatDate(todo.createdAt)}
-										</span>
-									</div>
-
-									{#if todo.tags && todo.tags.length > 0}
-										<div class="mt-2 flex flex-wrap gap-1.5">
-											{#each todo.tags as tag}
-												<span
-													class="rounded-md bg-indigo-500/20 px-2 py-0.5 text-xs text-indigo-200"
-												>
-													{tag}
-												</span>
-											{/each}
-										</div>
-									{/if}
-								</div>
-							</div>
-						{:else}
-							<div
-								class="flex items-center justify-center rounded-xl border border-white/10 bg-white/5 p-12 text-white/60 backdrop-blur-sm"
-							>
-								No todos match the selected filter
-							</div>
-						{/each}
-					{/key}
-				{/if}
+						class="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-white/80"
+					></div>
+					<p class="mt-4 text-white/60">Loading {vibeComponentName} component...</p>
+				</div>
 			</div>
-		</div>
+		{:else}
+			<svelte:component this={vibeComponent} />
+		{/if}
 	</div>
 
 	<!-- Right sidebar for activity log -->
@@ -428,7 +456,9 @@
 																			? 'bg-amber-500/20'
 																			: entry.action === 'switchList'
 																				? 'bg-cyan-500/20'
-																				: 'bg-teal-500/20'
+																				: entry.action === 'switchAgent'
+																					? 'bg-cyan-500/20'
+																					: 'bg-teal-500/20'
 													: 'bg-orange-500/20'
 											}`}
 										>
