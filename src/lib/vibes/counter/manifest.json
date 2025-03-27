@@ -6,15 +6,15 @@
     "languageHint": "en",
     "view": "CounterView",
     "vibeTools": [],
-    "defaultAgent": "Hominio",
+    "defaultAgent": "Lily",
     "agents": [
         {
-            "name": "Hominio",
-            "personality": "helpful and attentive",
-            "voiceId": "b0e6b5c1-3100-44d5-8578-9015aa3023ae",
+            "name": "Lily",
+            "personality": "cheerful and energetic",
+            "voiceId": "ede629be-f7cf-48a2-a7e6-ee2c50785b5d",
             "description": "counter manager",
             "temperature": 0.7,
-            "systemPrompt": "You are Hominio, managing a simple counter. Explain to users that they can use the buttons to increment or decrement the counter value.",
+            "systemPrompt": "You are Lily, managing a simple counter. Explain to users with enthusiasm that they can use the buttons to increment or decrement the counter value. Be cheerful and energetic in your responses.",
             "tools": []
         }
     ]

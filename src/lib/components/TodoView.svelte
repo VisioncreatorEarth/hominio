@@ -14,14 +14,6 @@
 </script>
 
 <div class="mx-auto max-w-7xl p-4 sm:p-6">
-	<!-- Header -->
-	<div class="mb-8 text-center">
-		<h1 class="text-3xl font-bold text-white/95">Hominio Voice Todos</h1>
-		<p class="mt-2 text-white/70">
-			Currently viewing <span class="font-semibold text-blue-300">{getActiveDocName()}</span>
-		</p>
-	</div>
-
 	<!-- Tags Filter -->
 	{#if getAllUniqueTags().length > 0}
 		<div class="mb-6 rounded-xl border border-white/10 bg-white/5 p-4 backdrop-blur-sm">

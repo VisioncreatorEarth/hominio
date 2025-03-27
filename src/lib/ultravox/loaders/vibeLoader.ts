@@ -14,15 +14,13 @@ interface VibeAgent {
 interface VibeManifest {
     name: string;
     description: string;
-    rootCallConfig: {
-        model: string;
-        firstSpeaker: string;
-        maxDuration: string;
-        languageHint: string;
-        temperature: number;
-    };
-    callSystemPrompt: string;
-    callTools: string[];
+    view: string;
+    vibeTools: string[];
+    systemPrompt: string;
+    temperature?: number;
+    languageHint?: string;
+    voice?: string;
+    initialMessages?: string[];
     defaultAgent: string;
     agents: VibeAgent[];
 }
@@ -44,6 +42,7 @@ interface ToolDefinition {
         client: Record<string, unknown>;
     };
     implementationType: string;
+    implementation?: ToolImplementation;
 }
 
 interface ResolvedTool extends ToolDefinition {
@@ -76,7 +75,6 @@ declare global {
 /**
  * Vibe Loader - Dynamically loads vibe configurations and their tools
  */
-import type { AgentConfig, ResolvedVibe, ToolDefinition, VibeManifest } from '../types';
 import { loadTool } from './toolLoader';
 import { GLOBAL_CALL_TOOLS, isGlobalCallTool } from '../globalTools';
 
@@ -91,30 +89,41 @@ const vibeCache = new Map<string, ResolvedVibe>();
  * @returns The resolved vibe with all tools and agents loaded
  */
 export async function loadVibe(vibeName: string): Promise<ResolvedVibe> {
+    console.log(`🔍 loadVibe called for vibe: ${vibeName}`);
+
     // First check if we have it in cache
     if (vibeCache.has(vibeName)) {
+        console.log(`📦 Using cached vibe: ${vibeName}`);
         return vibeCache.get(vibeName)!;
     }
 
     try {
         // Load the manifest
-        const manifest = await import(`../../vibes/${vibeName}/manifest.json`) as { default: VibeManifest };
+        console.log(`📄 Loading manifest for vibe: ${vibeName}`);
+        const manifest = await import(`../../vibes/${vibeName}/manifest.json`);
+        console.log(`✅ Loaded manifest for vibe: ${vibeName}`, manifest.default);
+
+        // Extract vibe-specific tools from manifest
+        const vibeToolNames = manifest.default.vibeTools || [];
+        console.log(`🔧 Vibe tools from manifest: ${vibeToolNames.join(', ')}`);
 
         // Load global tools first - these are always included
-        const resolvedGlobalTools: ToolDefinition[] = [];
+        const resolvedGlobalTools: ResolvedTool[] = [];
         for (const toolName of GLOBAL_CALL_TOOLS) {
             try {
-                const tool = await loadTool(toolName);
-                resolvedGlobalTools.push(tool);
-                console.log(`✅ Loaded global tool: ${toolName}`);
+                const tool = await loadTool(toolName) as ResolvedTool;
+                if (tool.implementation) {
+                    resolvedGlobalTools.push(tool);
+                    console.log(`✅ Loaded global tool: ${toolName}`);
+                }
             } catch (error) {
                 console.error(`❌ Failed to load global tool "${toolName}":`, error);
             }
         }
 
         // Load vibe-specific call tools
-        const resolvedCallTools: ToolDefinition[] = [];
-        for (const toolName of (manifest.default as any).vibeTools) {
+        const resolvedVibeTools: ResolvedTool[] = [];
+        for (const toolName of vibeToolNames) {
             // Skip if it's already loaded as a global tool
             if (isGlobalCallTool(toolName)) {
                 console.log(`ℹ️ Skipping vibe tool "${toolName}" as it's already loaded as global tool`);
@@ -122,37 +131,47 @@ export async function loadVibe(vibeName: string): Promise<ResolvedVibe> {
             }
 
             try {
-                const tool = await loadTool(toolName);
-                resolvedCallTools.push(tool);
-                console.log(`✅ Loaded vibe call tool: ${toolName}`);
+                const tool = await loadTool(toolName) as ResolvedTool;
+                if (tool.implementation) {
+                    resolvedVibeTools.push(tool);
+                    console.log(`✅ Loaded vibe call tool: ${toolName}`);
+                }
             } catch (error) {
                 console.error(`❌ Failed to load vibe call tool "${toolName}":`, error);
             }
         }
 
         // Combine global and vibe-specific call tools
-        const allCallTools = [...resolvedGlobalTools, ...resolvedCallTools];
+        const allCallTools = [...resolvedGlobalTools, ...resolvedVibeTools];
+        console.log(`📋 Total call tools: ${allCallTools.length} (${allCallTools.map(t => t.name).join(', ')})`);
 
         // Load tools for each agent and attach them to agent configs
-        const resolvedAgents: AgentConfig[] = [];
+        const resolvedAgents: ResolvedAgent[] = [];
         for (const agent of manifest.default.agents) {
             try {
                 // Deep clone the agent config
-                const agentConfig: AgentConfig = { ...agent };
+                const agentConfig: ResolvedAgent = {
+                    ...agent,
+                    resolvedTools: []
+                };
+
+                console.log(`👤 Processing agent ${agent.name} with tools: ${agent.tools.join(', ')}`);
 
                 // Load agent tools
-                agentConfig.resolvedTools = [];
                 if (Array.isArray(agent.tools)) {
                     for (const toolName of agent.tools) {
-                        try {
-                            // Skip tools that are already loaded as call or global tools
-                            if ((manifest.default as any).vibeTools.includes(toolName) || isGlobalCallTool(toolName)) {
-                                continue;
-                            }
+                        // Skip tools that are already loaded as call or global tools
+                        if (vibeToolNames.includes(toolName) || isGlobalCallTool(toolName)) {
+                            console.log(`ℹ️ Skipping agent tool "${toolName}" as it's already available at call level`);
+                            continue;
+                        }
 
-                            const tool = await loadTool(toolName);
-                            agentConfig.resolvedTools.push(tool);
-                            console.log(`✅ Loaded agent tool: ${toolName}`);
+                        try {
+                            const tool = await loadTool(toolName) as ResolvedTool;
+                            if (tool.implementation) {
+                                agentConfig.resolvedTools.push(tool);
+                                console.log(`✅ Loaded agent tool: ${toolName}`);
+                            }
                         } catch (error) {
                             console.error(`❌ Failed to load agent tool "${toolName}":`, error);
                         }
@@ -161,6 +180,7 @@ export async function loadVibe(vibeName: string): Promise<ResolvedVibe> {
 
                 // Add the agent to the resolved agents
                 resolvedAgents.push(agentConfig);
+                console.log(`👤 Completed agent: ${agent.name} with ${agentConfig.resolvedTools.length} tools`);
             } catch (error) {
                 console.error(`❌ Failed to resolve agent "${agent.name}":`, error);
             }
@@ -175,7 +195,7 @@ export async function loadVibe(vibeName: string): Promise<ResolvedVibe> {
         // Create the resolved vibe
         const resolvedVibe: ResolvedVibe = {
             manifest: manifest.default,
-            resolvedCallTools: allCallTools, // Use combined call tools including globals
+            resolvedCallTools: allCallTools,
             resolvedAgents,
             defaultAgent
         };
@@ -183,13 +203,7 @@ export async function loadVibe(vibeName: string): Promise<ResolvedVibe> {
         // Cache the resolved vibe
         vibeCache.set(vibeName, resolvedVibe);
 
-        // Log tool information
-        console.log(`✅ Loaded vibe: ${vibeName}`);
-        console.log(`📋 Global tools: ${resolvedGlobalTools.map(t => t.name).join(', ')}`);
-        console.log(`📋 Vibe call tools: ${resolvedCallTools.map(t => t.name).join(', ')}`);
-        console.log(`👤 Agents: ${resolvedAgents.map(a => a.name).join(', ')}`);
-        console.log(`🎯 Default agent: ${defaultAgent.name}`);
-
+        console.log(`✅ Vibe "${vibeName}" fully loaded and cached`);
         return resolvedVibe;
     } catch (error) {
         console.error(`❌ Failed to load vibe "${vibeName}":`, error);
@@ -198,52 +212,107 @@ export async function loadVibe(vibeName: string): Promise<ResolvedVibe> {
 }
 
 /**
+ * Clear the vibe cache
+ */
+export function clearVibeCache(): void {
+    vibeCache.clear();
+    console.log('🧹 Vibe cache cleared');
+}
+
+/**
  * Register all tools from a vibe with the Ultravox session
  * @param vibe The resolved vibe containing tools to register
  */
 export function registerVibeTools(vibe: ResolvedVibe): void {
-    if (typeof window === 'undefined' || !window.__ULTRAVOX_SESSION) {
-        console.warn('⚠️ No Ultravox session available to register vibe tools');
+    if (typeof window === 'undefined') {
+        console.warn('⚠️ Not in browser environment, skipping tool registration');
         return;
     }
 
-    const session = window.__ULTRAVOX_SESSION;
-    const registeredTools: string[] = [];
+    // Store tools for registration when session is available
+    const toolsToRegister: { name: string, implementation: ToolImplementation }[] = [];
 
-    // Register call tools first
+    // Add call tools
     for (const tool of vibe.resolvedCallTools) {
         if (tool.implementation) {
-            try {
-                session.registerToolImplementation(tool.name, tool.implementation);
-                registeredTools.push(tool.name);
-                console.log(`✅ Registered call tool: ${tool.name}`);
-            } catch (error) {
-                console.error(`❌ Failed to register call tool "${tool.name}":`, error);
-            }
+            toolsToRegister.push({
+                name: tool.name,
+                implementation: tool.implementation
+            });
         }
     }
 
-    // Then register agent-specific tools
+    // Add agent tools
     for (const agent of vibe.resolvedAgents) {
         if (agent.resolvedTools) {
             for (const tool of agent.resolvedTools) {
-                // Skip tools that are already registered
-                if (registeredTools.includes(tool.name)) {
-                    continue;
-                }
-
-                if (tool.implementation) {
-                    try {
-                        session.registerToolImplementation(tool.name, tool.implementation);
-                        registeredTools.push(tool.name);
-                        console.log(`✅ Registered agent tool: ${tool.name}`);
-                    } catch (error) {
-                        console.error(`❌ Failed to register agent tool "${tool.name}":`, error);
-                    }
+                // Check if tool is already in the list
+                if (!toolsToRegister.some(t => t.name === tool.name) && tool.implementation) {
+                    toolsToRegister.push({
+                        name: tool.name,
+                        implementation: tool.implementation
+                    });
                 }
             }
         }
     }
 
-    console.log('📋 Registered vibe tools:', registeredTools.join(', '));
+    // Store in global cache for later use
+    cachedTools = toolsToRegister;
+
+    // Register with session if available, otherwise create/update tool registry
+    if (window.__ULTRAVOX_SESSION) {
+        const session = window.__ULTRAVOX_SESSION;
+        const registeredTools: string[] = [];
+
+        for (const tool of toolsToRegister) {
+            try {
+                session.registerToolImplementation(tool.name, tool.implementation);
+                registeredTools.push(tool.name);
+                console.log(`✅ Registered tool with Ultravox: ${tool.name}`);
+            } catch (error) {
+                console.error(`❌ Failed to register tool "${tool.name}" with Ultravox:`, error);
+            }
+        }
+
+        console.log('📋 Registered vibe tools with Ultravox:', registeredTools.join(', '));
+    } else {
+        // Create or update the tool registry
+        if (!window.__hominio_tools) {
+            window.__hominio_tools = {};
+        }
+
+        // Add tools to registry
+        for (const tool of toolsToRegister) {
+            window.__hominio_tools[tool.name] = tool.implementation;
+            console.log(`✅ Added tool to registry: ${tool.name}`);
+        }
+
+        console.log('📋 Stored tools in registry:', Object.keys(window.__hominio_tools).join(', '));
+        console.warn('⚠️ No Ultravox session available. Tools stored in registry for later registration.');
+
+        // Add event listener to register tools when Ultravox is ready
+        window.addEventListener('ultravox-ready', () => {
+            console.log('🔄 Ultravox ready event received, registering cached tools');
+
+            if (window.__ULTRAVOX_SESSION && cachedTools.length > 0) {
+                const session = window.__ULTRAVOX_SESSION;
+                const registeredTools: string[] = [];
+
+                for (const tool of cachedTools) {
+                    try {
+                        session.registerToolImplementation(tool.name, tool.implementation);
+                        registeredTools.push(tool.name);
+                        console.log(`✅ Registered cached tool: ${tool.name}`);
+                    } catch (error) {
+                        console.error(`❌ Failed to register cached tool "${tool.name}":`, error);
+                    }
+                }
+
+                console.log('📋 Registered cached tools:', registeredTools.join(', '));
+            } else {
+                console.warn('⚠️ Ultravox session still not available or no cached tools to register');
+            }
+        });
+    }
 } 

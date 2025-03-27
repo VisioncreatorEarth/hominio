@@ -1,0 +1,23 @@
+{
+    "name": "switchVibe",
+    "skill": "Change the entire vibe experience",
+    "icon": "M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z",
+    "color": "blue",
+    "temporaryTool": {
+        "modelToolName": "switchVibe",
+        "description": "Switch to a completely different vibe/experience with its own set of tools and default agent. Use this tool when the user wants to change to a different experience like todos, counter, or home. NEVER emit text when doing this tool call.",
+        "dynamicParameters": [
+            {
+                "name": "vibeId",
+                "location": "PARAMETER_LOCATION_BODY",
+                "schema": {
+                    "type": "string",
+                    "description": "The ID of the vibe to switch to (e.g. \"home\", \"todos\", \"counter\")"
+                },
+                "required": true
+            }
+        ],
+        "client": {}
+    },
+    "implementationType": "client"
+}

@@ -50,7 +50,7 @@ export type Transcript = {
 };
 
 // Agent configuration
-export type AgentName = 'Hominio' | 'Oliver';
+export type AgentName = string; // Any valid agent name from any vibe manifest
 
 export interface AgentConfig {
     name: string;
@@ -103,14 +103,28 @@ export interface VibeManifest {
     name: string;
     description: string;
     systemPrompt: string;
+    // Top-level call properties
     temperature?: number;
-    voice?: string;
     languageHint?: string;
+    model?: string;
+    maxDuration?: string;
+    firstSpeaker?: string;
+    voice?: string;
     initialMessages?: string[];
+    // UI properties
     view: string;
     vibeTools: string[];
+    // Agent configuration
     defaultAgent: string;
     agents: AgentConfig[];
+    // Legacy nested configuration (deprecated)
+    rootCallConfig?: {
+        model: string;
+        firstSpeaker: string;
+        maxDuration: string;
+        languageHint: string;
+        temperature: number;
+    };
 }
 
 export interface ResolvedVibe {

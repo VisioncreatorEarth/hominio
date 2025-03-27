@@ -8,7 +8,7 @@
 	import { startCall, endCall, type Transcript } from '$lib/ultravox/callFunctions';
 	import CallInterface from '$lib/components/CallInterface.svelte';
 	import { initializeVibe, getActiveVibe } from '$lib/ultravox';
-	import { TODO_CALL_CONFIG } from '$lib/ultravox/callConfig';
+	import { DEFAULT_CALL_CONFIG } from '$lib/ultravox/callConfig';
 
 	// Disable Server-Side Rendering since Tauri is client-only
 	export const ssr = false;
@@ -20,7 +20,7 @@
 
 	// Constants
 	const MAX_INIT_ATTEMPTS = 5;
-	const DEFAULT_VIBE = 'todos';
+	const DEFAULT_VIBE = 'home';
 
 	// Global state - use let for variables we need to update
 	let isInitializing = $state(false);
@@ -89,24 +89,12 @@
 
 			// Get active vibe configuration
 			const vibe = await getActiveVibe(DEFAULT_VIBE);
+			console.log(`📞 Starting call with vibe: ${DEFAULT_VIBE}`);
 
-			// Ensure tools are registered before starting call
-			if (typeof window !== 'undefined') {
-				// Trigger manual tool registration
-				const event = new Event('ultravox-ready');
-				window.dispatchEvent(event);
+			// Wait for DOM to be fully rendered
+			await new Promise((resolve) => setTimeout(resolve, 100));
 
-				// Wait a moment for tools to register
-				await new Promise((resolve) => setTimeout(resolve, 100));
-
-				// Verify tools are registered
-				if (!(window as any).__hominio_tools) {
-					console.error('❌ Tools not registered properly. Aborting call start.');
-					return;
-				}
-			}
-
-			// Use the immutable TODO_CALL_CONFIG - mutable properties will be added from the vibe in createCall
+			// Use the default config - vibe-specific properties will be added in createCall
 			await startCall(
 				{
 					onStatusChange: (status) => {
@@ -124,7 +112,8 @@
 						}
 					}
 				},
-				TODO_CALL_CONFIG
+				DEFAULT_CALL_CONFIG,
+				DEFAULT_VIBE
 			);
 		} catch (error) {
 			console.error('Failed to start call:', error);

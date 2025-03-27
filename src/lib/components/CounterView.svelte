@@ -11,14 +11,6 @@
 </script>
 
 <div class="mx-auto max-w-7xl p-4 sm:p-6">
-	<!-- Header -->
-	<div class="mb-8 text-center">
-		<h1 class="text-3xl font-bold text-white/95">Hominio Counter Vibe</h1>
-		<p class="mt-2 text-white/70">
-			A simple counter example to demonstrate dynamic component loading
-		</p>
-	</div>
-
 	<!-- Counter Card -->
 	<div class="mx-auto max-w-md">
 		<div class="rounded-xl border border-white/10 bg-white/5 p-6 text-center backdrop-blur-sm">

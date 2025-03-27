@@ -8,6 +8,7 @@ import { updateTodoImplementation } from '$lib/tools/updateTodo/function';
 import { filterTodosImplementation } from '$lib/tools/filterTodos/function';
 import { switchAgentImplementation } from '$lib/tools/switchAgent/function';
 import { hangUpImplementation } from '$lib/tools/hangUp/function';
+import { switchVibeImplementation } from '$lib/tools/switchVibe/function';
 
 // Central registry of all available tool implementations
 // This simply routes calls to the individual implementations
@@ -18,5 +19,6 @@ export const toolRegistry = {
     updateTodo: (params: ToolParameters) => updateTodoImplementation(params),
     filterTodos: (params: ToolParameters) => filterTodosImplementation(params),
     switchAgent: (params: ToolParameters) => switchAgentImplementation(params),
-    hangUp: (params: ToolParameters) => hangUpImplementation(params)
+    hangUp: (params: ToolParameters) => hangUpImplementation(params),
+    switchVibe: (params: ToolParameters) => switchVibeImplementation(params)
 }; 

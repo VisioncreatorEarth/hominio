@@ -7,8 +7,26 @@ import type { CallConfig } from './callFunctions';
 
 /**
  * Default root call configuration
- * These settings are used for all calls and cannot be changed during a call.
- * Properties here are those that cannot change with a new stage.
+ * 
+ * IMMUTABLE PROPERTIES
+ * These settings are used for all calls and cannot be changed during a call:
+ * - model
+ * - firstSpeaker
+ * - maxDuration
+ * - joinTimeout
+ * - timeExceededMessage
+ * - inactivityMessages
+ * - medium
+ * - recordingEnabled
+ * 
+ * MUTABLE PROPERTIES
+ * These properties can be changed with a new stage and should come from vibe manifests:
+ * - systemPrompt
+ * - temperature
+ * - voice
+ * - languageHint
+ * - initialMessages
+ * - selectedTools
  */
 export const DEFAULT_CALL_CONFIG: CallConfig = {
     // Immutable properties (cannot change with new stage)
@@ -22,7 +40,7 @@ export const DEFAULT_CALL_CONFIG: CallConfig = {
     recordingEnabled: false,
 
     // Default values for mutable properties
-    // These will be overridden by the vibe config
+    // These will be overridden by the vibe manifest
     systemPrompt: '',
     temperature: 0.7,
     languageHint: 'en'

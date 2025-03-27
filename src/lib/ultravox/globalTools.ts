@@ -10,7 +10,8 @@
  * These tools are essential for basic call functionality and should always be present
  */
 export const GLOBAL_CALL_TOOLS: string[] = [
-    'hangUp' // End call tool is always available
+    'hangUp',      // End call tool is always available
+    'switchVibe'   // Allow switching between vibes from anywhere
     // Add other essential tools here
 ];
 

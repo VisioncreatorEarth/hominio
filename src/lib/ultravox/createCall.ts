@@ -3,74 +3,85 @@
  * This file contains the logic for creating calls with the Ultravox API using the
  * centralized call configuration.
  */
+import { browser } from '$app/environment';
 import type { JoinUrlResponse, CallConfig } from './callFunctions';
-import { getActiveVibe } from './index';
+import { getActiveVibe } from './stageManager';
+import { setupToolRegistrationListeners } from './loaders/toolLoader';
 
 /**
- * Create a call with Ultravox API using our configured settings
- * @param callConfig The call configuration to use (immutable properties)
- * @returns Promise containing the join URL response
+ * Creates a call using the API and returns a join URL
+ * @param callConfig Call configuration
+ * @param vibeId Optional vibe ID to use for the call (defaults to 'home')
+ * @returns Join URL and other call details
  */
-export async function createCall(callConfig: CallConfig): Promise<JoinUrlResponse> {
+export async function createCall(callConfig: CallConfig, vibeId = 'home'): Promise<JoinUrlResponse> {
+    if (!browser) {
+        throw new Error('createCall must be called from the browser environment');
+    }
+
     try {
+        // Setup tool registration listeners to ensure tools are registered
+        setupToolRegistrationListeners();
+
         // Get active vibe configuration with mutable properties
-        const activeVibe = await getActiveVibe();
-        // Need to use any because the VibeManifest type might not be updated everywhere yet
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const manifest = activeVibe.manifest as any;
+        console.log(`📞 Creating call with vibe: ${vibeId}`);
+        const activeVibe = await getActiveVibe(vibeId);
 
-        // Transform tools to the format expected by Ultravox API
-        // Only use temporaryTool field to avoid multiple "base_tool" oneof fields error
-        const formattedTools = activeVibe.resolvedCallTools.map(tool => {
-            // The API expects only one of: toolId, toolName, temporaryTool 
-            // (these are part of a oneof group in the protobuf)
-            return {
-                temporaryTool: tool.temporaryTool
-            };
-        });
+        // Format tools for the API request using the correct structure
+        // The Ultravox API expects "temporaryTool" objects, not direct properties
+        const formattedTools = activeVibe.resolvedCallTools.map(tool => ({
+            // Use the original format which is already correct
+            temporaryTool: {
+                modelToolName: tool.name,
+                description: tool.temporaryTool.description,
+                dynamicParameters: tool.temporaryTool.dynamicParameters,
+                client: {} // Empty client object is required
+            }
+        }));
 
-        // Combine immutable properties from callConfig with mutable properties from vibe
-        const combinedConfig = {
-            ...callConfig,
-            // Override with mutable properties from the vibe
-            systemPrompt: manifest.systemPrompt || callConfig.systemPrompt,
-            temperature: manifest.temperature || callConfig.temperature,
-            languageHint: manifest.languageHint || callConfig.languageHint,
-            // Add any other mutable properties here
-            selectedTools: formattedTools
-        };
+        console.log(`🔧 Formatted tools for API request: ${activeVibe.resolvedCallTools.map(t => t.name).join(', ')}`);
 
-        // Ensure API compatibility
+        // Create the API request
+        // Base configuration - unchangeable properties from callConfig
         const apiRequest = {
-            ...combinedConfig,
-            // Make sure inactivityMessages is an array
-            inactivityMessages: combinedConfig.inactivityMessages || [],
-            // Ensure medium is a valid value with proper casing
-            medium: { webRtc: {} } // Set to WebRTC object format as expected by the API
+            ...callConfig,
+
+            // Changeable properties from vibe manifest
+            systemPrompt: activeVibe.manifest.systemPrompt || '',
+            temperature: activeVibe.manifest.temperature || 0.7,
+            languageHint: activeVibe.manifest.languageHint || 'en',
+
+            // selectedTools is a special case - always computed from the vibe
+            selectedTools: formattedTools,
+
+            // Use WebRTC as the medium for browser-based calls
+            medium: {
+                webRtc: {}
+            }
         };
 
-        // Log detailed request for debugging
-        console.log('Making API call with config:', JSON.stringify(apiRequest, null, 2));
+        console.log('📡 Making API call to create a call session');
 
+        // Use the known working endpoint
         const response = await fetch('/callHominio', {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json',
+                'Content-Type': 'application/json'
             },
-            body: JSON.stringify(apiRequest),
+            body: JSON.stringify(apiRequest)
         });
 
         if (!response.ok) {
             const errorText = await response.text();
-            throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
+            throw new Error(`Failed to create call: ${response.status} ${errorText}`);
         }
 
         const data: JoinUrlResponse = await response.json();
-        console.log(`Call created. Join URL: ${data.joinUrl}`);
+        console.log(`✅ Call created. Join URL: ${data.joinUrl}`);
 
         return data;
     } catch (error) {
-        console.error('Error creating call:', error);
+        console.error('❌ Error creating call:', error);
         throw error;
     }
 } 

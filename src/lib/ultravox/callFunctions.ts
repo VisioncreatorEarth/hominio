@@ -109,7 +109,7 @@ export function forceUnmuteSpeaker(): void {
 }
 
 // Start a call
-export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig): Promise<void> {
+export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig, vibeId = 'home'): Promise<void> {
     if (!browser) {
         console.error('Not in browser environment');
         return;
@@ -117,7 +117,8 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
 
     try {
         // Call our API to get a join URL using the imported createCall function
-        const callData = await createCall(callConfig);
+        console.log(`🚀 Starting call using vibe: ${vibeId}`);
+        const callData = await createCall(callConfig, vibeId);
         const joinUrl = callData.joinUrl;
 
         if (!joinUrl) {
