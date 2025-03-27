@@ -4,6 +4,7 @@ import { switchVibe, getActiveVibe } from '$lib/ultravox';
 import { createAgentStageChangeData } from '$lib/ultravox/stageManager';
 import type { AgentName } from '$lib/ultravox/types';
 import { currentAgent } from '$lib/ultravox/agents';
+import { getAllVibes } from '$lib/ultravox/registries/vibeRegistry';
 
 /**
  * This tool allows switching to an entirely different vibe
@@ -19,8 +20,16 @@ export async function switchVibeImplementation(parameters: ToolParameters): Prom
         // Extract vibeId parameter
         const { vibeId = 'home' } = parameters as { vibeId?: string };
 
-        // Validate vibeId - available vibes include home, todos, counter
-        const validVibeIds = ['home', 'todos', 'counter'];
+        // Dynamically get available vibes from the registry
+        const availableVibes = await getAllVibes();
+        const availableVibeIds = availableVibes.map(vibe => vibe.id.toLowerCase());
+
+        // Always include 'home' as it's filtered out by getAllVibes()
+        const validVibeIds = ['home', ...availableVibeIds];
+
+        console.log(`🔍 Available vibe IDs: ${validVibeIds.join(', ')}`);
+
+        // Validate and normalize vibeId
         const normalizedVibeId = validVibeIds.includes(vibeId.toLowerCase())
             ? vibeId.toLowerCase()
             : 'home';
