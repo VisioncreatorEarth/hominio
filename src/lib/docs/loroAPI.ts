@@ -637,6 +637,86 @@ export class LoroAPI {
 
         return { schema, doc, map };
     }
+
+    /**
+     * Find an item by various criteria in a schema collection
+     * @param schemaName Name of the schema to search in
+     * @param criteria Search criteria
+     * @returns Found item ID and data, or null if not found
+     */
+    findItem<T>(
+        schemaName: string,
+        criteria: {
+            id?: string;
+            searchField?: string;
+            searchValue?: string;
+            exactMatch?: boolean;
+        }
+    ): Promise<[string, T] | null> {
+        const { query, get } = this.getOperations<T>(schemaName);
+
+        // If ID is provided, try to get directly first
+        if (criteria.id) {
+            const item = get(criteria.id);
+            if (item) {
+                return Promise.resolve([criteria.id, item]);
+            }
+        }
+
+        // Field-based search
+        if (criteria.searchField && criteria.searchValue) {
+            const fieldName = criteria.searchField;
+            const searchValue = criteria.searchValue.toLowerCase();
+            const exactMatch = criteria.exactMatch ?? false;
+
+            // Find matching items (case-insensitive)
+            const matchingItems = query(item => {
+                // Type guard to check if the item has the required field as a string
+                if (!item || typeof item !== 'object') return false;
+
+                // Get the field value safely with a type guard
+                const itemAsRecord = item as Record<string, unknown>;
+                const fieldValue = itemAsRecord[fieldName];
+
+                if (typeof fieldValue !== 'string') return false;
+
+                return exactMatch
+                    ? fieldValue.toLowerCase() === searchValue
+                    : fieldValue.toLowerCase().includes(searchValue);
+            });
+
+            if (matchingItems.length === 1) {
+                // Found exactly one match
+                return Promise.resolve(matchingItems[0]);
+            } else if (matchingItems.length > 1 && !exactMatch) {
+                // Try for exact match first if we have multiple results and not already doing exact match
+                const exactMatches = matchingItems.filter(([, item]) => {
+                    if (!item || typeof item !== 'object') return false;
+
+                    const itemAsRecord = item as Record<string, unknown>;
+                    const fieldValue = itemAsRecord[fieldName];
+
+                    return typeof fieldValue === 'string' && fieldValue.toLowerCase() === searchValue;
+                });
+
+                if (exactMatches.length === 1) {
+                    return Promise.resolve(exactMatches[0]);
+                }
+
+                // If multiple matches, throw an error with details
+                const itemDescriptions = matchingItems.map(([, item]) => {
+                    const itemAsRecord = item as Record<string, unknown>;
+                    const fieldValue = itemAsRecord[fieldName];
+                    return `"${fieldValue}"`;
+                }).join(', ');
+
+                throw new Error(`Found multiple matching items: ${itemDescriptions}. Please be more specific.`);
+            }
+        }
+
+        // No matches found
+        return Promise.resolve(null);
+    }
 }
 
 // Export singleton instance

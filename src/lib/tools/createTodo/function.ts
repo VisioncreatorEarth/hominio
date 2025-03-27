@@ -28,25 +28,21 @@ export async function execute(inputs: {
             ? inputs.tags.split(',').map(t => t.trim()).filter(t => t.length > 0)
             : [];
 
-        // Get direct access to the document and map using the new generic helper
-        const { map } = loroAPI.getSchemaDetails('todo');
-
-        // Create a new todo item with UUID
-        const id = crypto.randomUUID();
-        const todoItem = {
-            id,
+        // Create the todo using the createItem helper
+        const todoItem: Omit<TodoItem, 'id'> = {
             text: inputs.text.trim(),
             completed: false,
             createdAt: Date.now(),
             tags,
-            docId: inputs.docId || 'personal' // Default list
+            docId: 'personal' // Hardcoded to personal for now
         };
 
-        // Add the item to the map
-        map.set(id, todoItem);
+        // The createItem method will generate an ID and handle store updates
+        const id = loroAPI.createItem<TodoItem>('todo', todoItem as TodoItem);
 
-        // Force update the store manually
-        loroAPI.updateStoreForSchema('todo');
+        if (!id) {
+            return logToolActivity('createTodo', 'Failed to create todo', false);
+        }
 
         console.log(`Todo created with ID: ${id}`);
         return logToolActivity('createTodo', `Todo created: ${inputs.text}`);

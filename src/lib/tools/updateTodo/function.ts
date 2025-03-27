@@ -17,9 +17,6 @@ export async function execute(inputs: {
     tags?: string;
 }): Promise<{ success: boolean; message: string }> {
     try {
-        // Get operations for todo schema
-        const { get, query } = loroAPI.getOperations<TodoItem>('todo');
-
         // Prepare update data
         const updateData: Partial<TodoItem> = {};
 
@@ -43,79 +40,33 @@ export async function execute(inputs: {
             return logToolActivity('updateTodo', 'No updates specified', false);
         }
 
-        // If we have an ID, use it directly
-        if (inputs.todoId) {
-            const todo = get(inputs.todoId);
-            if (!todo) {
-                return logToolActivity('updateTodo', 'Todo not found', false);
-            }
+        // Find the todo using the search criteria with the LoroAPI
+        const result = await loroAPI.findItem<TodoItem>('todo', {
+            id: inputs.todoId,
+            searchField: 'text',
+            searchValue: inputs.text
+        });
 
-            // Get direct access to the document and map using the new generic helper
-            const { map } = loroAPI.getSchemaDetails('todo');
-
-            // Get all keys and check if our ID is among them
-            const keys = Array.from(map.keys());
-            if (keys.includes(inputs.todoId)) {
-                // Get the current item and merge with updates
-                const currentItem = map.get(inputs.todoId) as Record<string, unknown>;
-                const updatedItem = { ...currentItem, ...updateData };
-
-                // Update the item
-                map.set(inputs.todoId, updatedItem);
-
-                // Force update the store manually
-                loroAPI.updateStoreForSchema('todo');
-
-                return logToolActivity('updateTodo', `Todo updated successfully`);
-            } else {
-                return logToolActivity('updateTodo', `Todo with ID ${inputs.todoId} not found in map`, false);
-            }
+        if (!result) {
+            return logToolActivity('updateTodo', 'No matching todo found', false);
         }
 
-        // Try by text content if provided
-        if (inputs.text) {
-            // Find matching todos
-            const matchingTodos = query(todo => todo.text.toLowerCase().includes(inputs.text!.toLowerCase()));
+        const [id, todo] = result;
 
-            if (matchingTodos.length === 0) {
-                return logToolActivity('updateTodo', 'No matching todos found', false);
-            }
+        // Use the updateItem helper from loroAPI for consistency
+        const success = loroAPI.updateItem<TodoItem>('todo', id, (currentItem) => {
+            return { ...currentItem, ...updateData };
+        });
 
-            if (matchingTodos.length > 1) {
-                const todoNames = matchingTodos.map(([, todo]) => `"${todo.text}"`).join(', ');
-                return logToolActivity('updateTodo', `Found multiple matching todos: ${todoNames}. Please be more specific.`, false);
-            }
-
-            // We have exactly one match
-            const [id, todo] = matchingTodos[0];
-
-            // Get direct access to the document and map using the new generic helper
-            const { map } = loroAPI.getSchemaDetails('todo');
-
-            // Get all keys and check if our ID is among them
-            const keys = Array.from(map.keys());
-            if (keys.includes(id)) {
-                // Get the current item and merge with updates
-                const currentItem = map.get(id) as Record<string, unknown>;
-                const updatedItem = { ...currentItem, ...updateData };
-
-                // Update the item
-                map.set(id, updatedItem);
-
-                // Force update the store manually
-                loroAPI.updateStoreForSchema('todo');
-
-                return logToolActivity('updateTodo', `Todo "${todo.text}" updated successfully`);
-            } else {
-                return logToolActivity('updateTodo', `Todo with ID ${id} not found in map`, false);
-            }
+        if (success) {
+            return logToolActivity('updateTodo', `Todo "${todo.text}" updated successfully`);
+        } else {
+            return logToolActivity('updateTodo', `Failed to update todo with ID ${id}`, false);
         }
-
-        // No ID or text provided
-        return logToolActivity('updateTodo', 'No todo ID or text provided', false);
     } catch (error) {
         console.error('Error updating todo:', error);
-        return logToolActivity('updateTodo', `Error: ${error}`, false);
+        const message = error instanceof Error ? error.message : String(error);
+        return logToolActivity('updateTodo', message, false);
     }
 }
 

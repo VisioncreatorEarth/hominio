@@ -13,94 +13,36 @@ export async function execute(inputs: {
     text?: string;
 }): Promise<{ success: boolean; message: string }> {
     try {
-        // Get operations for todo schema
-        const { get, query } = loroAPI.getOperations<TodoItem>('todo');
+        // Find the todo using the search criteria with the LoroAPI
+        const result = await loroAPI.findItem<TodoItem>('todo', {
+            id: inputs.todoId,
+            searchField: 'text',
+            searchValue: inputs.text
+        });
 
-        // If we have an ID, use it directly
-        if (inputs.todoId) {
-            const todo = get(inputs.todoId);
-            if (!todo) {
-                return logToolActivity('toggleTodo', 'Todo not found', false);
-            }
-
-            // Get direct access to the document and map using the new generic helper
-            const { map } = loroAPI.getSchemaDetails('todo');
-
-            // Get all keys and check if our ID is among them
-            const keys = Array.from(map.keys());
-            if (keys.includes(inputs.todoId)) {
-                // Get the current item 
-                const currentItem = map.get(inputs.todoId) as Record<string, unknown>;
-
-                // Toggle completed status
-                const updatedItem = {
-                    ...currentItem,
-                    completed: !(currentItem.completed as boolean)
-                };
-
-                // Update the item
-                map.set(inputs.todoId, updatedItem);
-
-                // Force update the store manually
-                loroAPI.updateStoreForSchema('todo');
-
-                const wasCompleted = currentItem.completed as boolean;
-                return logToolActivity('toggleTodo', `Todo ${wasCompleted ? 'marked incomplete' : 'marked complete'}`);
-            } else {
-                return logToolActivity('toggleTodo', `Todo with ID ${inputs.todoId} not found in map`, false);
-            }
+        if (!result) {
+            return logToolActivity('toggleTodo', 'No matching todo found', false);
         }
 
-        // Try by text content if provided
-        if (inputs.text) {
-            // Find matching todos
-            const matchingTodos = query(todo => todo.text.toLowerCase().includes(inputs.text!.toLowerCase()));
+        const [id, todo] = result;
 
-            if (matchingTodos.length === 0) {
-                return logToolActivity('toggleTodo', 'No matching todos found', false);
-            }
+        // Use the updateItem helper from loroAPI for consistency
+        const success = loroAPI.updateItem<TodoItem>('todo', id, (currentItem) => {
+            return {
+                ...currentItem,
+                completed: !currentItem.completed
+            };
+        });
 
-            if (matchingTodos.length > 1) {
-                const todoNames = matchingTodos.map(([, todo]) => `"${todo.text}"`).join(', ');
-                return logToolActivity('toggleTodo', `Found multiple matching todos: ${todoNames}. Please be more specific.`, false);
-            }
-
-            // We have exactly one match
-            const [id, todo] = matchingTodos[0];
-
-            // Get direct access to the document and map using the new generic helper
-            const { map } = loroAPI.getSchemaDetails('todo');
-
-            // Get all keys and check if our ID is among them
-            const keys = Array.from(map.keys());
-            if (keys.includes(id)) {
-                // Get the current item
-                const currentItem = map.get(id) as Record<string, unknown>;
-
-                // Toggle completed status
-                const updatedItem = {
-                    ...currentItem,
-                    completed: !(currentItem.completed as boolean)
-                };
-
-                // Update the item
-                map.set(id, updatedItem);
-
-                // Force update the store manually
-                loroAPI.updateStoreForSchema('todo');
-
-                const wasCompleted = currentItem.completed as boolean;
-                return logToolActivity('toggleTodo', `Todo "${todo.text}" ${wasCompleted ? 'marked incomplete' : 'marked complete'}`);
-            } else {
-                return logToolActivity('toggleTodo', `Todo with ID ${id} not found in map`, false);
-            }
+        if (success) {
+            return logToolActivity('toggleTodo', `Todo "${todo.text}" ${todo.completed ? 'marked incomplete' : 'marked complete'}`);
+        } else {
+            return logToolActivity('toggleTodo', `Failed to toggle todo with ID ${id}`, false);
         }
-
-        // No ID or text provided
-        return logToolActivity('toggleTodo', 'No todo ID or text provided', false);
     } catch (error) {
         console.error('Error toggling todo:', error);
-        return logToolActivity('toggleTodo', `Error: ${error}`, false);
+        const message = error instanceof Error ? error.message : String(error);
+        return logToolActivity('toggleTodo', message, false);
     }
 }
 
