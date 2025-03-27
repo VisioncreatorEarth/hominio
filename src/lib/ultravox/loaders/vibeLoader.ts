@@ -1,76 +1,14 @@
-import type { ToolImplementation } from '../types';
-
-// Define types for the vibe configuration
-interface VibeAgent {
-    name: string;
-    personality: string;
-    voiceId: string;
-    description: string;
-    temperature: number;
-    systemPrompt: string;
-    tools: string[];
-}
-
-interface VibeManifest {
-    name: string;
-    description: string;
-    view: string;
-    vibeTools: string[];
-    systemPrompt: string;
-    temperature?: number;
-    languageHint?: string;
-    voice?: string;
-    initialMessages?: string[];
-    defaultAgent: string;
-    agents: VibeAgent[];
-}
-
-interface ToolDefinition {
-    name: string;
-    temporaryTool: {
-        modelToolName: string;
-        description: string;
-        dynamicParameters: {
-            name: string;
-            location: string;
-            schema: {
-                type: string;
-                description: string;
-            };
-            required: boolean;
-        }[];
-        client: Record<string, unknown>;
-    };
-    implementationType: string;
-    implementation?: ToolImplementation;
-}
-
-interface ResolvedTool extends ToolDefinition {
-    implementation: ToolImplementation;
-}
-
-interface ResolvedAgent extends VibeAgent {
-    resolvedTools: ResolvedTool[];
-}
-
-interface ResolvedVibe {
-    manifest: VibeManifest;
-    resolvedCallTools: ResolvedTool[];
-    resolvedAgents: ResolvedAgent[];
-    defaultAgent: ResolvedAgent;
-}
-
-interface UltravoxSession {
-    registerToolImplementation: (name: string, implementation: ToolImplementation) => void;
-}
-
-// Define window augmentation
-declare global {
-    interface Window {
-        __hominio_tools?: Record<string, ToolImplementation>;
-        __ULTRAVOX_SESSION?: UltravoxSession;
-    }
-}
+import type {
+    ToolImplementation,
+    VibeManifest,
+    VibeAgent,
+    ToolDefinition,
+    ResolvedTool,
+    ResolvedAgent,
+    ResolvedVibe,
+    UltravoxSession,
+    ClientToolReturnType
+} from '../types';
 
 /**
  * Vibe Loader - Dynamically loads vibe configurations and their tools
@@ -82,6 +20,11 @@ import { GLOBAL_CALL_TOOLS, isGlobalCallTool } from '../globalTools';
  * In-memory cache for loaded vibes to avoid reloading
  */
 const vibeCache = new Map<string, ResolvedVibe>();
+
+/**
+ * In-memory cache for tools to register with Ultravox
+ */
+let cachedTools: { name: string, implementation: ToolImplementation }[] = [];
 
 /**
  * Loads a vibe configuration from its manifest
@@ -267,7 +210,7 @@ export function registerVibeTools(vibe: ResolvedVibe): void {
 
         for (const tool of toolsToRegister) {
             try {
-                session.registerToolImplementation(tool.name, tool.implementation);
+                session.registerToolImplementation(tool.name, tool.implementation as (params: unknown) => ClientToolReturnType | Promise<ClientToolReturnType>);
                 registeredTools.push(tool.name);
                 console.log(`✅ Registered tool with Ultravox: ${tool.name}`);
             } catch (error) {
@@ -301,7 +244,7 @@ export function registerVibeTools(vibe: ResolvedVibe): void {
 
                 for (const tool of cachedTools) {
                     try {
-                        session.registerToolImplementation(tool.name, tool.implementation);
+                        session.registerToolImplementation(tool.name, tool.implementation as (params: unknown) => ClientToolReturnType | Promise<ClientToolReturnType>);
                         registeredTools.push(tool.name);
                         console.log(`✅ Registered cached tool: ${tool.name}`);
                     } catch (error) {

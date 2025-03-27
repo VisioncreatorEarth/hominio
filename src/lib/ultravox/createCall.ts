@@ -4,7 +4,7 @@
  * centralized call configuration.
  */
 import { browser } from '$app/environment';
-import type { JoinUrlResponse, CallConfig } from './callFunctions';
+import type { JoinUrlResponse, CallConfig } from './types';
 import { getActiveVibe } from './stageManager';
 import { setupToolRegistrationListeners } from './loaders/toolLoader';
 

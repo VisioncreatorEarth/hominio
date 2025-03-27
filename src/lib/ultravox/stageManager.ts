@@ -1,8 +1,5 @@
 import { loadVibe } from './loaders/vibeLoader';
-import { buildSystemPrompt } from './loaders/agentLoader';
-import type { AgentName, ResolvedTool } from './types';
-import { GLOBAL_CALL_TOOLS } from './globalTools';
-import { loadTool } from './loaders/toolLoader';
+import type { AgentName, ResolvedTool, StageChangeData } from './types';
 
 // Cache the currently active vibe
 let activeVibe: Awaited<ReturnType<typeof loadVibe>> | null = null;
@@ -10,38 +7,6 @@ let _activeVibeName: string | null = null;
 
 // Export the active vibe name as a getter
 export const activeVibeName = (): string | null => _activeVibeName;
-
-// Cache for global tools to avoid reloading
-let globalToolsCache: ResolvedTool[] = [];
-
-/**
- * Load global tools that should be available in all stages
- * @returns Array of resolved global tool definitions
- */
-async function loadGlobalTools(): Promise<ResolvedTool[]> {
-    // Use cache if available
-    if (globalToolsCache.length > 0) {
-        return globalToolsCache;
-    }
-
-    // Load all global tools
-    const resolvedGlobalTools: ResolvedTool[] = [];
-    for (const toolName of GLOBAL_CALL_TOOLS) {
-        try {
-            const tool = await loadTool(toolName) as ResolvedTool;
-            if (tool && tool.implementation) {
-                resolvedGlobalTools.push(tool);
-                console.log(`✅ Loaded global tool: ${toolName}`);
-            }
-        } catch (error) {
-            console.error(`❌ Failed to load global tool "${toolName}":`, error);
-        }
-    }
-
-    // Cache for future use
-    globalToolsCache = resolvedGlobalTools;
-    return resolvedGlobalTools;
-}
 
 /**
  * Load or get a vibe by name
@@ -96,7 +61,7 @@ export function resetActiveVibe() {
  * @param vibeId Optional vibe ID to load (defaults to current active vibe)
  * @returns The stage change data object compatible with Ultravox
  */
-export async function createAgentStageChangeData(agentName: AgentName, vibeId?: string) {
+export async function createAgentStageChangeData(agentName: AgentName, vibeId?: string): Promise<StageChangeData> {
     // Get the active vibe configuration or load specific vibe if provided
     const vibe = vibeId ? await getActiveVibe(vibeId) : await getActiveVibe();
 

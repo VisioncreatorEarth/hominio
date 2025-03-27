@@ -1,67 +1,24 @@
 import { browser } from '$app/environment';
-import type { UltravoxSession as UVSession, UltravoxSessionStatus as UVStatus, Transcript as UVTranscript, ClientToolImplementation } from 'ultravox-client';
+import type { UltravoxSession as UVSession, ClientToolImplementation } from 'ultravox-client';
 import { currentAgent, type AgentName } from './agents';
 import { createCall } from './createCall';
-import type { UltravoxSession as ClientUltravoxSession } from 'ultravox-client';
-import type { UltravoxSession } from './types';
-import type { Transcript } from './types';
-import type { CallCallbacks } from './types';
-
-// Define types for our Ultravox integration
-export type WebRtcMedium = { webRtc: Record<string, never> };
-export type TwilioMedium = { twilio: Record<string, unknown> };
-export type CallMedium = WebRtcMedium | TwilioMedium; // Only including the most common ones
-
-export type CallConfig = {
-    systemPrompt: string;
-    model?: string;
-    languageHint?: string;
-    voice?: string;
-    temperature?: number;
-    maxDuration?: string;
-    timeExceededMessage?: string;
-    firstSpeaker?: string;
-    joinTimeout?: string;
-    inactivityMessages?: string[];
-    medium?: CallMedium | string; // Can be a string or object based on API requirements
-    recordingEnabled?: boolean;
-    initialMessages?: string[];
-};
-
-export type JoinUrlResponse = {
-    callId: string;
-    joinUrl: string;
-    created: string;
-    ended: string | null;
-    model: string;
-};
+import { Role } from './types';
+import type {
+    CallCallbacks,
+    UltravoxExperimentalMessageEvent,
+    CallConfig,
+    JoinUrlResponse
+} from './types';
 
 // Re-export types from ultravox-client
 export { UltravoxSessionStatus } from 'ultravox-client';
-// export type { CallMedium }; // removed due to conflicts
 
-export enum Role {
-    USER = 'user',
-    AGENT = 'agent'
-}
-
-export type UltravoxExperimentalMessageEvent = {
-    message: {
-        message: string;
-        timestamp: number;
-    };
-};
+// Re-export our Role enum
+export { Role };
 
 // Ultravox session
 let uvSession: UVSession | null = null;
 const debugMessages: Set<string> = new Set(["debug"]);
-
-// Call callbacks interface
-export interface CallCallbacks {
-    onStatusChange: (status: string | undefined) => void;
-    onTranscriptChange: (transcripts: unknown[] | undefined) => void;
-    onDebugMessage?: (message: unknown) => void;
-}
 
 // Toggle mic/speaker mute state
 export function toggleMute(role: Role): void {
@@ -291,11 +248,12 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
         // Expose the session globally for client tools
         if (typeof window !== 'undefined') {
             console.log('💾 Exposing Ultravox session globally for tool access');
-            (window as Window & typeof globalThis & { __ULTRAVOX_SESSION: typeof uvSession }).__ULTRAVOX_SESSION = uvSession;
+            // Use 'any' to bypass the type checking issues between different UltravoxSession types
+            (window as any).__ULTRAVOX_SESSION = uvSession;
 
             // Add this line to the window for debugging
             console.log('🔍 Setting up debug flag for stage changes');
-            (window as Window & typeof globalThis & { __DEBUG_STAGE_CHANGES: boolean }).__DEBUG_STAGE_CHANGES = true;
+            (window as any).__DEBUG_STAGE_CHANGES = true;
         }
 
         // Join the call - tools are configured in the createCall function

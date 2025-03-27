@@ -1,17 +1,17 @@
 /**
  * View Loader - Dynamically loads UI components for vibes
  */
-import type { ComponentType } from 'svelte';
+import type { VibeComponent } from '../types';
 
 // Cache for loaded components to avoid reloading
-const componentCache = new Map<string, ComponentType>();
+const componentCache = new Map<string, VibeComponent>();
 
 /**
  * Dynamically loads a component from the components directory
  * @param componentName The name of the component to load
  * @returns The loaded component
  */
-export async function loadVibeComponent(componentName: string): Promise<ComponentType> {
+export async function loadVibeComponent(componentName: string): Promise<VibeComponent> {
     console.log(`🔎 Attempting to load component: ${componentName}`);
 
     // Check if component is already in cache
@@ -21,24 +21,24 @@ export async function loadVibeComponent(componentName: string): Promise<Componen
     }
 
     // Force different components based on name
-    let actualComponent = componentName;
+    const actualComponent = componentName;
 
     try {
         // Try to dynamically import the component using $lib path
         console.log(`🔍 Loading component: ${actualComponent}`);
 
         // Use different import paths based on the component name
-        let component: ComponentType;
+        let component: VibeComponent;
 
         if (actualComponent === 'CounterView') {
             // Use dynamic import and get the default export
             const module = await import('$lib/components/CounterView.svelte');
-            component = module.default as ComponentType;
+            component = module.default as VibeComponent;
             console.log('📦 Loaded CounterView specifically');
         } else {
             // Default to TodoView
             const module = await import('$lib/components/TodoView.svelte');
-            component = module.default as ComponentType;
+            component = module.default as VibeComponent;
             console.log('📦 Loaded TodoView');
         }
 
@@ -55,7 +55,7 @@ export async function loadVibeComponent(componentName: string): Promise<Componen
             console.log('⚠️ Falling back to TodoView component');
             try {
                 const fallbackModule = await import('$lib/components/TodoView.svelte');
-                const fallbackComponent = fallbackModule.default as ComponentType;
+                const fallbackComponent = fallbackModule.default as VibeComponent;
 
                 // Cache the fallback component
                 componentCache.set('TodoView', fallbackComponent);

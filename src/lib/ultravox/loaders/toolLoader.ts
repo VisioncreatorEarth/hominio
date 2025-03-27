@@ -1,26 +1,14 @@
 /**
  * Tool Loader - Dynamically loads tools and their implementations
  */
-import type { ToolDefinition } from '../types';
+import type { ToolDefinition, ToolImplementation, ClientToolReturnType } from '../types';
 import { toolRegistry } from '$lib/ultravox/todoActions';
 
 // Common types for Ultravox tool functions
-type ToolParams = Record<string, unknown>;
-type ToolImplementation = (params: ToolParams) => Promise<unknown> | unknown;
-
-// Define Ultravox session interface
-interface UltravoxSession {
-    registerToolImplementation: (name: string, impl: ToolImplementation) => void;
-}
+// Note: Using imported types from types.ts
 
 // Declare global window interface
-declare global {
-    interface Window {
-        __ULTRAVOX_SESSION?: UltravoxSession;
-        __hominio_tools?: Record<string, ToolImplementation>;
-        __hominio_tools_registered?: boolean;
-    }
-}
+// Note: Now defined in types.ts
 
 /**
  * In-memory cache for tool definitions to avoid reloading
@@ -125,7 +113,7 @@ export function registerToolsWithUltravox(): void {
     // Register each tool with the session
     for (const [toolName, implementation] of Object.entries(window.__hominio_tools)) {
         try {
-            session.registerToolImplementation(toolName, implementation);
+            session.registerToolImplementation(toolName, implementation as (params: unknown) => ClientToolReturnType | Promise<ClientToolReturnType>);
             registeredTools.push(toolName);
             console.log(`✅ Registered tool with Ultravox: ${toolName}`);
         } catch (error) {
