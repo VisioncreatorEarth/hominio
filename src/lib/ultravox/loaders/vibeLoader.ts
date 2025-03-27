@@ -1,12 +1,8 @@
 import type {
     ToolImplementation,
-    VibeManifest,
-    VibeAgent,
-    ToolDefinition,
     ResolvedTool,
     ResolvedAgent,
     ResolvedVibe,
-    UltravoxSession,
     ClientToolReturnType
 } from '../types';
 

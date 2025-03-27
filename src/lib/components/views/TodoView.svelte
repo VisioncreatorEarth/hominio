@@ -1,11 +1,5 @@
 <script lang="ts">
-	import {
-		todos,
-		todoState,
-		getActiveDocName,
-		getAllUniqueTags,
-		filterTodosByTag
-	} from '$lib/ultravox/todoStore';
+	import { todos, todoState, getAllUniqueTags, filterTodosByTag } from '$lib/ultravox/todoStore';
 
 	// Format date for display
 	function formatDate(timestamp: number): string {

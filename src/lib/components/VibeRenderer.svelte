@@ -6,9 +6,9 @@
 	import { todoState, getActiveDocName, toolState } from '$lib/ultravox/todoStore';
 	import { currentAgent } from '$lib/ultravox/agents';
 	import type { AgentConfig } from '$lib/ultravox/types';
-	import TodoView from '$lib/components/TodoView.svelte';
-	import HomeView from '$lib/components/HomeView.svelte';
-	import CounterView from '$lib/components/CounterView.svelte';
+	import TodoView from '$lib/components/views/TodoView.svelte';
+	import HomeView from '$lib/components/views/HomeView.svelte';
+	import CounterView from '$lib/components/views/CounterView.svelte';
 
 	// Define interface for our vibe manifest that includes the view property
 	interface ExtendedVibeManifest {

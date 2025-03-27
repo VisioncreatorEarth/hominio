@@ -220,6 +220,9 @@ export interface VibeManifest {
     // UI properties
     view: string;
     vibeTools: string[];
+    // Visual properties
+    icon?: string;
+    color?: string;
     // Agent configuration
     defaultAgent: string;
     agents: AgentConfig[];

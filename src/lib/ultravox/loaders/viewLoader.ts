@@ -32,12 +32,12 @@ export async function loadVibeComponent(componentName: string): Promise<VibeComp
 
         if (actualComponent === 'CounterView') {
             // Use dynamic import and get the default export
-            const module = await import('$lib/components/CounterView.svelte');
+            const module = await import('$lib/components/views/CounterView.svelte');
             component = module.default as VibeComponent;
             console.log('📦 Loaded CounterView specifically');
         } else {
             // Default to TodoView
-            const module = await import('$lib/components/TodoView.svelte');
+            const module = await import('$lib/components/views/TodoView.svelte');
             component = module.default as VibeComponent;
             console.log('📦 Loaded TodoView');
         }
@@ -54,7 +54,7 @@ export async function loadVibeComponent(componentName: string): Promise<VibeComp
         if (actualComponent === 'CounterView') {
             console.log('⚠️ Falling back to TodoView component');
             try {
-                const fallbackModule = await import('$lib/components/TodoView.svelte');
+                const fallbackModule = await import('$lib/components/views/TodoView.svelte');
                 const fallbackComponent = fallbackModule.default as VibeComponent;
 
                 // Cache the fallback component
