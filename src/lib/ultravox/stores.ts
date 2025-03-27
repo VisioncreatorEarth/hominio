@@ -7,25 +7,55 @@
 import { writable } from 'svelte/store';
 
 // Store for handling system errors
-export const errorStore = writable<{
-    message: string;
-    source?: string;
-    timestamp?: number;
-    error?: Error;
-} | null>(null);
+export const errorStore = writable<{ message: string; stack?: string } | null>(null);
 
-// Helper to set a new error
-export function setError(message: string, source?: string, error?: Error) {
-    errorStore.set({
-        message,
-        source,
-        error,
-        timestamp: Date.now()
-    });
-    console.error(`Error [${source || 'unknown'}]: ${message}`, error);
+export function setError(error: Error) {
+    errorStore.set({ message: error.message, stack: error.stack });
 }
 
-// Helper to clear the error
 export function clearError() {
     errorStore.set(null);
+}
+
+// Activity tracking
+export const recentToolActivity = writable<{ action: string; message: string; timestamp: number; id?: string } | null>(null);
+
+/**
+ * Log a tool activity and show a notification
+ * @param action The action performed
+ * @param message The result message
+ * @param success Whether the action was successful
+ * @returns The result object
+ */
+export function logToolActivity(
+    action: string,
+    message: string,
+    success = true
+): { success: boolean; message: string } {
+    const timestamp = Date.now();
+    const activityId = crypto.randomUUID();
+
+    // Show recent activity indicator in global state
+    const activity = {
+        id: activityId,
+        action,
+        message,
+        timestamp
+    };
+
+    recentToolActivity.set(activity);
+
+    // Clear the notification after 3 seconds
+    setTimeout(() => {
+        // Only clear if this is still the current notification
+        recentToolActivity.update(current => {
+            if (current?.id === activityId) {
+                return null;
+            }
+            return current;
+        });
+    }, 3000);
+
+    console.log(`Tool activity: ${action} - ${message} (${activityId})`);
+    return { success, message };
 } 

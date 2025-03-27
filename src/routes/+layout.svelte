@@ -5,10 +5,11 @@
 	import { loroPGLiteStorage } from '$lib/stores/loroPGLiteStorage';
 	import { LoroDoc } from 'loro-crdt';
 	import { generateShortUUID } from '$lib/utils/uuid';
-	import { startCall, endCall, type Transcript } from '$lib/ultravox/callFunctions';
+	import { startCall, endCall } from '$lib/ultravox/callFunctions';
 	import CallInterface from '$lib/components/CallInterface.svelte';
 	import { initializeVibe, getActiveVibe } from '$lib/ultravox';
 	import { DEFAULT_CALL_CONFIG } from '$lib/ultravox/callConfig';
+	import { initDocs } from '$lib/docs';
 
 	// Disable Server-Side Rendering since Tauri is client-only
 	export const ssr = false;
@@ -29,7 +30,7 @@
 	let isStorageInitialized = $state(false);
 	let isCallActive = $state(false);
 	let callStatus = $state<string>('off');
-	let transcripts = $state<Transcript[]>([]);
+	let transcripts = $state<any[]>([]);
 	let isVibeInitialized = $state(false);
 
 	// Loro document registry
@@ -280,6 +281,16 @@
 		// End any active call
 		if (isCallActive) {
 			handleEndCall();
+		}
+	});
+
+	// Initialize docs system
+	onMount(async () => {
+		try {
+			await initDocs();
+			console.log('Docs system initialized successfully');
+		} catch (error) {
+			console.error('Failed to initialize docs system:', error);
 		}
 	});
 

@@ -23,7 +23,16 @@
                     "type": "string",
                     "description": "The new text for the todo"
                 },
-                "required": true
+                "required": false
+            },
+            {
+                "name": "completed",
+                "location": "PARAMETER_LOCATION_BODY",
+                "schema": {
+                    "type": "boolean",
+                    "description": "Whether the todo is completed (true) or not (false)"
+                },
+                "required": false
             },
             {
                 "name": "tags",

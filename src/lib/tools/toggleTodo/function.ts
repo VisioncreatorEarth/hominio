@@ -1,74 +1,118 @@
-// Implementation extracted from hominio/+page.svelte
+import { loroAPI } from '$lib/docs/loroAPI';
+import type { TodoItem } from '$lib/docs/schemas/todo';
+import { logToolActivity } from '$lib/ultravox/stores';
 import type { ToolParameters } from '$lib/ultravox/types';
-import {
-    toggleTodoById,
-    findTodosByText,
-    logToolActivity
-} from '$lib/ultravox/todoStore';
 
+/**
+ * Toggles the completed state of a todo item
+ * @param inputs Tool input parameters
+ * @returns Result of the operation
+ */
+export async function execute(inputs: {
+    todoId?: string;
+    text?: string;
+}): Promise<{ success: boolean; message: string }> {
+    try {
+        // Get operations for todo schema
+        const { get, update, query } = loroAPI.getOperations<TodoItem>('todo');
+
+        // If we have an ID, use it directly
+        if (inputs.todoId) {
+            const todo = get(inputs.todoId);
+            if (!todo) {
+                return logToolActivity('toggleTodo', 'Todo not found', false);
+            }
+
+            // Toggle completed status
+            const success = update(inputs.todoId, {
+                completed: !todo.completed
+            });
+
+            if (success) {
+                return logToolActivity('toggleTodo', `Todo ${todo.completed ? 'marked incomplete' : 'marked complete'}`);
+            } else {
+                return logToolActivity('toggleTodo', 'Failed to update todo', false);
+            }
+        }
+
+        // Try by text content if provided
+        if (inputs.text) {
+            // Find matching todos
+            const matchingTodos = query(todo => todo.text.toLowerCase().includes(inputs.text!.toLowerCase()));
+
+            if (matchingTodos.length === 0) {
+                return logToolActivity('toggleTodo', 'No matching todos found', false);
+            }
+
+            if (matchingTodos.length > 1) {
+                const todoNames = matchingTodos.map(([, todo]) => `"${todo.text}"`).join(', ');
+                return logToolActivity('toggleTodo', `Found multiple matching todos: ${todoNames}. Please be more specific.`, false);
+            }
+
+            // We have exactly one match
+            const [id, todo] = matchingTodos[0];
+            const success = update(id, {
+                completed: !todo.completed
+            });
+
+            if (success) {
+                return logToolActivity('toggleTodo', `Todo "${todo.text}" ${todo.completed ? 'marked incomplete' : 'marked complete'}`);
+            } else {
+                return logToolActivity('toggleTodo', 'Failed to update todo', false);
+            }
+        }
+
+        // No ID or text provided
+        return logToolActivity('toggleTodo', 'No todo ID or text provided', false);
+    } catch (error) {
+        console.error('Error toggling todo:', error);
+        return logToolActivity('toggleTodo', `Error: ${error}`, false);
+    }
+}
+
+/**
+ * Legacy implementation for Ultravox compatibility
+ * @param parameters Tool parameters from Ultravox
+ * @returns Result as JSON string
+ */
 export function toggleTodoImplementation(parameters: ToolParameters): string {
     console.log('Called toggleTodo tool with parameters:', parameters);
+
     try {
-        const { todoId, todoText } = parameters as { todoId?: string, todoText?: string };
+        // Handle both object and string parameter formats
+        let parsedParams: Record<string, unknown> = {};
 
-        // Try by ID first
-        if (todoId && typeof todoId === 'string') {
-            console.log(`Attempting to toggle todo by ID: ${todoId}`);
-            const success = toggleTodoById(todoId);
-            if (success) {
-                const result = {
-                    success: true,
-                    message: `Toggled todo completion status`
-                };
-
-                logToolActivity('toggle', result.message, true);
-                return JSON.stringify(result);
+        if (typeof parameters === 'object' && parameters !== null) {
+            parsedParams = parameters;
+        } else if (typeof parameters === 'string') {
+            try {
+                parsedParams = JSON.parse(parameters);
+            } catch (e) {
+                console.error('Failed to parse string parameters:', e);
             }
         }
 
-        // Try by text content
-        if (todoText && typeof todoText === 'string') {
-            console.log(`Attempting to toggle todo by text: ${todoText}`);
+        // Extract parameters with safer type checking
+        const todoId = parsedParams.todoId as string | undefined;
+        const todoText = parsedParams.todoText as string | undefined;
 
-            // Find all matching todos using the helper function
-            const matchingTodos = findTodosByText(todoText);
+        // Call the new implementation with appropriate parameters
+        execute({
+            todoId,
+            text: todoText
+        }).then(result => {
+            console.log('Todo toggled with result:', result);
+        }).catch(err => {
+            console.error('Error in toggleTodo execution:', err);
+        });
 
-            console.log(`Found ${matchingTodos.length} matching todos`);
-
-            // If we found exactly one match, toggle it
-            if (matchingTodos.length === 1) {
-                const [id, todo] = matchingTodos[0];
-                toggleTodoById(id);
-
-                const result = {
-                    success: true,
-                    message: `Toggled "${todo.text}" to ${!todo.completed ? 'complete' : 'incomplete'}`
-                };
-
-                logToolActivity('toggle', result.message, true);
-                return JSON.stringify(result);
-            }
-            // If multiple matches, return info about them
-            else if (matchingTodos.length > 1) {
-                const todoNames = matchingTodos.map(([, todo]) => `"${todo.text}"`).join(', ');
-
-                const result = {
-                    success: false,
-                    message: `Found multiple matching todos: ${todoNames}. Please be more specific.`
-                };
-
-                logToolActivity('toggle', result.message, false);
-                return JSON.stringify(result);
-            }
-        }
-
-        // If we got here, we couldn't find a matching todo
+        // Return a preliminary success message
+        // The actual result will be displayed through the notification system
         const result = {
-            success: false,
-            message: 'Could not find a matching todo. Try a different description or create a new todo.'
+            success: true,
+            message: `Toggled todo completion status`
         };
 
-        logToolActivity('toggle', result.message, false);
         return JSON.stringify(result);
     } catch (error) {
         console.error('Error in toggleTodo tool:', error);
@@ -79,7 +123,6 @@ export function toggleTodoImplementation(parameters: ToolParameters): string {
             message: `Error toggling todo: ${errorMessage}`
         };
 
-        logToolActivity('toggle', result.message, false);
         return JSON.stringify(result);
     }
 } 

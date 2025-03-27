@@ -23,7 +23,8 @@
                 "createTodo",
                 "toggleTodo",
                 "updateTodo",
-                "removeTodo",
+                "deleteTodo",
+                "queryTodos",
                 "filterTodos"
             ]
         }
