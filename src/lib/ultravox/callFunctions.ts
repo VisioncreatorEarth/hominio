@@ -7,7 +7,6 @@ import type {
     CallCallbacks,
     UltravoxExperimentalMessageEvent,
     CallConfig,
-    JoinUrlResponse
 } from './types';
 
 // Re-export types from ultravox-client

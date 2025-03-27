@@ -1,14 +1,17 @@
 <script lang="ts">
 	import { onMount, onDestroy, createEventDispatcher } from 'svelte';
 	import { GLOBAL_CALL_TOOLS } from '$lib/ultravox/globalTools';
-	import { getActiveVibe, initializeVibe } from '$lib/ultravox';
-	import { loadVibeComponent, clearComponentCache } from '$lib/ultravox/loaders/viewLoader';
+	import {
+		getActiveVibe,
+		initializeVibe,
+		loadView,
+		clearViewCache,
+		getAllViews,
+		hasView
+	} from '$lib/ultravox';
 	import { todoState, getActiveDocName, toolState } from '$lib/ultravox/todoStore';
 	import { currentAgent } from '$lib/ultravox/agents';
 	import type { AgentConfig } from '$lib/ultravox/types';
-	import TodoView from '$lib/components/views/TodoView.svelte';
-	import HomeView from '$lib/components/views/HomeView.svelte';
-	import CounterView from '$lib/components/views/CounterView.svelte';
 
 	// Define interface for our vibe manifest that includes the view property
 	interface ExtendedVibeManifest {
@@ -61,31 +64,12 @@
 	// Component loader for dynamic component rendering
 	function loadComponentUI() {
 		try {
-			if (vibeComponentName === 'HomeView') {
-				console.log(`🏠 Loading HomeView component directly`);
-				vibeComponent = HomeView;
-				loadingComponent = false;
-				componentError = '';
-				return;
-			} else if (vibeComponentName === 'TodoView') {
-				console.log(`📝 Loading TodoView component directly`);
-				vibeComponent = TodoView;
-				loadingComponent = false;
-				componentError = '';
-				return;
-			} else if (vibeComponentName === 'CounterView') {
-				console.log(`🔢 Loading CounterView component directly`);
-				vibeComponent = CounterView;
-				loadingComponent = false;
-				componentError = '';
-				return;
-			}
-
 			console.log(`🧩 Loading component dynamically: ${vibeComponentName}`);
 			loadingComponent = true;
 			componentError = '';
 
-			loadVibeComponent(vibeComponentName)
+			// Use the registry to load all views dynamically
+			loadView(vibeComponentName)
 				.then((component) => {
 					console.log(`✅ Successfully loaded component: ${vibeComponentName}`);
 					vibeComponent = component;
@@ -146,7 +130,7 @@
 
 		try {
 			// Clear component cache to ensure fresh loading
-			clearComponentCache();
+			clearViewCache();
 			vibeComponent = null;
 
 			// Update active vibe name

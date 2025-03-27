@@ -21,11 +21,19 @@ import {
     getToolRegistry,
     registerToolsWithUltravox
 } from './registries/toolRegistry';
+import {
+    loadView,
+    getAllViews,
+    discoverViews,
+    hasView,
+    clearViewCache
+} from './registries/viewRegistry';
 
 // Re-export essential types
 export type { AgentName } from './types';
 export type { Transcript, CallConfig } from './types';
 export type { ToolInfo } from './registries/toolRegistry';
+export type { ViewInfo } from './registries/viewRegistry';
 
 /**
  * Initialize a vibe and its tools
@@ -106,6 +114,7 @@ export function resetUltravox(): void {
     // Clear caches
     resetActiveVibe();
     clearVibeCache();
+    clearViewCache();
 
     console.log('🧹 Ultravox system reset');
 }
@@ -123,5 +132,11 @@ export {
     getToolMetadata,
     callTool,
     getToolRegistry,
-    registerToolsWithUltravox
+    registerToolsWithUltravox,
+    // View registry exports
+    loadView,
+    getAllViews,
+    discoverViews,
+    hasView,
+    clearViewCache
 }; 
