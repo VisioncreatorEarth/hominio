@@ -13,11 +13,19 @@ import { setupToolRegistrationListeners } from './loaders/toolLoader';
 import { DEFAULT_CALL_CONFIG } from './callConfig';
 import { startCall, endCall } from './callFunctions';
 import { errorStore } from './stores';
+import {
+    loadAllTools,
+    getAllToolsMetadata,
+    getToolMetadata,
+    callTool,
+    getToolRegistry,
+    registerToolsWithUltravox
+} from './registries/toolRegistry';
 
 // Re-export essential types
-export type { Transcript } from './callFunctions';
 export type { AgentName } from './types';
-export type { CallConfig } from './callFunctions';
+export type { Transcript, CallConfig } from './types';
+export type { ToolInfo } from './registries/toolRegistry';
 
 /**
  * Initialize a vibe and its tools
@@ -108,5 +116,12 @@ export {
     startCall,
     endCall,
     createAgentStageChangeData,
-    DEFAULT_CALL_CONFIG
+    DEFAULT_CALL_CONFIG,
+    // Tool registry exports
+    loadAllTools,
+    getAllToolsMetadata,
+    getToolMetadata,
+    callTool,
+    getToolRegistry,
+    registerToolsWithUltravox
 }; 

@@ -1,8 +1,8 @@
 /**
  * Tool Loader - Dynamically loads tools and their implementations
  */
-import type { ToolDefinition, ToolImplementation, ClientToolReturnType } from '../types';
-import { toolRegistry } from '$lib/ultravox/todoActions';
+import type { ToolDefinition } from '../types';
+import { loadAllTools, setupToolsForUltravox } from '../registries/toolRegistry';
 
 // Common types for Ultravox tool functions
 // Note: Using imported types from types.ts
@@ -14,12 +14,6 @@ import { toolRegistry } from '$lib/ultravox/todoActions';
  * In-memory cache for tool definitions to avoid reloading
  */
 const toolCache = new Map<string, ToolDefinition>();
-
-/**
- * Registry of all loaded tools and their implementations
- * This is the single source of truth for tools
- */
-const globalToolRegistry: Record<string, ToolImplementation> = {};
 
 /**
  * Loads a tool from its manifest
@@ -51,9 +45,6 @@ export async function loadTool(toolName: string): Promise<ToolDefinition> {
             if (typeof module[implementationName] === 'function') {
                 toolDefinition.implementation = module[implementationName];
                 console.log(`✅ Loaded implementation for tool: ${toolName}`);
-
-                // Store implementation in our global registry
-                globalToolRegistry[toolName] = module[implementationName];
             } else {
                 console.error(`❌ Tool implementation "${implementationName}" not found in module`);
             }
@@ -73,81 +64,26 @@ export async function loadTool(toolName: string): Promise<ToolDefinition> {
 
 /**
  * Ensure tools are available globally for Ultravox
- * This prepares the global tool registry but doesn't register with Ultravox yet
+ * This now uses the centralized registry
  */
 export function prepareToolRegistry(): void {
-    if (typeof window === 'undefined') return;
-
-    // Create or update the tools registry
-    if (!window.__hominio_tools) {
-        window.__hominio_tools = { ...globalToolRegistry };
-    } else {
-        // Add our tools to the existing registry
-        Object.entries(globalToolRegistry).forEach(([name, implementation]) => {
-            window.__hominio_tools![name] = implementation;
-        });
-    }
-
-    // Combine with toolRegistry from todoActions
-    Object.entries(toolRegistry).forEach(([name, implementation]) => {
-        window.__hominio_tools![name] = implementation;
-        globalToolRegistry[name] = implementation;
+    // Delegate to the centralized registry
+    loadAllTools().catch(error => {
+        console.error('Failed to load tools:', error);
     });
-
-    console.log('🔗 Tool registry prepared with tools:', Object.keys(window.__hominio_tools).join(', '));
-}
-
-/**
- * Register tools with the Ultravox session
- * Only register when Ultravox is ready
- */
-export function registerToolsWithUltravox(): void {
-    if (typeof window === 'undefined' || !window.__ULTRAVOX_SESSION || !window.__hominio_tools) {
-        console.warn('⚠️ Cannot register tools - Ultravox session or tool registry not available');
-        return;
-    }
-
-    const session = window.__ULTRAVOX_SESSION;
-    const registeredTools: string[] = [];
-
-    // Register each tool with the session
-    for (const [toolName, implementation] of Object.entries(window.__hominio_tools)) {
-        try {
-            session.registerToolImplementation(toolName, implementation as (params: unknown) => ClientToolReturnType | Promise<ClientToolReturnType>);
-            registeredTools.push(toolName);
-            console.log(`✅ Registered tool with Ultravox: ${toolName}`);
-        } catch (error) {
-            console.error(`❌ Failed to register tool "${toolName}":`, error);
-        }
-    }
-
-    console.log('📋 Tool registration complete, registered tools:', registeredTools.join(', '));
-    window.__hominio_tools_registered = true;
 }
 
 /**
  * Setup event listeners for tool registration
+ * This delegates to the centralized registry
  */
 export function setupToolRegistrationListeners(): void {
     if (typeof window === 'undefined' || window.__hominio_tools_registered) return;
 
-    // Prepare the tool registry first
-    prepareToolRegistry();
-
-    // Set up listener for Ultravox readiness
-    window.addEventListener('ultravox-ready', () => {
-        console.log('🔄 Ultravox ready event received, registering tools');
-        registerToolsWithUltravox();
+    // Use the centralized setup function
+    setupToolsForUltravox().catch(error => {
+        console.error('Failed to set up tools for Ultravox:', error);
     });
-
-    // Also set up a listener for when Ultravox client is created
-    window.addEventListener('ultravox-client-ready', () => {
-        console.log('🔄 Ultravox client is ready, dispatching ultravox-ready event');
-        const event = new Event('ultravox-ready');
-        window.dispatchEvent(event);
-    });
-
-    console.log('🎧 Tool registration listeners setup completed');
 }
 
 /**

@@ -2,8 +2,7 @@ import type {
     ToolImplementation,
     ResolvedTool,
     ResolvedAgent,
-    ResolvedVibe,
-    ClientToolReturnType
+    ResolvedVibe
 } from '../types';
 
 /**
@@ -11,16 +10,12 @@ import type {
  */
 import { loadTool } from './toolLoader';
 import { GLOBAL_CALL_TOOLS, isGlobalCallTool } from '../globalTools';
+import { registerToolsWithUltravox } from '../registries/toolRegistry';
 
 /**
  * In-memory cache for loaded vibes to avoid reloading
  */
 const vibeCache = new Map<string, ResolvedVibe>();
-
-/**
- * In-memory cache for tools to register with Ultravox
- */
-let cachedTools: { name: string, implementation: ToolImplementation }[] = [];
 
 /**
  * Loads a vibe configuration from its manifest
@@ -51,10 +46,8 @@ export async function loadVibe(vibeName: string): Promise<ResolvedVibe> {
         for (const toolName of GLOBAL_CALL_TOOLS) {
             try {
                 const tool = await loadTool(toolName) as ResolvedTool;
-                if (tool.implementation) {
-                    resolvedGlobalTools.push(tool);
-                    console.log(`✅ Loaded global tool: ${toolName}`);
-                }
+                resolvedGlobalTools.push(tool);
+                console.log(`✅ Loaded global tool: ${toolName}`);
             } catch (error) {
                 console.error(`❌ Failed to load global tool "${toolName}":`, error);
             }
@@ -71,10 +64,8 @@ export async function loadVibe(vibeName: string): Promise<ResolvedVibe> {
 
             try {
                 const tool = await loadTool(toolName) as ResolvedTool;
-                if (tool.implementation) {
-                    resolvedVibeTools.push(tool);
-                    console.log(`✅ Loaded vibe call tool: ${toolName}`);
-                }
+                resolvedVibeTools.push(tool);
+                console.log(`✅ Loaded vibe call tool: ${toolName}`);
             } catch (error) {
                 console.error(`❌ Failed to load vibe call tool "${toolName}":`, error);
             }
@@ -107,10 +98,8 @@ export async function loadVibe(vibeName: string): Promise<ResolvedVibe> {
 
                         try {
                             const tool = await loadTool(toolName) as ResolvedTool;
-                            if (tool.implementation) {
-                                agentConfig.resolvedTools.push(tool);
-                                console.log(`✅ Loaded agent tool: ${toolName}`);
-                            }
+                            agentConfig.resolvedTools.push(tool);
+                            console.log(`✅ Loaded agent tool: ${toolName}`);
                         } catch (error) {
                             console.error(`❌ Failed to load agent tool "${toolName}":`, error);
                         }
@@ -196,62 +185,32 @@ export function registerVibeTools(vibe: ResolvedVibe): void {
         }
     }
 
-    // Store in global cache for later use
-    cachedTools = toolsToRegister;
-
-    // Register with session if available, otherwise create/update tool registry
-    if (window.__ULTRAVOX_SESSION) {
-        const session = window.__ULTRAVOX_SESSION;
-        const registeredTools: string[] = [];
-
-        for (const tool of toolsToRegister) {
-            try {
-                session.registerToolImplementation(tool.name, tool.implementation as (params: unknown) => ClientToolReturnType | Promise<ClientToolReturnType>);
-                registeredTools.push(tool.name);
-                console.log(`✅ Registered tool with Ultravox: ${tool.name}`);
-            } catch (error) {
-                console.error(`❌ Failed to register tool "${tool.name}" with Ultravox:`, error);
-            }
-        }
-
-        console.log('📋 Registered vibe tools with Ultravox:', registeredTools.join(', '));
-    } else {
-        // Create or update the tool registry
-        if (!window.__hominio_tools) {
-            window.__hominio_tools = {};
-        }
-
-        // Add tools to registry
+    // Use the centralized registry to register tools with Ultravox
+    if (window.__hominio_tools) {
+        // Add our tools to the existing registry
         for (const tool of toolsToRegister) {
             window.__hominio_tools[tool.name] = tool.implementation;
             console.log(`✅ Added tool to registry: ${tool.name}`);
         }
+    } else {
+        // Create a new registry
+        window.__hominio_tools = {};
+        for (const tool of toolsToRegister) {
+            window.__hominio_tools[tool.name] = tool.implementation;
+            console.log(`✅ Added tool to new registry: ${tool.name}`);
+        }
+    }
 
-        console.log('📋 Stored tools in registry:', Object.keys(window.__hominio_tools).join(', '));
-        console.warn('⚠️ No Ultravox session available. Tools stored in registry for later registration.');
+    console.log('📋 Updated global tool registry with vibe tools');
 
+    // If Ultravox session exists, register tools immediately
+    if (window.__ULTRAVOX_SESSION) {
+        registerToolsWithUltravox();
+    } else {
         // Add event listener to register tools when Ultravox is ready
         window.addEventListener('ultravox-ready', () => {
             console.log('🔄 Ultravox ready event received, registering cached tools');
-
-            if (window.__ULTRAVOX_SESSION && cachedTools.length > 0) {
-                const session = window.__ULTRAVOX_SESSION;
-                const registeredTools: string[] = [];
-
-                for (const tool of cachedTools) {
-                    try {
-                        session.registerToolImplementation(tool.name, tool.implementation as (params: unknown) => ClientToolReturnType | Promise<ClientToolReturnType>);
-                        registeredTools.push(tool.name);
-                        console.log(`✅ Registered cached tool: ${tool.name}`);
-                    } catch (error) {
-                        console.error(`❌ Failed to register cached tool "${tool.name}":`, error);
-                    }
-                }
-
-                console.log('📋 Registered cached tools:', registeredTools.join(', '));
-            } else {
-                console.warn('⚠️ Ultravox session still not available or no cached tools to register');
-            }
-        });
+            registerToolsWithUltravox();
+        }, { once: true });
     }
 } 
