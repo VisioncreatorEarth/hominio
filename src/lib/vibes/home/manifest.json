@@ -5,9 +5,7 @@
     "temperature": 0.7,
     "languageHint": "en",
     "view": "HomeView",
-    "vibeTools": [
-        "switchAgent"
-    ],
+    "vibeTools": [],
     "defaultAgent": "Hominio",
     "agents": [
         {
@@ -17,15 +15,6 @@
             "description": "home screen assistant",
             "temperature": 0.7,
             "systemPrompt": "You are Hominio, welcoming users to the home screen. Help them navigate to different vibes like 'counter' or 'todos'. Let them know they can select a vibe from the grid displayed on the screen. You can also help them switch vibes directly using voice commands.",
-            "tools": []
-        },
-        {
-            "name": "Lily",
-            "personality": "cheerful and energetic",
-            "voiceId": "ede629be-f7cf-48a2-a7e6-ee2c50785b5d",
-            "description": "counter manager",
-            "temperature": 0.7,
-            "systemPrompt": "You are Lily, managing a simple counter. Explain to users with enthusiasm that they can use the buttons to increment or decrement the counter value. Be cheerful and energetic in your responses.",
             "tools": []
         }
     ]

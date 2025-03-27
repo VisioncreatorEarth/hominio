@@ -294,68 +294,13 @@
 	<!-- Left sidebar for Skills -->
 	<div class="relative z-10 lg:col-span-2">
 		<div class="sticky top-6 p-4">
-			<!-- Vibe Selector -->
-			<div class="mb-4 rounded-xl border border-white/10 bg-white/5 p-4 backdrop-blur-sm">
-				<h3 class="mb-3 text-lg font-semibold text-white/80">Select Vibe</h3>
-				{#if loadingVibe}
-					<div class="flex items-center justify-center py-3">
-						<div
-							class="h-5 w-5 animate-spin rounded-full border-2 border-white/20 border-t-white/80"
-						></div>
-						<span class="ml-3 text-sm text-white/70">Switching vibe...</span>
-					</div>
-				{:else}
-					<div class="space-y-2">
-						<button
-							on:click={() => switchVibe('home')}
-							class={`relative w-full rounded-lg py-2 text-sm font-medium text-white/90 transition-all ${
-								activeVibeName === 'home'
-									? 'bg-green-600/50 hover:bg-green-600/70'
-									: 'bg-green-500/30 hover:bg-green-500/50'
-							}`}
-						>
-							Home
-							{#if activeVibeName === 'home'}
-								<span class="absolute top-2.5 right-3 h-2 w-2 rounded-full bg-green-400"></span>
-							{/if}
-						</button>
-						<button
-							on:click={() => switchVibe('todos')}
-							class={`relative w-full rounded-lg py-2 text-sm font-medium text-white/90 transition-all ${
-								activeVibeName === 'todos'
-									? 'bg-indigo-600/50 hover:bg-indigo-600/70'
-									: 'bg-indigo-500/30 hover:bg-indigo-500/50'
-							}`}
-						>
-							Todo Vibe
-							{#if activeVibeName === 'todos'}
-								<span class="absolute top-2.5 right-3 h-2 w-2 rounded-full bg-green-400"></span>
-							{/if}
-						</button>
-						<button
-							on:click={() => switchVibe('counter')}
-							class={`relative w-full rounded-lg py-2 text-sm font-medium text-white/90 transition-all ${
-								activeVibeName === 'counter'
-									? 'bg-blue-600/50 hover:bg-blue-600/70'
-									: 'bg-blue-500/30 hover:bg-blue-500/50'
-							}`}
-						>
-							Counter Vibe
-							{#if activeVibeName === 'counter'}
-								<span class="absolute top-2.5 right-3 h-2 w-2 rounded-full bg-green-400"></span>
-							{/if}
-						</button>
-					</div>
-				{/if}
-			</div>
-
-			<!-- Skills Section -->
+			<!-- Vibe Tools Panel -->
 			<div class="rounded-xl border border-white/10 bg-white/5 p-4 backdrop-blur-sm">
-				<h3 class="mb-3 text-lg font-semibold text-white/80">
-					Available Skills
+				<h3 class="mb-3 flex items-center text-lg font-semibold text-white/80">
+					Skills
 					{#if !loadingVibe}
 						<span class="ml-2 text-sm text-white/60">
-							({globalSkills.length + vibeSkills.length + Object.values(agentTools).flat().length} total)
+							({globalSkills.length + vibeSkills.length + Object.values(agentTools).flat().length})
 						</span>
 					{/if}
 				</h3>
@@ -372,7 +317,7 @@
 					{#if globalSkills.length > 0}
 						<div class="mb-4">
 							<h4 class="mb-2 text-sm font-semibold text-white/60">
-								Global Skills ({globalSkills.length})
+								Global ({globalSkills.length})
 							</h4>
 							<div class="space-y-3">
 								{#each globalSkills as tool}
@@ -414,7 +359,7 @@
 					{#if vibeSkills.length > 0}
 						<div class="mb-4">
 							<h4 class="mb-2 text-sm font-semibold text-white/60">
-								Vibe Skills ({vibeSkills.length})
+								Vibe ({vibeSkills.length})
 							</h4>
 							<div class="space-y-3">
 								{#each vibeSkills as tool}
@@ -457,7 +402,7 @@
 						{#if tools.length > 0 || ($currentAgent && agentName === $currentAgent) || (activeManifest?.defaultAgent && agentName === activeManifest.defaultAgent)}
 							<div class="mt-5">
 								<h4 class="mb-2 text-sm font-semibold text-white/60">
-									{agentName}'s Skills ({tools.length})
+									{agentName} ({tools.length})
 								</h4>
 								<div class="space-y-3">
 									{#each tools as tool}
