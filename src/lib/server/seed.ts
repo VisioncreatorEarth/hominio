@@ -1,4 +1,4 @@
-import { db, createLoroDoc } from './elysia';
+import { db, createLoroDoc } from './elysiaLegacy';
 
 // Generate real UUIDs for all entities
 export const META_SCHEMA_UUID = '2d1ee72f-6b58-4c0e-9d3c-b10bc0437317';

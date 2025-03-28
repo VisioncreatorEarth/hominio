@@ -43,12 +43,16 @@
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.17",
+    "@elysiajs/cors": "^1.2.0",
     "@elysiajs/eden": "^1.2.0",
+    "@elysiajs/swagger": "^1.2.2",
     "@noble/hashes": "^1.7.1",
     "@tauri-apps/api": "^2.3.0",
     "@tauri-apps/plugin-fs": "^2.2.0",
+    "better-auth": "^1.2.5",
     "elysia": "^1.2.25",
     "loro-crdt": "^1.4.6",
+    "pg": "^8.14.1",
     "ultravox-client": "^0.3.5",
     "zod": "^3.24.2"
   }

@@ -1,8 +1,40 @@
 import { Elysia } from 'elysia';
-import { cors } from '@elysiajs/cors';
+import type { Context } from "elysia";
 import { hashService } from '$lib/KERNEL/hash-service';
 import { storageService } from '$lib/KERNEL/storage-service';
 import { LoroDoc } from 'loro-crdt';
+import { auth } from "$lib/auth/auth";
+
+const betterAuthView = async (context: Context) => {
+    const BETTER_AUTH_ACCEPT_METHODS = ["POST", "GET"]
+
+    console.log('Auth Request:', {
+        method: context.request.method,
+        url: context.request.url,
+        path: new URL(context.request.url).pathname
+    });
+
+    // validate request method
+    if (BETTER_AUTH_ACCEPT_METHODS.includes(context.request.method)) {
+        try {
+            const response = await auth.handler(context.request);
+            console.log('Auth Response:', {
+                status: response.status,
+                ok: response.ok
+            });
+            return response;
+        } catch (error) {
+            console.error('Auth Error:', error);
+            return new Response(JSON.stringify({ error: 'Authentication failed' }), {
+                status: 500,
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
+    } else {
+        console.log('Method not allowed:', context.request.method);
+        context.error(405)
+    }
+}
 
 // Initialize kernel registry
 const kernelRegistry = new LoroDoc();
@@ -49,11 +81,18 @@ initializeKernel();
 
 // Create Elysia app with CORS
 export const app = new Elysia()
-    .use(cors())
+    .onError(({ code, error, set }) => {
+        console.error(`Elysia Error [${code}]:`, error);
+        return new Response(JSON.stringify({ error: error.message }), {
+            status: set.status,
+            headers: { 'Content-Type': 'application/json' }
+        });
+    })
+    .all("/api/auth/*", betterAuthView)
     .get('/peer', async () => {
         return {
             status: 'success',
-            version: '1.0.0',
+            version: '0.1.0',
             registry: {
                 id: registry.get('id'),
                 contentHash: registry.get('contentHash')
