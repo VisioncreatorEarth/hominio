@@ -1,23 +1,21 @@
 import { betterAuth } from "better-auth";
 import pkg from 'pg';
+import { env } from '$env/dynamic/private';
 const { Pool } = pkg;
+
 
 export const auth = betterAuth({
     database: new Pool({
-        connectionString: process.env.DATABASE_URL
+        connectionString: env.SECRET_DATABASE_URL
     }),
-    emailAndPassword: {
-        enabled: true,
-        minimumPasswordLength: 8,
-        autoConfirm: true
-    },
-    registration: {
-        enabled: true,
-        autoConfirm: true,
-        defaultRole: 'user'
+    socialProviders: {
+        google: {
+            clientId: env.SECRET_GOOGLE_CLIENT_ID,
+            clientSecret: env.SECRET_GOOGLE_CLIENT_SECRET,
+            redirectUri: 'http://localhost:5173/auth/callback/google'
+        },
     },
     trustedOrigins: [
-        'http://127.0.0.1:5173',
         'http://localhost:5173'
     ]
 })

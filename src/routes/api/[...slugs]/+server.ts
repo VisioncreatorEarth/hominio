@@ -17,7 +17,7 @@ const betterAuthView = (context: Context) => {
 const app = new Elysia({ prefix: '/api' })
     .use(
         cors({
-            origin: 'http://127.0.0.1:5173',
+            origin: 'http://localhost:5173',
             methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
             credentials: true,
             allowedHeaders: ['Content-Type', 'Authorization'],
@@ -45,7 +45,7 @@ const app = new Elysia({ prefix: '/api' })
             status: code === 'NOT_FOUND' ? 404 : 500,
             headers: {
                 'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': 'http://127.0.0.1:5173',
+                'Access-Control-Allow-Origin': 'http://localhost:5173',
                 'Access-Control-Allow-Credentials': 'true'
             }
         });
