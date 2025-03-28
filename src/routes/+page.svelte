@@ -17,22 +17,22 @@
 		}
 	});
 
-	// Hero features
+	// Updated features for the AI-Agent economy
 	let features = $state([
 		{
-			title: 'Local-First',
-			description: 'Your data lives on your device first',
-			icon: '💾'
+			title: 'AI-First',
+			description: 'Let intelligent agents handle your tasks while you focus on what matters',
+			icon: '🤖'
 		},
 		{
-			title: 'Real-Time Collaboration',
-			description: 'Work together seamlessly',
-			icon: '👥'
+			title: 'Get Paid',
+			description: 'Monetize your vibes in the new agent economy',
+			icon: '💰'
 		},
 		{
-			title: 'Conflict-Free',
-			description: 'No merge conflicts with Loro CRDT',
-			icon: '🔄'
+			title: 'Own Your Data',
+			description: 'Your vibes, your rules - with local-first technology',
+			icon: '🔐'
 		}
 	]);
 
@@ -69,20 +69,24 @@
 			<div class="flex-1">
 				<h1 class="mb-4 text-5xl font-bold text-emerald-400">homin.io</h1>
 				<p class="mb-6 text-xl text-emerald-200">
-					A local-first collaborative platform powered by Loro CRDT technology.
+					Welcome to the AI-Agent Economy. Your time to vibe, get paid, and let agents do the work.
+				</p>
+				<p class="mb-8 text-lg text-emerald-200/80">
+					Humanity is entering a new era where AI agents amplify your creativity and productivity.
+					Be part of the revolution.
 				</p>
 				<div class="flex gap-4">
 					<a
 						href="/hominio"
 						class="rounded-lg bg-emerald-500 px-6 py-3 font-bold text-blue-950 transition-colors hover:bg-emerald-600"
 					>
-						Explore Hominio
+						Start Vibing
 					</a>
 					<a
 						href="/todos"
 						class="rounded-lg border border-emerald-500 bg-transparent px-6 py-3 font-bold text-emerald-400 transition-colors hover:bg-emerald-500/10"
 					>
-						Try Demo
+						See Agents in Action
 					</a>
 				</div>
 			</div>
@@ -112,9 +116,10 @@
 
 		<!-- CTA -->
 		<div class="text-center">
-			<h2 class="mb-4 text-3xl font-bold text-emerald-400">Ready to Get Started?</h2>
+			<h2 class="mb-4 text-3xl font-bold text-emerald-400">Join the AI Revolution</h2>
 			<p class="mx-auto mb-6 max-w-2xl text-xl text-emerald-200">
-				Experience the future of collaborative software with local-first data ownership.
+				The future belongs to those who collaborate with AI. Start your journey in the agent economy
+				today.
 			</p>
 
 			{#if error}

@@ -14,11 +14,27 @@ const betterAuthView = (context: Context) => {
     }
 }
 
+// Session protection middleware
+const requireAuth = async ({ request, set }: Context) => {
+    const session = await auth.api.getSession({
+        headers: request.headers
+    });
+
+    if (!session) {
+        set.status = 401;
+        throw new Error('Unauthorized: Valid session required');
+    }
+
+    return {
+        session
+    };
+}
+
 const app = new Elysia({ prefix: '/api' })
     .use(
         cors({
             origin: 'http://localhost:5173',
-            methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+            methods: ['GET', 'POST', 'PUT', 'DELETE'],
             credentials: true,
             allowedHeaders: ['Content-Type', 'Authorization'],
         }),
@@ -28,21 +44,32 @@ const app = new Elysia({ prefix: '/api' })
             documentation: {
                 info: {
                     title: 'Hominio Documentation',
-                    version: '1.0.0'
+                    version: '0.1.0'
                 }
             }
         })
     )
-    .get('/hi', () => 'hi')
+    // Public routes
     .group('/auth', app => app
         .all('/*', betterAuthView)
+    )
+    // Protected routes
+    .group('/me', app => app
+        .derive(requireAuth) // Use derive instead of use for type safety
+        .get('/hi', ({ session }) => {
+            return {
+                message: 'Protected hello!',
+                user: session.user
+            }
+        })
     )
     .onError(({ code, error }) => {
         console.error(`API Error [${code}]:`, error);
         return new Response(JSON.stringify({
             error: error instanceof Error ? error.message : 'Internal Server Error'
         }), {
-            status: code === 'NOT_FOUND' ? 404 : 500,
+            status: code === 'NOT_FOUND' ? 404 :
+                code === 'INTERNAL_SERVER_ERROR' && error.message.includes('Unauthorized') ? 401 : 500,
             headers: {
                 'Content-Type': 'application/json',
                 'Access-Control-Allow-Origin': 'http://localhost:5173',

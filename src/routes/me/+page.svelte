@@ -4,7 +4,6 @@
 	import type { PageData } from './$types';
 	import VibeRenderer from '$lib/components/VibeRenderer.svelte';
 
-	// Get both server and client session
 	export let data: PageData;
 	const clientSession = authClient.useSession();
 	let loading = false;

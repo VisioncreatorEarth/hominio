@@ -10,6 +10,7 @@
 	import { initializeVibe, getActiveVibe } from '$lib/ultravox';
 	import { DEFAULT_CALL_CONFIG } from '$lib/ultravox/callConfig';
 	import { initDocs } from '$lib/docs';
+	import { hominio } from '$lib/client/hominio';
 
 	// Disable Server-Side Rendering since Tauri is client-only
 	export const ssr = false;
@@ -336,12 +337,7 @@
 
 		<!-- Call Interface - When Call is Active -->
 		{#if isCallActive}
-			<CallInterface
-				{callStatus}
-				{transcripts}
-				onEndCall={handleEndCall}
-				notification={recentToolActivity}
-			/>
+			<CallInterface {callStatus} {transcripts} onEndCall={handleEndCall} />
 		{/if}
 	</div>
 </div>
