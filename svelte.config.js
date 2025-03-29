@@ -14,7 +14,11 @@ const config = {
 			fallback: 'app.html',
 			// Don't use strict mode to allow dynamic routes
 			strict: false
-		})
+		}),
+		// Add alias configuration
+		alias: {
+			$db: './src/db'
+		}
 	}
 };
 

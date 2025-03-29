@@ -1,7 +1,11 @@
 import { Elysia } from 'elysia';
 import { cors } from '@elysiajs/cors'
 import { swagger } from '@elysiajs/swagger'
-import { auth } from "$lib/auth/auth";
+import { auth } from '$lib/auth/auth';
+import { db as dbModels } from '$db/model';
+import { db } from '$db';
+import { docs } from '$db/schema';
+import { eq } from 'drizzle-orm';
 import type { Context } from 'elysia';
 
 const betterAuthView = (context: Context) => {
@@ -63,6 +67,47 @@ const app = new Elysia({ prefix: '/api' })
             }
         })
     )
+    // Docs routes
+    .group('/docs', app => app
+        .derive(requireAuth)
+        .get('/', async () => {
+            return await db.select().from(docs);
+        })
+        .get('/:id', async ({ params: { id } }) => {
+            const doc = await db.select().from(docs).where(eq(docs.id, id));
+            if (!doc.length) throw new Error('Document not found');
+            return doc[0];
+        })
+        .post('/', async ({ body }) => {
+            const result = await db.insert(docs).values({
+                content: body.content,
+                metadata: body.metadata
+            }).returning();
+            return result[0];
+        }, {
+            body: dbModels.insert.docs
+        })
+        .put('/:id', async ({ params: { id }, body }) => {
+            const result = await db.update(docs)
+                .set({
+                    content: body.content,
+                    metadata: body.metadata
+                })
+                .where(eq(docs.id, id))
+                .returning();
+            if (!result.length) throw new Error('Document not found');
+            return result[0];
+        }, {
+            body: dbModels.insert.docs
+        })
+        .delete('/:id', async ({ params: { id } }) => {
+            const result = await db.delete(docs)
+                .where(eq(docs.id, id))
+                .returning();
+            if (!result.length) throw new Error('Document not found');
+            return { success: true };
+        })
+    )
     .onError(({ code, error }) => {
         console.error(`API Error [${code}]:`, error);
         return new Response(JSON.stringify({
@@ -84,3 +129,5 @@ export type App = typeof app
 export const GET: RequestHandler = async ({ request }) => app.handle(request)
 export const POST: RequestHandler = async ({ request }) => app.handle(request)
 export const OPTIONS: RequestHandler = async ({ request }) => app.handle(request)
+export const PUT: RequestHandler = async ({ request }) => app.handle(request)
+export const DELETE: RequestHandler = async ({ request }) => app.handle(request)
