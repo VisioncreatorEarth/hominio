@@ -1,8 +1,3 @@
-/**
- * @lastModified 2025-02-04
- * @see https://elysiajs.com/recipe/drizzle.html#utility
- */
-
 import { Kind, type TObject } from '@sinclair/typebox'
 import {
     createInsertSchema,

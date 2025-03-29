@@ -1,19 +1,25 @@
-import { drizzle } from 'drizzle-orm/neon-http';
+import { drizzle as drizzleNeon } from 'drizzle-orm/neon-http';
+import { drizzle as drizzlePglite } from 'drizzle-orm/pglite';
 import { neon } from '@neondatabase/serverless';
+import { PGlite } from '@electric-sql/pglite';
 import * as schema from './schema';
 
-// Get database URL from environment
+// Backend: Neon PostgreSQL
 const databaseUrl = process.env.SECRET_DATABASE_URL_HOMINIO;
 
 if (!databaseUrl) {
     throw new Error('Database URL not found in environment variables');
 }
 
-// Create a Neon client with server-side env variable
 const sql = neon(databaseUrl);
+export const db = drizzleNeon({ client: sql, schema });
 
-// Create a Drizzle client with type safety from our schema
-export const db = drizzle({ client: sql, schema });
+// Frontend: PGLite with IndexedDB persistence
+export const createBrowserDb = () => {
+    // Use IndexedDB for persistence with relaxed durability for better performance
+    const client = new PGlite('idb://hominio-local');
+    return drizzlePglite({ client, schema });
+};
 
 // Export types
 export * from './schema'; 
