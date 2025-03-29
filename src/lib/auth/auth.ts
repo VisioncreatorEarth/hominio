@@ -1,12 +1,12 @@
+import { env } from '$env/dynamic/private';
 import { betterAuth } from "better-auth";
 import pkg from 'pg';
-import { env } from '$env/dynamic/private';
 const { Pool } = pkg;
 
 
 export const auth = betterAuth({
     database: new Pool({
-        connectionString: env.SECRET_DATABASE_URL
+        connectionString: env.SECRET_DATABASE_URL_AUTH
     }),
     socialProviders: {
         google: {
