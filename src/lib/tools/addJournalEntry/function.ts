@@ -87,29 +87,45 @@ export function addJournalEntryImplementation(parameters: ToolParameters): strin
             return JSON.stringify({ success: false, message: 'Invalid or missing content' });
         }
 
-        // Execute the async function but return sync response for legacy Ultravox
-        execute({
+        // Create a unique transition ID for tracking this operation
+        const transitionId = crypto.randomUUID();
+        console.log(`Starting journal entry creation with transition ID: ${transitionId}`);
+
+        // Store the promise for later checking if needed
+        const operationPromise = execute({
             title: title.trim(),
             content: content.trim(),
             mood,
             tags
-        }).then(result => {
-            // Log async result, but don't wait for it
-            console.log('Async journal entry creation result:', result);
-        }).catch(err => {
-            console.error('Async error in addJournalEntry execution:', err);
         });
 
-        // Return success immediately (fire-and-forget)
+        // Set immediate timeout to start checking for completion
+        setTimeout(() => {
+            operationPromise.then(result => {
+                console.log(`Journal entry creation completed (ID: ${transitionId}):`, result);
+                // Here you could potentially trigger a custom event or update a "completed operations" store
+                // to notify the UI that this specific operation is complete
+                window.dispatchEvent(new CustomEvent('journal-entry-added', {
+                    detail: { transitionId, result, title }
+                }));
+            }).catch(err => {
+                console.error(`Journal entry creation failed (ID: ${transitionId}):`, err);
+                window.dispatchEvent(new CustomEvent('journal-entry-error', {
+                    detail: { transitionId, error: err }
+                }));
+            });
+        }, 0);
+
+        // Return initial state with the transition ID for tracking
         const result = {
             success: true,
-            message: `Attempting to add journal entry: "${title}"` // Indicate action started
+            transitionId,
+            message: `Adding journal entry: "${title}"...`,
+            status: "pending"
         };
         return JSON.stringify(result);
 
-    } catch (error) {
-        console.error('Error in addJournalEntry tool wrapper:', error);
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        return JSON.stringify({ success: false, message: `Error: ${errorMessage}` });
+    } catch {
+        return JSON.stringify({ success: false, message: `Error creating journal entry` });
     }
 } 
