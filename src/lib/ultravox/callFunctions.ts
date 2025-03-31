@@ -1,6 +1,6 @@
 import { browser } from '$app/environment';
 import type { UltravoxSession as UVSession, ClientToolImplementation } from 'ultravox-client';
-import { currentAgent, type AgentName } from './agents';
+import { currentAgent } from './agents';
 import { createCall } from './createCall';
 import { Role } from './types';
 import type {
@@ -8,6 +8,9 @@ import type {
     UltravoxExperimentalMessageEvent,
     CallConfig,
 } from './types';
+
+// Type for AgentName used locally
+type AgentName = string;
 
 // Re-export types from ultravox-client
 export { UltravoxSessionStatus } from 'ultravox-client';
@@ -74,6 +77,113 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
     }
 
     try {
+        // Detect platform and environment
+        const isRunningInTauri = typeof window !== 'undefined' &&
+            ('__TAURI__' in window || navigator.userAgent.includes('Tauri'));
+
+        // Try to detect operating system
+        const isLinux = typeof navigator !== 'undefined' &&
+            navigator.userAgent.toLowerCase().includes('linux');
+        const isMacOS = typeof navigator !== 'undefined' &&
+            (navigator.userAgent.toLowerCase().includes('mac os') ||
+                navigator.platform.toLowerCase().includes('mac'));
+
+        console.log('Environment check:', {
+            isRunningInTauri,
+            isLinux,
+            isMacOS,
+            platform: navigator?.platform || 'unknown',
+            userAgent: navigator?.userAgent || 'unknown'
+        });
+
+        // Special handling for Tauri WebView environments
+        if (isRunningInTauri) {
+            console.warn('⚠️ Running in Tauri environment - applying special configuration');
+
+            if (isLinux) {
+                // Linux has known issues with mediaDevices in Tauri
+                console.warn('⚠️ Linux + Tauri detected - microphone access is problematic on this platform');
+                console.warn('⚠️ See: https://github.com/tauri-apps/tauri/issues/12547');
+            }
+
+            if (isMacOS) {
+                console.log('🍎 macOS + Tauri detected - microphone should work with proper permissions');
+                console.log('🔍 Checking if Info.plist is properly configured with NSMicrophoneUsageDescription');
+            }
+
+            // Create mock implementation only if mediaDevices is undefined
+            if (!navigator.mediaDevices) {
+                console.warn('⚠️ MediaDevices API not available - creating controlled fallback');
+                // @ts-expect-error - intentionally creating a mock object
+                navigator.mediaDevices = {
+                    getUserMedia: async () => {
+                        console.warn('⚠️ Mocked getUserMedia called - this is expected behavior in Tauri');
+                        console.warn('⚠️ Make sure core:webview:allow-user-media permission is enabled in capabilities');
+                        throw new Error('MEDIA_DEVICES_NOT_SUPPORTED_IN_TAURI');
+                    },
+                    // Add empty addEventListener to prevent errors
+                    addEventListener: function (type: string) {
+                        console.warn(`⚠️ Mocked mediaDevices.addEventListener called for event: ${type}`);
+                        // No-op implementation
+                    },
+                    // Add empty removeEventListener to prevent "not a function" errors
+                    removeEventListener: function (type: string) {
+                        console.warn(`⚠️ Mocked mediaDevices.removeEventListener called for event: ${type}`);
+                        // No-op implementation
+                    }
+                };
+            }
+        }
+
+        // Check if media devices are available (after potential mocking)
+        const hasMediaDevices = typeof navigator !== 'undefined' &&
+            navigator.mediaDevices !== undefined &&
+            typeof navigator.mediaDevices.getUserMedia === 'function';
+
+        console.log('Media devices availability check:', { hasMediaDevices });
+
+        let microphoneAvailable = false;
+
+        // If media devices API is available, try to request microphone access
+        if (hasMediaDevices) {
+            console.log('Media devices API is available - attempting microphone access');
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                // Release the stream immediately after testing
+                stream.getTracks().forEach(track => track.stop());
+                console.log('✅ Microphone access granted successfully');
+                microphoneAvailable = true;
+            } catch (micError) {
+                console.warn('⚠️ Microphone access error:', micError);
+                console.warn('⚠️ Continuing with text-only input mode');
+
+                if (isRunningInTauri && isLinux) {
+                    console.warn('⚠️ This is a known issue with Tauri on Linux - microphone access is not properly supported');
+                }
+
+                callbacks.onDebugMessage?.({
+                    type: 'warning',
+                    detail: {
+                        message: 'Microphone access unavailable - using text input only.'
+                    }
+                });
+            }
+        } else {
+            console.warn('⚠️ Media devices API not available - microphone input will be disabled');
+
+            if (isRunningInTauri) {
+                console.warn('⚠️ This is expected in Tauri WebView environment');
+                console.warn('⚠️ See: https://github.com/tauri-apps/tauri/issues/5370');
+                callbacks.onStatusChange('warning');
+                callbacks.onDebugMessage?.({
+                    type: 'warning',
+                    detail: {
+                        message: 'Microphone not supported in this Tauri environment - using text input only.'
+                    }
+                });
+            }
+        }
+
         // Call our API to get a join URL using the imported createCall function
         console.log(`🚀 Starting call using vibe: ${vibeId}`);
         const callData = await createCall(callConfig, vibeId);
@@ -87,13 +197,61 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
         console.log('Joining call:', joinUrl);
 
         // Import the Ultravox client dynamically (browser-only)
-        const { UltravoxSession } = await import('ultravox-client');
+        console.log('Importing Ultravox client...');
+        let UltravoxSession;
+        try {
+            const ultravoxModule = await import('ultravox-client');
+            UltravoxSession = ultravoxModule.UltravoxSession;
+            console.log('✅ Ultravox client imported successfully');
+        } catch (importError) {
+            console.error('❌ Failed to import Ultravox client:', importError);
+            callbacks.onStatusChange('error');
+            callbacks.onDebugMessage?.({
+                type: 'error',
+                detail: {
+                    message: 'Failed to load voice chat component. Please try again later.'
+                }
+            });
+            throw new Error('Failed to import Ultravox client');
+        }
 
-        // Start up our Ultravox Session
-        uvSession = new UltravoxSession({
+        // Configure Ultravox Session appropriately for the environment
+        interface UltravoxSessionConfig {
+            experimentalMessages: Set<string>;
+            microphoneEnabled?: boolean;
+            enableTextMode?: boolean;
+            // For any other options Ultravox might accept
+            [key: string]: Set<string> | boolean | undefined;
+        }
+
+        const sessionConfig: UltravoxSessionConfig = {
             experimentalMessages: debugMessages
-            // Stages are supported by default in newer versions of Ultravox
-        });
+        };
+
+        // Disable microphone in Tauri or when microphone isn't available
+        // Always enable text mode as a fallback
+        if (isRunningInTauri || !microphoneAvailable) {
+            console.log('⚠️ Configuring Ultravox for text-only mode');
+            sessionConfig.microphoneEnabled = false;
+            sessionConfig.enableTextMode = true;
+        }
+
+        console.log('Creating Ultravox session with config:', sessionConfig);
+
+        try {
+            uvSession = new UltravoxSession(sessionConfig);
+            console.log('✅ Ultravox session created successfully');
+        } catch (sessionError) {
+            console.error('❌ Failed to create Ultravox session:', sessionError);
+            callbacks.onStatusChange('error');
+            callbacks.onDebugMessage?.({
+                type: 'error',
+                detail: {
+                    message: 'Failed to initialize voice chat. Please try again later.'
+                }
+            });
+            throw new Error('Failed to create Ultravox session');
+        }
 
         // Register client tools if they are exposed on window.__hominio_tools
         if (typeof window !== 'undefined' && (window as Window & typeof globalThis & { __hominio_tools?: Record<string, ClientToolImplementation> }).__hominio_tools) {
@@ -247,12 +405,12 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
         // Expose the session globally for client tools
         if (typeof window !== 'undefined') {
             console.log('💾 Exposing Ultravox session globally for tool access');
-            // Use 'any' to bypass the type checking issues between different UltravoxSession types
-            (window as any).__ULTRAVOX_SESSION = uvSession;
+            // Use a more specific type for the window extension
+            (window as unknown as { __ULTRAVOX_SESSION: typeof uvSession }).__ULTRAVOX_SESSION = uvSession;
 
             // Add this line to the window for debugging
             console.log('🔍 Setting up debug flag for stage changes');
-            (window as any).__DEBUG_STAGE_CHANGES = true;
+            (window as unknown as { __DEBUG_STAGE_CHANGES: boolean }).__DEBUG_STAGE_CHANGES = true;
         }
 
         // Join the call - tools are configured in the createCall function

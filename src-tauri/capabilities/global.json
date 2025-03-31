@@ -1,0 +1,11 @@
+{
+    "$schema": "../gen/schemas/desktop-schema.json",
+    "identifier": "global-capability",
+    "description": "Global capability for Hominio app",
+    "windows": [
+        "*"
+    ],
+    "permissions": [
+        "core:default"
+    ]
+}
