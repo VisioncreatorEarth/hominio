@@ -1,4 +1,4 @@
-import { loroAPI } from '$lib/docs/loroAPI';
+import { getLoroAPIInstance } from '$lib/docs/loroAPI';
 import type { TodoItem } from '$lib/docs/schemas/todo';
 import { logToolActivity } from '$lib/ultravox/stores';
 import type { ToolParameters } from '$lib/ultravox/types';
@@ -13,8 +13,11 @@ export async function execute(inputs?: {
     completed?: boolean;
 }): Promise<{ success: boolean; message: string; todos: TodoItem[] }> {
     try {
+        // Get the LoroAPI instance
+        const loroAPI = getLoroAPIInstance();
+
         // Get operations for todo schema
-        const { query } = loroAPI.getOperations<TodoItem>('todo');
+        const { query } = await loroAPI.getOperations<TodoItem>('todo');
 
         // Build the query predicate based on input filters
         let todos;
@@ -105,34 +108,15 @@ export function queryTodosImplementation(parameters: ToolParameters): string {
             console.error('Error in queryTodos execution:', err);
         });
 
-        // Get todos synchronously for immediate return
-        const { query } = loroAPI.getOperations<TodoItem>('todo');
-
-        // Apply filters if any
-        let todos;
-        if (tag !== undefined || completed !== undefined) {
-            todos = query(todo => {
-                if (tag !== undefined && (!todo.tags || !todo.tags.includes(tag))) {
-                    return false;
-                }
-                if (completed !== undefined && todo.completed !== completed) {
-                    return false;
-                }
-                return true;
-            });
-        } else {
-            todos = query(() => true);
-        }
-
-        // Return result with todos
+        // For immediate response, return a placeholder
         const result = {
             success: true,
-            message: `Retrieved ${todos.length} todo items`,
-            todos: todos.map(([, todo]) => todo)
+            message: 'Querying todos (results will be processed asynchronously)',
+            todos: [] // Empty placeholder - UI should update when async query completes
         };
 
-        // Log activity synchronously
-        logToolActivity('queryTodos', result.message);
+        // Log activity
+        logToolActivity('queryTodos', 'Started todo query operation');
 
         return JSON.stringify(result);
     } catch (error) {

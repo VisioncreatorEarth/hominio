@@ -5,8 +5,8 @@
 
 	// State variables
 	let ready = $state(false);
-	let loading = false;
-	let error: string | null = null;
+	let loading = $state(false);
+	let error = $state<string | null>(null);
 
 	const session = authClient.useSession();
 
@@ -129,7 +129,7 @@
 			{/if}
 
 			<button
-				on:click={handleGoogleSignIn}
+				onclick={handleGoogleSignIn}
 				disabled={loading}
 				class="inline-flex items-center justify-center gap-2 rounded-lg bg-white px-6 py-3 text-sm font-medium text-gray-900 transition-colors hover:bg-gray-100 disabled:opacity-50"
 			>

@@ -1,20 +1,71 @@
 <script lang="ts">
-	import { loroAPI } from '$lib/docs/loroAPI';
+	import { getLoroAPIInstance } from '$lib/docs/loroAPI';
 	import type { TodoItem } from '$lib/docs/schemas/todo';
 	import { filterState } from '$lib/tools/filterTodos/function';
 	import { getAllUniqueTags } from '$lib/tools/filterTodos/function';
 	import { onMount } from 'svelte';
+	import { writable, type Writable } from 'svelte/store';
 
-	// Get the operations for the todo schema
-	const { store: todos, query } = loroAPI.getOperations<TodoItem>('todo');
+	// Create a store to hold our todos
+	const todos: Writable<[string, TodoItem][]> = writable([]);
+	// Create a store for filtered todos
+	const filteredTodos: Writable<[string, TodoItem][]> = writable([]);
+	// Create a store for tags
+	const tagsList: Writable<string[]> = writable([]);
 
-	// Filter todos by the current filter state
-	$: filteredTodos = $todos.filter(([, todo]) => {
-		if ($filterState.tag === null) {
-			return todo.docId === $filterState.docId;
+	// Initialize LoroAPI and set up subscriptions
+	async function initTodos() {
+		try {
+			// Get the LoroAPI instance
+			const loroAPI = getLoroAPIInstance();
+
+			// Get operations for todo schema
+			const ops = await loroAPI.getOperations<TodoItem>('todo');
+
+			// Subscribe to the todos store
+			ops.store.subscribe((value) => {
+				todos.set(value);
+				updateFilteredTodos();
+				// Try to update tags when todos change
+				refreshTags();
+			});
+
+			// Initial load of tags
+			await refreshTags();
+		} catch (error) {
+			console.error('Error initializing todos:', error);
 		}
-		return todo.docId === $filterState.docId && todo.tags.includes($filterState.tag);
-	});
+	}
+
+	// Load tags from getAllUniqueTags
+	async function refreshTags() {
+		try {
+			const tags = await getAllUniqueTags();
+			tagsList.set(tags);
+		} catch (error) {
+			console.error('Error loading tags:', error);
+			tagsList.set([]);
+		}
+	}
+
+	// Update filtered todos based on the filter state
+	function updateFilteredTodos() {
+		let filtered = [];
+
+		// Get current values from stores
+		const todosList = $todos;
+		const { tag, docId } = $filterState;
+
+		// Apply filters
+		filtered = todosList.filter(([, todo]) => {
+			if (tag === null) {
+				return todo.docId === docId;
+			}
+			return todo.docId === docId && todo.tags && todo.tags.includes(tag);
+		});
+
+		filteredTodos.set(filtered);
+	}
 
 	// Format date for display
 	function formatDate(timestamp: number): string {
@@ -23,28 +74,26 @@
 
 	// Filter todos by tag
 	function filterByTag(tag: string | null) {
-		filterState.update((state: { tag: string | null; docId: string }) => ({ ...state, tag }));
+		filterState.update((state) => ({ ...state, tag }));
+		updateFilteredTodos();
 	}
 
-	// Variable to hold tags
-	let allTags: string[] = [];
-
-	// Update tags when needed
+	// Watch for filter state changes to update filtered todos
 	$: {
-		if ($todos.length > 0) {
-			allTags = getAllUniqueTags();
+		if ($filterState) {
+			updateFilteredTodos();
 		}
 	}
 
 	// Initialize when component mounts
-	onMount(() => {
-		allTags = getAllUniqueTags();
+	onMount(async () => {
+		await initTodos();
 	});
 </script>
 
 <div class="mx-auto max-w-7xl p-4 sm:p-6">
 	<!-- Tags Filter -->
-	{#if allTags.length > 0}
+	{#if $tagsList.length > 0}
 		<div class="mb-6 rounded-xl border border-white/10 bg-white/5 p-4 backdrop-blur-sm">
 			<h3 class="mb-2 text-sm font-medium text-white/70">Filter by tag:</h3>
 			<div class="flex flex-wrap gap-2">
@@ -58,7 +107,7 @@
 				>
 					All
 				</button>
-				{#each allTags as tag}
+				{#each $tagsList as tag}
 					<button
 						on:click={() => filterByTag(tag)}
 						class={`rounded-lg px-3 py-1 text-sm transition-colors ${
@@ -76,14 +125,14 @@
 
 	<!-- Todo List -->
 	<div class="space-y-3">
-		{#if filteredTodos.length === 0}
+		{#if $filteredTodos.length === 0}
 			<div
 				class="flex items-center justify-center rounded-xl border border-white/10 bg-white/5 p-12 text-white/60 backdrop-blur-sm"
 			>
 				No todos yet. Start by saying "Create a todo to..."
 			</div>
 		{:else}
-			{#each filteredTodos as [id, todo] (id)}
+			{#each $filteredTodos as [id, todo] (id)}
 				<div
 					class="rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm transition-colors hover:bg-white/10"
 				>

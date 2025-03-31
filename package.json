@@ -56,7 +56,6 @@
     "@noble/hashes": "^1.7.1",
     "@sinclair/typebox": "^0.34.31",
     "@tauri-apps/api": "^2.3.0",
-    "@tauri-apps/plugin-fs": "^2.2.0",
     "b4a": "^1.6.7",
     "better-auth": "^1.2.5",
     "corestore": "latest",

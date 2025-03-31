@@ -6,35 +6,6 @@
     "main"
   ],
   "permissions": [
-    "core:default",
-    "fs:default",
-    "fs:allow-read-file",
-    "fs:allow-write-file",
-    "fs:allow-read-dir",
-    "fs:allow-mkdir",
-    "fs:allow-exists",
-    "fs:allow-stat",
-    {
-      "identifier": "fs:scope-appdata-recursive",
-      "allow": [
-        {
-          "path": "$APPDATA"
-        },
-        {
-          "path": "$APPDATA/**"
-        }
-      ]
-    },
-    {
-      "identifier": "fs:scope-home-recursive",
-      "allow": [
-        {
-          "path": "$HOME"
-        },
-        {
-          "path": "$HOME/**"
-        }
-      ]
-    }
+    "core:default"
   ]
 }

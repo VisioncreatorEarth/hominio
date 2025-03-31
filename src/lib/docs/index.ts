@@ -4,11 +4,10 @@
  * This module provides a unified API for working with Loro documents and collections.
  */
 
-import { loroAPI } from './loroAPI';
+import { getLoroAPIInstance, type LoroAPI } from './loroAPI';
 
-// Re-export the API
-export { loroAPI };
-export * from './loroAPI';
+// Get the instance when needed, not at module load
+const getLoroAPI = (): LoroAPI => getLoroAPIInstance();
 
 // Re-export schema types
 export type { TodoItem } from './schemas/todo';
@@ -18,7 +17,8 @@ export type { TodoList } from './schemas/todoList';
  * Initialize the docs system and discover schemas
  */
 export async function initDocs() {
-    return loroAPI.discoverSchemas();
+    const api = getLoroAPI();
+    return api.discoverSchemas();
 }
 
 /**
@@ -28,7 +28,8 @@ export async function initDocs() {
  * @returns Uint8Array of the exported document
  */
 export function exportDoc(docName: string, options?: { mode: 'snapshot' | 'update' }) {
-    return loroAPI.exportDoc(docName, options);
+    const api = getLoroAPI();
+    return api.exportDoc(docName, options);
 }
 
 /**
@@ -37,8 +38,12 @@ export function exportDoc(docName: string, options?: { mode: 'snapshot' | 'updat
  * @param data Data to import
  */
 export function importDoc(docName: string, data: Uint8Array) {
-    loroAPI.importDoc(docName, data);
+    const api = getLoroAPI();
+    api.importDoc(docName, data);
 }
 
 // Export default initialization function
-export default initDocs; 
+export default initDocs;
+
+// Export the getter function if direct access is needed elsewhere
+export { getLoroAPI }; 

@@ -1,15 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy, createEventDispatcher } from 'svelte';
 	import { GLOBAL_CALL_TOOLS } from '$lib/ultravox/globalTools';
-	import {
-		getActiveVibe,
-		initializeVibe,
-		loadView,
-		clearViewCache,
-		getAllViews,
-		hasView
-	} from '$lib/ultravox';
-	import { todoState, getActiveDocName, toolState } from '$lib/ultravox/todoStore';
+	import { getActiveVibe, initializeVibe, loadView, clearViewCache } from '$lib/ultravox';
 	import { currentAgent } from '$lib/ultravox/agents';
 	import type { AgentConfig } from '$lib/ultravox/types';
 
@@ -445,12 +437,6 @@
 				<h1 class="text-base font-medium text-white/90">
 					{activeManifest?.name || activeVibeName.charAt(0).toUpperCase() + activeVibeName.slice(1)}
 				</h1>
-				{#if activeVibeName === 'todos' && $todoState}
-					<div class="h-3.5 w-px bg-white/10"></div>
-					<span class="text-sm text-blue-300">
-						{getActiveDocName()}
-					</span>
-				{/if}
 			</div>
 		</div>
 

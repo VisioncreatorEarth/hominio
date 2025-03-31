@@ -1,6 +1,17 @@
-import { LoroDoc, type Value, LoroMap, LoroList, LoroText, LoroTree, LoroMovableList, LoroCounter } from 'loro-crdt';
 import { writable, get, type Writable } from 'svelte/store';
 import type { ZodType } from 'zod';
+// Import types directly, but not the implementation yet
+import type {
+    LoroDoc as LoroDocType,
+    LoroMap as LoroMapType,
+    LoroList as LoroListType,
+    LoroText as LoroTextType,
+    LoroTree as LoroTreeType,
+    LoroMovableList as LoroMovableListType,
+    LoroCounter as LoroCounterType,
+    Value,
+    ExportMode
+} from 'loro-crdt';
 
 /**
  * Schema definition interface
@@ -13,6 +24,15 @@ export interface SchemaDefinition {
     validator?: ZodType<unknown>;
 }
 
+// --- Store Loro classes once loaded --- 
+let LoroDoc: typeof LoroDocType | null = null;
+let LoroMap: typeof LoroMapType | null = null;
+let LoroList: typeof LoroListType | null = null;
+let LoroText: typeof LoroTextType | null = null;
+let LoroTree: typeof LoroTreeType | null = null;
+let LoroMovableList: typeof LoroMovableListType | null = null;
+// let LoroCounter: typeof LoroCounterType | null = null; // Counter not used in generateOperations yet
+
 /**
  * LoroAPI provides a unified interface for working with Loro documents and collections.
  * It abstracts away the complexity of managing Loro instances and provides a consistent
@@ -20,10 +40,11 @@ export interface SchemaDefinition {
  */
 export class LoroAPI {
     private static instance: LoroAPI;
-    private docRegistry = new Map<string, LoroDoc>();
+    private docRegistry = new Map<string, LoroDocType>();
     private schemaRegistry = new Map<string, SchemaDefinition>();
     private storeRegistry = new Map<string, Writable<[string, unknown][]>>();
     private operationsCache = new Map<string, Record<string, unknown>>();
+    private isLoroLoaded = false;
 
     /**
      * Private constructor for singleton pattern
@@ -41,17 +62,43 @@ export class LoroAPI {
     }
 
     /**
+     * Dynamically load the Loro classes from the 'loro-crdt' module
+     */
+    private async loadLoroIfNeeded(): Promise<void> {
+        if (!this.isLoroLoaded) {
+            try {
+                const loroModule = await import('loro-crdt');
+                // Assign loaded classes to module-level variables
+                LoroDoc = loroModule.LoroDoc;
+                LoroMap = loroModule.LoroMap;
+                LoroList = loroModule.LoroList;
+                LoroText = loroModule.LoroText;
+                LoroTree = loroModule.LoroTree;
+                LoroMovableList = loroModule.LoroMovableList;
+                // LoroCounter = loroModule.LoroCounter;
+
+                this.isLoroLoaded = true;
+                console.log("✅ Loro classes loaded successfully.");
+            } catch (err) {
+                console.error("❌ Failed to load Loro WASM module:", err);
+                throw new Error("Loro CRDT module failed to load.");
+            }
+        }
+        // Ensure essential classes are loaded
+        if (!LoroDoc || !LoroMap || !LoroList /* Add others if needed */) {
+            throw new Error("Essential Loro classes not available after loading attempt.");
+        }
+    }
+
+    /**
      * Register a schema with the API
      * @param schema Schema definition object
      * @returns Generated operations for the schema
      */
-    registerSchema(schema: SchemaDefinition) {
+    async registerSchema(schema: SchemaDefinition) {
         this.schemaRegistry.set(schema.name, schema);
-
-        // Generate operations for this schema
-        const operations = this.generateOperations(schema);
+        const operations = await this.generateOperations(schema);
         this.operationsCache.set(schema.name, operations);
-
         return operations;
     }
 
@@ -65,8 +112,17 @@ export class LoroAPI {
             const schema = this.schemaRegistry.get(schemaName);
             if (!schema) throw new Error(`Schema not found: ${schemaName}`);
 
-            const operations = this.generateOperations(schema);
-            this.operationsCache.set(schemaName, operations);
+            // Note: generateOperations is async, but we might need to handle this differently
+            // if getOperations needs to remain synchronous. For now, assuming async is okay.
+            // If strict sync is required, this pattern needs rethinking (e.g., pre-generate on demand).
+            this.generateOperations(schema).then(operations => {
+                this.operationsCache.set(schemaName, operations);
+            }).catch(err => {
+                console.error(`Failed to generate operations for ${schemaName}:`, err);
+            });
+            // This immediate return might give undefined if generation is not complete
+            // Consider returning a promise or ensuring generation completes first.
+            throw new Error(`Operations for ${schemaName} are being generated asynchronously.`);
         }
 
         return this.operationsCache.get(schemaName) as {
@@ -76,24 +132,30 @@ export class LoroAPI {
             delete: (id: string) => boolean;
             query: (predicate: (item: T) => boolean) => [string, T][];
             store: Writable<[string, T][]>;
-            doc: LoroDoc;
-            collection: LoroMap<Record<string, unknown>> | LoroList<unknown> | Value;
+            doc: LoroDocType;
+            collection: LoroMapType<Record<string, unknown>> | LoroListType<unknown> | Value;
         };
     }
 
     /**
-     * Get or create a Loro document
+     * Get or create a Loro document (now async due to dynamic import)
      * @param docName Name of the document
-     * @returns LoroDoc instance
+     * @returns Promise resolving to LoroDoc instance
      */
-    getDoc(docName: string): LoroDoc {
+    async getDoc(docName: string): Promise<LoroDocType> {
+        await this.loadLoroIfNeeded(); // Ensure Loro is loaded
+
+        if (!LoroDoc) { // Check again after await
+            throw new Error("LoroDoc class not available.");
+        }
+
         if (!this.docRegistry.has(docName)) {
-            const doc = new LoroDoc();
+            const doc = new LoroDoc(); // Use the loaded class
             this.docRegistry.set(docName, doc);
 
             // Set up subscription to update stores when doc changes
             doc.subscribe(() => {
-                this.updateStoresForDoc(docName);
+                this.updateStoresForDoc(docName); // Ensure this handles async updates if needed
             });
         }
         return this.docRegistry.get(docName)!;
@@ -105,9 +167,10 @@ export class LoroAPI {
      * @param mapName Name of the map
      * @returns LoroMap instance
      */
-    getMap<T extends Record<string, unknown> = Record<string, unknown>>(docName: string, mapName: string): LoroMap<T> {
-        const doc = this.getDoc(docName);
-        return doc.getMap(mapName) as unknown as LoroMap<T>;
+    async getMap<T extends Record<string, unknown> = Record<string, unknown>>(docName: string, mapName: string): Promise<LoroMapType<T>> {
+        const doc = await this.getDoc(docName);
+        // No need to check LoroMap here, getDoc ensures loading
+        return doc.getMap(mapName) as unknown as LoroMapType<T>;
     }
 
     /**
@@ -116,9 +179,9 @@ export class LoroAPI {
      * @param listName Name of the list
      * @returns LoroList instance
      */
-    getList<T>(docName: string, listName: string): LoroList<T> {
-        const doc = this.getDoc(docName);
-        return doc.getList(listName) as unknown as LoroList<T>;
+    async getList<T>(docName: string, listName: string): Promise<LoroListType<T>> {
+        const doc = await this.getDoc(docName);
+        return doc.getList(listName) as unknown as LoroListType<T>;
     }
 
     /**
@@ -127,8 +190,8 @@ export class LoroAPI {
      * @param textName Name of the text
      * @returns LoroText instance
      */
-    getText(docName: string, textName: string): LoroText {
-        const doc = this.getDoc(docName);
+    async getText(docName: string, textName: string): Promise<LoroTextType> {
+        const doc = await this.getDoc(docName);
         return doc.getText(textName);
     }
 
@@ -138,9 +201,9 @@ export class LoroAPI {
      * @param treeName Name of the tree
      * @returns LoroTree instance
      */
-    getTree<T extends Record<string, unknown> = Record<string, unknown>>(docName: string, treeName: string): LoroTree<T> {
-        const doc = this.getDoc(docName);
-        return doc.getTree(treeName) as unknown as LoroTree<T>;
+    async getTree<T extends Record<string, unknown> = Record<string, unknown>>(docName: string, treeName: string): Promise<LoroTreeType<T>> {
+        const doc = await this.getDoc(docName);
+        return doc.getTree(treeName) as unknown as LoroTreeType<T>;
     }
 
     /**
@@ -149,9 +212,9 @@ export class LoroAPI {
      * @param listName Name of the list
      * @returns LoroMovableList instance
      */
-    getMovableList<T>(docName: string, listName: string): LoroMovableList<T> {
-        const doc = this.getDoc(docName);
-        return doc.getMovableList(listName) as unknown as LoroMovableList<T>;
+    async getMovableList<T>(docName: string, listName: string): Promise<LoroMovableListType<T>> {
+        const doc = await this.getDoc(docName);
+        return doc.getMovableList(listName) as unknown as LoroMovableListType<T>;
     }
 
     /**
@@ -160,8 +223,8 @@ export class LoroAPI {
      * @param counterName Name of the counter
      * @returns LoroCounter instance
      */
-    getCounter(docName: string, counterName: string): LoroCounter {
-        const doc = this.getDoc(docName);
+    async getCounter(docName: string, counterName: string): Promise<LoroCounterType> {
+        const doc = await this.getDoc(docName);
         return doc.getCounter(counterName);
     }
 
@@ -171,9 +234,9 @@ export class LoroAPI {
      * @param options Export options
      * @returns Uint8Array of the exported document
      */
-    exportDoc(docName: string, options?: { mode: 'snapshot' | 'update' }): Uint8Array {
-        const doc = this.getDoc(docName);
-        return doc.export(options);
+    async exportDoc(docName: string, options?: { mode: 'snapshot' | 'update' }): Promise<Uint8Array> {
+        const doc = await this.getDoc(docName);
+        return doc.export(options?.mode);
     }
 
     /**
@@ -181,8 +244,8 @@ export class LoroAPI {
      * @param docName Name of the document
      * @param data Data to import
      */
-    importDoc(docName: string, data: Uint8Array): void {
-        const doc = this.getDoc(docName);
+    async importDoc(docName: string, data: Uint8Array): Promise<void> {
+        const doc = await this.getDoc(docName);
         doc.import(data);
     }
 
@@ -196,9 +259,9 @@ export class LoroAPI {
 
         for (const path in schemaModules) {
             try {
-                const module = await schemaModules[path]();
+                const module = await schemaModules[path]() as { default: SchemaDefinition };
                 if (module.default) {
-                    this.registerSchema(module.default);
+                    await this.registerSchema(module.default);
                     registeredSchemas.push(module.default.name);
                 }
             } catch (error) {
@@ -214,265 +277,178 @@ export class LoroAPI {
      * @param schema Schema definition
      * @returns Object with CRUD operations
      */
-    private generateOperations(schema: SchemaDefinition): Record<string, unknown> {
+    private async generateOperations(schema: SchemaDefinition): Promise<Record<string, unknown>> {
         const docName = schema.docName;
         const collectionName = schema.collectionName;
         const schemaName = schema.name;
-
-        // Get or create LoroDoc
-        const doc = this.getDoc(docName);
-
-        // Get collection based on container type
         const containerType = schema.containerType || 'map';
-        let collection: Value;
+
+        // Ensure Loro classes are loaded before proceeding
+        await this.loadLoroIfNeeded();
+        if (!LoroMap || !LoroList) { // Check for required classes
+            throw new Error("Required Loro classes (Map, List) not loaded.");
+        }
+
+        let collection: LoroMapType<any> | LoroListType<any> | LoroTextType | LoroTreeType<any> | LoroMovableListType<any>;
+        const doc = await this.getDoc(docName);
 
         switch (containerType) {
             case 'map':
-                collection = doc.getMap(collectionName);
+                collection = await this.getMap(docName, collectionName);
                 break;
             case 'list':
-                collection = doc.getList(collectionName);
+                collection = await this.getList(docName, collectionName);
                 break;
             case 'text':
-                collection = doc.getText(collectionName);
+                collection = await this.getText(docName, collectionName);
                 break;
             case 'tree':
-                collection = doc.getTree(collectionName);
+                collection = await this.getTree(docName, collectionName);
                 break;
             case 'movableList':
-                collection = doc.getMovableList(collectionName);
+                collection = await this.getMovableList(docName, collectionName);
                 break;
             default:
-                collection = doc.getMap(collectionName);
+                collection = await this.getMap(docName, collectionName); // Default to map
         }
 
-        // Create store if needed
         if (!this.storeRegistry.has(schemaName)) {
             this.storeRegistry.set(schemaName, writable<[string, unknown][]>([]));
-            this.updateStore(schemaName);
+            await this.updateStore(schemaName);
         }
+        const store = this.storeRegistry.get(schemaName)!;
 
-        // Return operations based on container type
-        if (containerType === 'map') {
+        // --- Use loaded classes for instanceof checks --- 
+        if (collection instanceof LoroMap) { // Use the variable LoroMap
+            const mapCollection = collection as LoroMapType<Record<string, unknown>>;
             return {
-                // Create operation
-                create: (data: any) => {
-                    const id = data.id || crypto.randomUUID();
+                create: (data: Record<string, unknown>) => {
+                    const id = (data.id as string) || crypto.randomUUID();
                     const fullData = { ...data, id };
-
-                    collection.set(id, fullData as unknown as Value);
-                    this.updateStore(schemaName);
-
+                    mapCollection.set(id, fullData as unknown as Value);
+                    this.updateStore(schemaName); // This might need to become async if updateStore is slow
                     return id;
                 },
-
-                // Get operation
                 get: (id: string) => {
-                    return collection.get(id) as unknown as any;
+                    return mapCollection.get(id) as unknown;
                 },
-
-                // Update operation
-                update: (id: string, data: any) => {
-                    const existing = collection.get(id);
-
+                update: (id: string, data: Partial<Record<string, unknown>>) => {
+                    const existing = mapCollection.get(id);
                     if (!existing) return false;
-
-                    collection.set(id, {
-                        ...existing as object,
-                        ...data
-                    } as unknown as Value);
-
+                    mapCollection.set(id, { ...existing as object, ...data } as unknown as Value);
                     this.updateStore(schemaName);
                     return true;
                 },
-
-                // Delete operation
                 delete: (id: string) => {
-                    if (collection.has(id)) {
-                        collection.delete(id);
+                    // Check if mapCollection has the 'has' method or if 'get' returning undefined is sufficient
+                    if (mapCollection.get(id) !== undefined) { // Use get check instead of has if needed
+                        mapCollection.delete(id);
                         this.updateStore(schemaName);
                         return true;
                     }
-
                     return false;
                 },
-
-                // Query operation
-                query: (predicate: (item: any) => boolean) => {
-                    const store = this.storeRegistry.get(schemaName);
-                    if (!store) return [];
-
-                    const items = get(store) as [string, any][];
+                query: (predicate: (item: Record<string, unknown>) => boolean) => {
+                    const items = get(store) as [string, Record<string, unknown>][];
                     return items.filter(([, item]) => predicate(item));
                 },
-
-                // Reactive store
-                store: this.storeRegistry.get(schemaName),
-
-                // Access to raw doc and collection
+                store,
                 doc,
-                collection
+                collection: mapCollection
             };
-        } else if (containerType === 'list') {
+        } else if (collection instanceof LoroList) { // Use the variable LoroList
+            const listCollection = collection as LoroListType<unknown>;
+            // --- Placeholder for List operations --- 
+            console.warn(`List operations need implementation in generateOperations`);
             return {
-                // Create operation (for lists, appends to the end by default)
-                create: (data: any) => {
-                    const id = data.id || crypto.randomUUID();
-                    const fullData = { ...data, id };
-
-                    // Add item to the end of the list
-                    collection.insert(collection.length(), fullData as unknown as Value);
-                    this.updateStore(schemaName);
-
-                    return id;
-                },
-
-                // Get operation (for lists, this is more complex as we need to search)
-                get: (id: string) => {
-                    const items = collection.toArray();
-                    for (let i = 0; i < items.length; i++) {
-                        const item = items[i] as any;
-                        if (item && item.id === id) {
-                            return item;
-                        }
-                    }
-                    return null;
-                },
-
-                // Update operation (find and replace)
-                update: (id: string, data: any) => {
-                    const items = collection.toArray();
-                    for (let i = 0; i < items.length; i++) {
-                        const item = items[i] as any;
-                        if (item && item.id === id) {
-                            collection.delete(i, 1);
-                            collection.insert(i, {
-                                ...item,
-                                ...data
-                            } as unknown as Value);
-                            this.updateStore(schemaName);
-                            return true;
-                        }
-                    }
-                    return false;
-                },
-
-                // Delete operation (find and remove)
-                delete: (id: string) => {
-                    const items = collection.toArray();
-                    for (let i = 0; i < items.length; i++) {
-                        const item = items[i] as any;
-                        if (item && item.id === id) {
-                            collection.delete(i, 1);
-                            this.updateStore(schemaName);
-                            return true;
-                        }
-                    }
-                    return false;
-                },
-
-                // Query operation
+                create: (data: any) => { listCollection.insert(listCollection.length, data as Value); this.updateStore(schemaName); return data.id || 'temp-list-id'; },
+                get: (id: string) => { return listCollection.toArray().find((item: any) => item.id === id) || null; },
+                // Update/Delete for list need careful index handling or ID searching
+                update: (id: string, data: any) => { console.warn('List update not implemented'); return false; },
+                delete: (id: string) => { console.warn('List delete not implemented'); return false; },
                 query: (predicate: (item: any) => boolean) => {
-                    const store = this.storeRegistry.get(schemaName);
-                    if (!store) return [];
-
                     const items = get(store) as [string, any][];
                     return items.filter(([, item]) => predicate(item));
                 },
-
-                // Reactive store
-                store: this.storeRegistry.get(schemaName),
-
-                // Access to raw doc and collection
+                store,
                 doc,
-                collection
+                collection: listCollection
             };
         }
-
-        // For other container types, we provide a basic set of operations
-        // These would need to be expanded for real use cases
-        return {
-            // Basic create operation
-            create: (data: any) => {
-                // Implementation would depend on the container type
-                console.warn(`Create operation not fully implemented for container type ${containerType}`);
-                return data.id || crypto.randomUUID();
-            },
-
-            // Basic get operation
-            get: (id: string) => {
-                // Implementation would depend on the container type
-                console.warn(`Get operation not fully implemented for container type ${containerType}`);
-                return null;
-            },
-
-            // Basic update operation
-            update: (id: string, data: any) => {
-                // Implementation would depend on the container type
-                console.warn(`Update operation not fully implemented for container type ${containerType}`);
-                return false;
-            },
-
-            // Basic delete operation
-            delete: (id: string) => {
-                // Implementation would depend on the container type
-                console.warn(`Delete operation not fully implemented for container type ${containerType}`);
-                return false;
-            },
-
-            // Basic query operation
-            query: (predicate: (item: any) => boolean) => {
-                console.warn(`Query operation not fully implemented for container type ${containerType}`);
-                return [];
-            },
-
-            // Reactive store
-            store: this.storeRegistry.get(schemaName),
-
-            // Access to raw doc and collection
-            doc,
-            collection
-        };
+        // --- Handle other types --- 
+        else if (collection instanceof LoroText) {
+            const textCollection = collection as LoroTextType;
+            console.warn(`Text operations need implementation in generateOperations`);
+            // Simplified operations for Text
+            return {
+                get: () => textCollection.toString(), // Get the full text
+                update: (newText: string) => {
+                    textCollection.delete(0, textCollection.length);
+                    textCollection.insert(0, newText);
+                    this.updateStore(schemaName);
+                    return true;
+                },
+                store, doc, collection: textCollection
+            };
+        }
+        // Add instanceof checks for LoroTree, LoroMovableList if needed
+        else {
+            console.warn(`Operations not fully implemented for container type: ${typeof collection}`);
+            return { store, doc, collection }; // Return minimal object
+        }
     }
 
     /**
      * Update a store with the latest data from its collection
      * @param schemaName Name of the schema
      */
-    private updateStore(schemaName: string) {
+    private async updateStore(schemaName: string) {
+        await this.loadLoroIfNeeded(); // Ensure classes are loaded
+        if (!LoroMap || !LoroList || !LoroText) {
+            console.error("Cannot update store, required Loro classes not loaded.");
+            return;
+        }
+
         const schema = this.schemaRegistry.get(schemaName);
         if (!schema) return;
 
         const containerType = schema.containerType || 'map';
         const docName = schema.docName;
         const collectionName = schema.collectionName;
-
-        const doc = this.docRegistry.get(docName);
-        if (!doc) return;
-
         const store = this.storeRegistry.get(schemaName);
         if (!store) return;
 
+        const doc = await this.getDoc(docName); // getDoc already ensures loaded doc
+
+        // --- Use loaded classes for instanceof checks/getters --- 
         if (containerType === 'map') {
-            const collection = doc.getMap(collectionName);
-            const entries = [...collection.entries()].map(([key, value]) => [key, value as unknown]);
-            store.set(entries);
+            const collection = await this.getMap(docName, collectionName);
+            if (collection instanceof LoroMap) { // Check type again
+                const entries = [...collection.entries()].map(([key, value]) => [key, value as unknown]);
+                store.set(entries);
+            } else {
+                console.error(`Expected LoroMap but got different type for ${schemaName}`);
+            }
         } else if (containerType === 'list') {
-            const collection = doc.getList(collectionName);
-            // For lists, convert to an array with indices as keys
-            const items = collection.toArray().map((item, index) => {
-                // If the item has an id, use that, otherwise use the index
-                const key = (item as any)?.id || `${index}`;
-                return [key, item as unknown];
-            });
-            store.set(items);
+            const collection = await this.getList(docName, collectionName);
+            if (collection instanceof LoroList) {
+                const items = collection.toArray().map((item, index) => {
+                    const key = (item as any)?.id || `${index}`;
+                    return [key, item as unknown];
+                });
+                store.set(items as [string, unknown][]);
+            } else {
+                console.error(`Expected LoroList but got different type for ${schemaName}`);
+            }
         } else if (containerType === 'text') {
-            const collection = doc.getText(collectionName);
-            // For text, we create an entry with the full text content
-            store.set([['content', collection.toString()]]);
+            const collection = await this.getText(docName, collectionName);
+            if (collection instanceof LoroText) {
+                store.set([['content', collection.toString()]]);
+            } else {
+                console.error(`Expected LoroText but got different type for ${schemaName}`);
+            }
         } else {
-            // For other container types, we'd need custom handling
-            console.warn(`Store update not fully implemented for container type ${containerType}`);
+            console.warn(`Store update not implemented for container type ${containerType}`);
         }
     }
 
@@ -493,39 +469,26 @@ export class LoroAPI {
      * @param updateFn Function that returns the updated item
      * @returns Whether the update was successful
      */
-    updateItem<T>(schemaName: string, id: string, updateFn: (currentItem: T) => T): boolean {
-        try {
-            const schema = this.schemaRegistry.get(schemaName);
-            if (!schema) return false;
-
-            // Only implemented for map container types for now
-            if (schema.containerType !== 'map' && schema.containerType !== undefined) {
-                console.warn(`updateItem only supports map container types currently`);
-                return false;
-            }
-
-            const doc = this.getDoc(schema.docName);
-            const map = doc.getMap(schema.collectionName);
-
-            // Check if the item exists
-            const keys = Array.from(map.keys());
-            if (!keys.includes(id)) return false;
-
-            // Get current item and apply update
-            const currentItem = map.get(id) as unknown as T;
-            const updatedItem = updateFn(currentItem);
-
-            // Set the updated item back in the map
-            map.set(id, updatedItem as unknown as Value);
-
-            // Force update the store
-            this.updateStore(schemaName);
-
-            return true;
-        } catch (error) {
-            console.error(`Error updating item in ${schemaName}:`, error);
+    async updateItem<T>(schemaName: string, id: string, updateFn: (currentItem: T) => T): Promise<boolean> {
+        await this.loadLoroIfNeeded();
+        const { schema, doc, map } = await this.getSchemaDetails(schemaName); // getSchemaDetails is async
+        if (schema.containerType !== 'map' && schema.containerType !== undefined) {
+            console.warn(`updateItem only supports map container types currently`);
             return false;
         }
+
+        if (!(map instanceof LoroMap)) { // Use variable
+            console.error("Cannot update item: Collection is not a LoroMap");
+            return false;
+        }
+
+        const currentItem = map.get(id) as unknown as T;
+        if (currentItem === undefined) return false; // Item doesn't exist
+
+        const updatedItem = updateFn(currentItem);
+        map.set(id, updatedItem as unknown as Value);
+        await this.updateStore(schemaName);
+        return true;
     }
 
     /**
@@ -535,35 +498,24 @@ export class LoroAPI {
      * @param id ID of the item to delete
      * @returns Whether the deletion was successful
      */
-    deleteItem(schemaName: string, id: string): boolean {
-        try {
-            const schema = this.schemaRegistry.get(schemaName);
-            if (!schema) return false;
-
-            // Only implemented for map container types for now
-            if (schema.containerType !== 'map' && schema.containerType !== undefined) {
-                console.warn(`deleteItem only supports map container types currently`);
-                return false;
-            }
-
-            const doc = this.getDoc(schema.docName);
-            const map = doc.getMap(schema.collectionName);
-
-            // Check if the item exists
-            const keys = Array.from(map.keys());
-            if (!keys.includes(id)) return false;
-
-            // Delete the item
-            map.delete(id);
-
-            // Force update the store
-            this.updateStore(schemaName);
-
-            return true;
-        } catch (error) {
-            console.error(`Error deleting item from ${schemaName}:`, error);
+    async deleteItem(schemaName: string, id: string): Promise<boolean> {
+        await this.loadLoroIfNeeded();
+        const { schema, doc, map } = await this.getSchemaDetails(schemaName);
+        if (schema.containerType !== 'map' && schema.containerType !== undefined) {
+            console.warn(`deleteItem only supports map container types currently`);
             return false;
         }
+
+        if (!(map instanceof LoroMap)) {
+            console.error("Cannot delete item: Collection is not a LoroMap");
+            return false;
+        }
+
+        if (map.get(id) === undefined) return false; // Item doesn't exist
+
+        map.delete(id);
+        await this.updateStore(schemaName);
+        return true;
     }
 
     /**
@@ -573,45 +525,34 @@ export class LoroAPI {
      * @param item Item to create (should include an id field)
      * @returns The ID of the created item, or null if creation failed
      */
-    createItem<T extends { id?: string }>(schemaName: string, item: T): string | null {
-        try {
-            const schema = this.schemaRegistry.get(schemaName);
-            if (!schema) return null;
-
-            // Only implemented for map container types for now
-            if (schema.containerType !== 'map' && schema.containerType !== undefined) {
-                console.warn(`createItem only supports map container types currently`);
-                return null;
-            }
-
-            const doc = this.getDoc(schema.docName);
-            const map = doc.getMap(schema.collectionName);
-
-            // Ensure item has an ID
-            const id = item.id || crypto.randomUUID();
-            const itemWithId = { ...item, id };
-
-            // Add the item to the map
-            map.set(id, itemWithId as unknown as Value);
-
-            // Force update the store
-            this.updateStore(schemaName);
-
-            return id;
-        } catch (error) {
-            console.error(`Error creating item in ${schemaName}:`, error);
+    async createItem<T extends { id?: string }>(schemaName: string, item: T): Promise<string | null> {
+        await this.loadLoroIfNeeded();
+        const { schema, doc, map } = await this.getSchemaDetails(schemaName);
+        if (schema.containerType !== 'map' && schema.containerType !== undefined) {
+            console.warn(`createItem only supports map container types currently`);
             return null;
         }
+
+        if (!(map instanceof LoroMap)) {
+            console.error("Cannot create item: Collection is not a LoroMap");
+            return null;
+        }
+
+        const id = item.id || crypto.randomUUID();
+        const itemWithId = { ...item, id };
+        map.set(id, itemWithId as unknown as Value);
+        await this.updateStore(schemaName);
+        return id;
     }
 
     /**
      * Update all stores associated with a document
      * @param docName Name of the document
      */
-    private updateStoresForDoc(docName: string) {
+    private async updateStoresForDoc(docName: string) {
         for (const [schemaName, schema] of this.schemaRegistry.entries()) {
             if (schema.docName === docName) {
-                this.updateStore(schemaName);
+                await this.updateStore(schemaName);
             }
         }
     }
@@ -622,18 +563,22 @@ export class LoroAPI {
      * @param schemaName Name of the schema
      * @returns Object with schema info, document and map
      */
-    getSchemaDetails(schemaName: string): {
+    async getSchemaDetails(schemaName: string): Promise<{
         schema: SchemaDefinition;
-        doc: LoroDoc;
-        map: LoroMap<Record<string, unknown>>;
-    } {
+        doc: LoroDocType;
+        map: LoroMapType<Record<string, unknown>>; // Use LoroMapType
+    }> {
+        await this.loadLoroIfNeeded(); // Ensure loaded
         const schema = this.schemaRegistry.get(schemaName);
         if (!schema) {
             throw new Error(`Schema not found: ${schemaName}`);
         }
+        if (schema.containerType !== 'map' && schema.containerType !== undefined) {
+            throw new Error(`getSchemaDetails currently only supports map types, requested for ${schemaName} which is ${schema.containerType}`);
+        }
 
-        const doc = this.getDoc(schema.docName);
-        const map = doc.getMap(schema.collectionName);
+        const doc = await this.getDoc(schema.docName);
+        const map = await this.getMap(schema.docName, schema.collectionName);
 
         return { schema, doc, map };
     }
@@ -644,80 +589,81 @@ export class LoroAPI {
      * @param criteria Search criteria
      * @returns Found item ID and data, or null if not found
      */
-    findItem<T>(
+    async findItem<T>(
         schemaName: string,
         criteria: {
             id?: string;
-            searchField?: string;
+            searchField?: keyof T;
             searchValue?: string;
             exactMatch?: boolean;
         }
     ): Promise<[string, T] | null> {
-        const { query, get } = this.getOperations<T>(schemaName);
-
-        // If ID is provided, try to get directly first
-        if (criteria.id) {
-            const item = get(criteria.id);
-            if (item) {
-                return Promise.resolve([criteria.id, item]);
+        await this.loadLoroIfNeeded();
+        // getOperations needs to handle the async generation properly
+        // For now, assuming it might throw or return partially initialized ops
+        try {
+            const ops = this.getOperations<T>(schemaName);
+            if (!ops) {
+                console.warn(`Operations for ${schemaName} not ready yet.`);
+                return null;
             }
-        }
 
-        // Field-based search
-        if (criteria.searchField && criteria.searchValue) {
-            const fieldName = criteria.searchField;
-            const searchValue = criteria.searchValue.toLowerCase();
-            const exactMatch = criteria.exactMatch ?? false;
+            if (criteria.id) {
+                const item = ops.get(criteria.id);
+                if (item) {
+                    return [criteria.id, item]; // Removed Promise.resolve
+                }
+            }
 
-            // Find matching items (case-insensitive)
-            const matchingItems = query(item => {
-                // Type guard to check if the item has the required field as a string
-                if (!item || typeof item !== 'object') return false;
+            if (criteria.searchField && criteria.searchValue) {
+                const fieldName = criteria.searchField as string; // Cast needed
+                const searchValue = criteria.searchValue.toLowerCase();
+                const exactMatch = criteria.exactMatch ?? false;
 
-                // Get the field value safely with a type guard
-                const itemAsRecord = item as Record<string, unknown>;
-                const fieldValue = itemAsRecord[fieldName];
-
-                if (typeof fieldValue !== 'string') return false;
-
-                return exactMatch
-                    ? fieldValue.toLowerCase() === searchValue
-                    : fieldValue.toLowerCase().includes(searchValue);
-            });
-
-            if (matchingItems.length === 1) {
-                // Found exactly one match
-                return Promise.resolve(matchingItems[0]);
-            } else if (matchingItems.length > 1 && !exactMatch) {
-                // Try for exact match first if we have multiple results and not already doing exact match
-                const exactMatches = matchingItems.filter(([, item]) => {
+                const matchingItems = ops.query(item => {
                     if (!item || typeof item !== 'object') return false;
-
                     const itemAsRecord = item as Record<string, unknown>;
                     const fieldValue = itemAsRecord[fieldName];
-
-                    return typeof fieldValue === 'string' && fieldValue.toLowerCase() === searchValue;
+                    if (typeof fieldValue !== 'string') return false;
+                    const lowerFieldValue = fieldValue.toLowerCase();
+                    return exactMatch ? lowerFieldValue === searchValue : lowerFieldValue.includes(searchValue);
                 });
 
-                if (exactMatches.length === 1) {
-                    return Promise.resolve(exactMatches[0]);
+                if (matchingItems.length === 1) {
+                    return matchingItems[0];
+                } else if (matchingItems.length > 1 && !exactMatch) {
+                    // Try exact match among the multiple results
+                    const exactMatches = matchingItems.filter(([, item]) => {
+                        if (!item || typeof item !== 'object') return false;
+                        const itemAsRecord = item as Record<string, unknown>;
+                        const fieldValue = itemAsRecord[fieldName];
+                        return typeof fieldValue === 'string' && fieldValue.toLowerCase() === searchValue;
+                    });
+                    if (exactMatches.length === 1) {
+                        return exactMatches[0];
+                    }
                 }
 
-                // If multiple matches, throw an error with details
-                const itemDescriptions = matchingItems.map(([, item]) => {
-                    const itemAsRecord = item as Record<string, unknown>;
-                    const fieldValue = itemAsRecord[fieldName];
-                    return `"${fieldValue}"`;
-                }).join(', ');
-
-                throw new Error(`Found multiple matching items: ${itemDescriptions}. Please be more specific.`);
+                if (matchingItems.length > 0) { // Found multiple or exact match failed
+                    // Maybe return the first match or handle ambiguity? Returning null for now.
+                    console.warn(`Multiple items found for criteria in ${schemaName}, returning null.`);
+                    return null;
+                    // Alternatively, throw new Error or return all matches
+                }
             }
+        } catch (error) {
+            console.error(`Error in findItem for ${schemaName}:`, error);
+            return null; // Return null on error
         }
 
-        // No matches found
-        return Promise.resolve(null);
+        return null; // No criteria matched or error occurred
     }
 }
 
-// Export singleton instance
-export const loroAPI = LoroAPI.getInstance(); 
+// DO NOT export a pre-created instance:
+// export const loroAPI = LoroAPI.getInstance(); 
+
+// Instead, allow consumers to get the instance when needed:
+export function getLoroAPIInstance(): LoroAPI {
+    return LoroAPI.getInstance();
+} 

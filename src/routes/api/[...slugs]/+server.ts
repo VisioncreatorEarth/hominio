@@ -1,12 +1,18 @@
+// Disable prerendering for this dynamic API endpoint
+export const prerender = false;
+
 import { Elysia } from 'elysia';
 import { cors } from '@elysiajs/cors'
 import { swagger } from '@elysiajs/swagger'
-import { auth } from '$lib/auth/auth';
+import { getAuthClient } from '$lib/auth/auth';
 import { db as dbModels } from '$db/model';
 import { db } from '$db';
 import { docs } from '$db/schema';
 import { eq } from 'drizzle-orm';
 import type { Context } from 'elysia';
+
+// Get the auth instance immediately as this is server-side code
+const auth = getAuthClient();
 
 const betterAuthView = (context: Context) => {
     const BETTER_AUTH_ACCEPT_METHODS = ["POST", "GET"]

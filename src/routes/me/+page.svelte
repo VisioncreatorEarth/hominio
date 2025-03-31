@@ -30,12 +30,12 @@
 
 	<!-- Content on top -->
 	<div class="relative z-10 min-h-screen w-full">
-		<VibeRenderer vibeId="me" />
+		<VibeRenderer vibeId="home" />
 	</div>
 
 	<!-- Logout button in bottom right corner -->
 	<button
-		on:click={handleSignOut}
+		onclick={handleSignOut}
 		disabled={loading}
 		class="fixed right-4 bottom-4 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-red-600 text-white shadow-lg transition-colors hover:bg-red-700 disabled:opacity-50"
 		title="Sign out"

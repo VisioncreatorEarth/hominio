@@ -1,4 +1,4 @@
-import { loroAPI } from '$lib/docs/loroAPI';
+import { getLoroAPIInstance } from '$lib/docs/loroAPI';
 import type { TodoItem } from '$lib/docs/schemas/todo';
 import { logToolActivity } from '$lib/ultravox/stores';
 import type { ToolParameters } from '$lib/ultravox/types';
@@ -13,6 +13,9 @@ export async function execute(inputs: {
     text?: string;
 }): Promise<{ success: boolean; message: string }> {
     try {
+        // Get the LoroAPI instance
+        const loroAPI = getLoroAPIInstance();
+
         // Find the todo using the search criteria with the LoroAPI
         const result = await loroAPI.findItem<TodoItem>('todo', {
             id: inputs.todoId,
@@ -27,7 +30,7 @@ export async function execute(inputs: {
         const [id, todo] = result;
 
         // Use the deleteItem helper from loroAPI for consistency
-        const success = loroAPI.deleteItem('todo', id);
+        const success = await loroAPI.deleteItem('todo', id);
 
         if (success) {
             return logToolActivity('deleteTodo', `Todo "${todo.text}" deleted successfully`);

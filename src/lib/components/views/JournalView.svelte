@@ -1,10 +1,29 @@
 <script lang="ts">
-	import { loroAPI } from '$lib/docs/loroAPI';
+	import { getLoroAPIInstance } from '$lib/docs/loroAPI';
 	import type { JournalEntry } from '$lib/docs/schemas/journalEntry';
 	import { onMount } from 'svelte';
+	import { writable, type Writable } from 'svelte/store';
 
-	// Get the operations for the journal entry schema
-	const { store: entries } = loroAPI.getOperations<JournalEntry>('journalEntry');
+	// Create a store to hold our journal entries
+	const entries: Writable<[string, JournalEntry][]> = writable([]);
+
+	// Initialize LoroAPI and set up subscriptions
+	async function initJournal() {
+		try {
+			// Get the LoroAPI instance
+			const loroAPI = getLoroAPIInstance();
+
+			// Get operations for journal entry schema
+			const ops = await loroAPI.getOperations<JournalEntry>('journalEntry');
+
+			// Subscribe to the entries store
+			ops.store.subscribe((value) => {
+				entries.set(value);
+			});
+		} catch (error) {
+			console.error('Error initializing journal:', error);
+		}
+	}
 
 	// Sort entries by date (newest first)
 	$: sortedEntries = [...$entries].sort(([, a], [, b]) => b.createdAt - a.createdAt);
@@ -62,6 +81,11 @@
 	function closeDetail() {
 		showDetail = false;
 	}
+
+	// Initialize when component mounts
+	onMount(() => {
+		initJournal();
+	});
 </script>
 
 <div class="mx-auto max-w-7xl p-4 sm:p-6">

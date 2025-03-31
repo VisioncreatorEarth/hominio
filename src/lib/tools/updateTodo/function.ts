@@ -1,5 +1,5 @@
 // Implementation extracted from hominio/+page.svelte
-import { loroAPI } from '$lib/docs/loroAPI';
+import { getLoroAPIInstance } from '$lib/docs/loroAPI';
 import type { TodoItem } from '$lib/docs/schemas/todo';
 import { logToolActivity } from '$lib/ultravox/stores';
 import type { ToolParameters } from '$lib/ultravox/types';
@@ -17,6 +17,9 @@ export async function execute(inputs: {
     tags?: string;
 }): Promise<{ success: boolean; message: string }> {
     try {
+        // Get the LoroAPI instance
+        const loroAPI = getLoroAPIInstance();
+
         // Prepare update data
         const updateData: Partial<TodoItem> = {};
 
@@ -54,7 +57,7 @@ export async function execute(inputs: {
         const [id, todo] = result;
 
         // Use the updateItem helper from loroAPI for consistency
-        const success = loroAPI.updateItem<TodoItem>('todo', id, (currentItem) => {
+        const success = await loroAPI.updateItem<TodoItem>('todo', id, (currentItem) => {
             return { ...currentItem, ...updateData };
         });
 

@@ -16,7 +16,7 @@
         "width": 1280,
         "height": 720,
         "resizable": true,
-        "fullscreen": true
+        "fullscreen": false
       }
     ],
     "security": {
@@ -40,11 +40,6 @@
       "exceptionDomain": "",
       "signingIdentity": null,
       "providerShortName": null
-    }
-  },
-  "plugins": {
-    "fs": {
-      "requireLiteralLeadingDot": false
     }
   }
 }

@@ -1,4 +1,4 @@
-import { loroAPI } from '$lib/docs/loroAPI';
+import { getLoroAPIInstance } from '$lib/docs/loroAPI';
 import type { TodoItem } from '$lib/docs/schemas/todo';
 import { logToolActivity } from '$lib/ultravox/stores';
 import type { ToolParameters } from '$lib/ultravox/types';
@@ -45,10 +45,13 @@ export async function execute(inputs: {
  * Get all unique tags from todos
  * @returns Array of unique tag strings
  */
-export function getAllUniqueTags(): string[] {
+export async function getAllUniqueTags(): Promise<string[]> {
     try {
+        // Get the LoroAPI instance
+        const loroAPI = getLoroAPIInstance();
+
         // Get operations for todo schema
-        const { query } = loroAPI.getOperations<TodoItem>('todo');
+        const { query } = await loroAPI.getOperations<TodoItem>('todo');
 
         // Get all todos and extract tags
         const todos = query(() => true);
@@ -106,13 +109,17 @@ export function filterTodosImplementation(parameters: ToolParameters): string {
         });
 
         // Get tags for immediate return
-        const allTags = getAllUniqueTags();
+        getAllUniqueTags().then(allTags => {
+            console.log('Available tags:', allTags);
+        }).catch(err => {
+            console.error('Error getting tags:', err);
+        });
 
-        // Return a result with all available tags
+        // Return a result with placeholder for tags
         const result = {
             success: true,
             message: tag ? `Filtering todos by tag: ${tag}` : 'Showing all todos',
-            availableTags: allTags
+            availableTags: [] // Will be updated client-side when async operation completes
         };
 
         // Log activity

@@ -1,4 +1,4 @@
-import { loroAPI } from '$lib/docs/loroAPI';
+import { getLoroAPIInstance } from '$lib/docs/loroAPI';
 import type { TodoItem } from '$lib/docs/schemas/todo';
 import { logToolActivity } from '$lib/ultravox/stores';
 import type { ToolParameters } from '$lib/ultravox/types';
@@ -14,8 +14,11 @@ export async function execute(inputs: {
     docId?: string;
 }): Promise<{ success: boolean; message: string }> {
     try {
+        // Get the LoroAPI instance
+        const loroAPI = getLoroAPIInstance();
+
         // Get operations for todo schema
-        const { query } = loroAPI.getOperations<TodoItem>('todo');
+        const { query } = await loroAPI.getOperations<TodoItem>('todo');
 
         // Check for duplicate
         const existing = query(todo => todo.text === inputs.text.trim());
@@ -34,11 +37,11 @@ export async function execute(inputs: {
             completed: false,
             createdAt: Date.now(),
             tags,
-            docId: 'personal' // Hardcoded to personal for now
+            docId: inputs.docId || 'personal' // Use provided docId or default to personal
         };
 
         // The createItem method will generate an ID and handle store updates
-        const id = loroAPI.createItem<TodoItem>('todo', todoItem as TodoItem);
+        const id = await loroAPI.createItem<TodoItem>('todo', todoItem as TodoItem);
 
         if (!id) {
             return logToolActivity('createTodo', 'Failed to create todo', false);
@@ -48,7 +51,9 @@ export async function execute(inputs: {
         return logToolActivity('createTodo', `Todo created: ${inputs.text}`);
     } catch (error) {
         console.error('Error creating todo:', error);
-        return logToolActivity('createTodo', `Error: ${error}`, false);
+        // Ensure error is stringified properly
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        return logToolActivity('createTodo', `Error: ${errorMessage}`, false);
     }
 }
 

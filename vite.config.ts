@@ -2,14 +2,14 @@ import tailwindcss from "@tailwindcss/vite";
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 import wasm from "vite-plugin-wasm";
-import topLevelAwait from "vite-plugin-top-level-await";
+// import topLevelAwait from "vite-plugin-top-level-await"; // Temporarily removed
 
 export default defineConfig({
 	plugins: [
 		tailwindcss(),
 		sveltekit(),
 		wasm(),
-		topLevelAwait(),
+		// topLevelAwait(), // Temporarily removed
 	],
 	resolve: {
 		// Handle Tauri API as external module to avoid dev-time errors
@@ -29,23 +29,17 @@ export default defineConfig({
 		}
 	},
 	optimizeDeps: {
-		exclude: ['loro-crdt', '@tauri-apps/api']
+		exclude: ['loro-crdt']
 	},
 	build: {
-		// Make sure Rollup correctly handles WASM files for PGlite
-		rollupOptions: {
-			// Mark Tauri imports as external during build
-			external: [
-				'@tauri-apps/api',
-				'@tauri-apps/api/path',
-				'@tauri-apps/api/fs',
-				'@tauri-apps/api/core'
-			]
-		},
 		// Ensure assets are copied
-		copyPublicDir: true
+		copyPublicDir: true,
+		// Make it compatible with Tauri
+		target: 'esnext',
+		// Smaller chunks for better loading
+		chunkSizeWarningLimit: 1000
 	},
-	// Properly handle WASM files for PGlite
+	// Properly handle WASM files
 	assetsInclude: ['**/*.wasm', '**/*.data'],
 	// Configure public directory for static assets
 	publicDir: 'static'
