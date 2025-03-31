@@ -1,7 +1,5 @@
-import { drizzle as drizzleNeon } from 'drizzle-orm/neon-http';
-import { drizzle as drizzlePglite } from 'drizzle-orm/pglite';
+import { drizzle } from 'drizzle-orm/neon-http';
 import { neon } from '@neondatabase/serverless';
-import { PGlite } from '@electric-sql/pglite';
 import * as schema from './schema';
 
 // Backend: Neon PostgreSQL
@@ -12,14 +10,8 @@ if (!databaseUrl) {
 }
 
 const sql = neon(databaseUrl);
-export const db = drizzleNeon({ client: sql, schema });
+export const db = drizzle({ client: sql, schema });
 
-// Frontend: PGLite with IndexedDB persistence
-export const createBrowserDb = () => {
-    // Use IndexedDB for persistence with relaxed durability for better performance
-    const client = new PGlite('idb://hominio-local');
-    return drizzlePglite({ client, schema });
-};
 
 // Export types
 export * from './schema'; 

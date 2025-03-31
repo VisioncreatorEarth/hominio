@@ -12,7 +12,6 @@ import { loadView, clearViewCache as clearRegistryCache } from '../registries/vi
  * @returns The loaded component
  */
 export async function loadVibeComponent(componentName: string): Promise<VibeComponent> {
-    console.log(`🔎 Calling loadVibeComponent for: ${componentName}`);
 
     try {
         // Use the centralized registry to load the component

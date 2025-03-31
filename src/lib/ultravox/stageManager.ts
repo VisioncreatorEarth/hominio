@@ -15,22 +15,18 @@ export const activeVibeName = (): string | null => _activeVibeName;
 export async function getActiveVibe(vibeName = 'home') {
     // If no vibe is loaded yet or if requesting a different vibe than the active one
     if (!activeVibe || !_activeVibeName || _activeVibeName !== vibeName) {
-        console.log(`🔄 Loading vibe "${vibeName}" (was: ${_activeVibeName || 'none'})`);
         try {
             activeVibe = await loadVibe(vibeName);
             _activeVibeName = vibeName;
-            console.log(`✅ Active vibe set to: ${vibeName}`);
         } catch (error) {
             console.error(`❌ Failed to load vibe "${vibeName}":`, error);
 
             // If the requested vibe fails and it's not already the home vibe, 
             // try to fall back to the home vibe
             if (vibeName !== 'home') {
-                console.log(`⚠️ Falling back to home vibe`);
                 try {
                     activeVibe = await loadVibe('home');
                     _activeVibeName = 'home';
-                    console.log(`✅ Fallback to home vibe successful`);
                 } catch (fallbackError) {
                     console.error(`❌ Failed to load fallback home vibe:`, fallbackError);
                     throw new Error(`Failed to load vibe "${vibeName}" and fallback home vibe`);
@@ -39,8 +35,6 @@ export async function getActiveVibe(vibeName = 'home') {
                 throw new Error(`Failed to load home vibe: ${error instanceof Error ? error.message : String(error)}`);
             }
         }
-    } else {
-        console.log(`📦 Using cached vibe: ${_activeVibeName}`);
     }
     return activeVibe;
 }
@@ -51,7 +45,6 @@ export async function getActiveVibe(vibeName = 'home') {
 export function resetActiveVibe() {
     activeVibe = null;
     _activeVibeName = null;
-    console.log(`🧹 Active vibe cache cleared`);
 }
 
 /**
@@ -70,7 +63,6 @@ export async function createAgentStageChangeData(agentName: AgentName, vibeId?: 
         ? agentName
         : vibe.defaultAgent.name;
 
-    console.log(`🔄 Creating stage change data for agent: ${normalizedName}`);
 
     // Find the agent configuration
     const agent = vibe.resolvedAgents.find(a => a.name === normalizedName) || vibe.defaultAgent;
@@ -88,7 +80,6 @@ export async function createAgentStageChangeData(agentName: AgentName, vibeId?: 
         ...agentTools        // Agent-specific tools
     ];
 
-    console.log(`🔧 Selected tools: ${selectedTools.map(t => t.name).join(', ')}`);
 
     // Build the system prompt using the agent's system prompt
     const systemPrompt = agent.systemPrompt;

@@ -3,8 +3,6 @@ import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 import wasm from "vite-plugin-wasm";
 import topLevelAwait from "vite-plugin-top-level-await";
-import tauriShimPlugin from "./src/lib/utils/vite-plugin-tauri-shim";
-import pgliteAssetsPlugin from "./src/lib/utils/vite-plugin-pglite";
 
 export default defineConfig({
 	plugins: [
@@ -12,8 +10,6 @@ export default defineConfig({
 		sveltekit(),
 		wasm(),
 		topLevelAwait(),
-		tauriShimPlugin(),
-		pgliteAssetsPlugin()
 	],
 	resolve: {
 		// Handle Tauri API as external module to avoid dev-time errors
@@ -33,7 +29,7 @@ export default defineConfig({
 		}
 	},
 	optimizeDeps: {
-		exclude: ['loro-crdt', '@electric-sql/pglite', '@tauri-apps/api']
+		exclude: ['loro-crdt', '@tauri-apps/api']
 	},
 	build: {
 		// Make sure Rollup correctly handles WASM files for PGlite

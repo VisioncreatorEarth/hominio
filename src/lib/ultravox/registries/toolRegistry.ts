@@ -47,7 +47,6 @@ export async function loadAllTools(): Promise<Record<string, ToolImplementation>
         return matches ? matches[1] : null;
     }).filter(id => id !== null) as string[];
 
-    console.log('📋 Discovered tools:', toolIds);
 
     // Load each tool's implementation and metadata
     await Promise.all(
@@ -75,7 +74,6 @@ export async function loadAllTools(): Promise<Record<string, ToolImplementation>
                         implementation: module[implementationName]
                     };
 
-                    console.log(`✅ Loaded tool: ${toolId}`);
                 } else {
                     console.error(`❌ Tool implementation ${implementationName} not found in module`);
                 }
@@ -85,7 +83,6 @@ export async function loadAllTools(): Promise<Record<string, ToolImplementation>
         })
     );
 
-    console.log(`📊 Loaded ${Object.keys(toolRegistry).length} tools`);
     return { ...toolRegistry };
 }
 
@@ -150,13 +147,11 @@ export function registerToolsWithUltravox(): void {
             const typedImplementation = implementation as (params: unknown) => ClientToolReturnType | Promise<ClientToolReturnType>;
             session.registerToolImplementation(toolName, typedImplementation);
             registeredTools.push(toolName);
-            console.log(`✅ Registered tool with Ultravox: ${toolName}`);
         } catch (error) {
             console.error(`❌ Failed to register tool "${toolName}":`, error);
         }
     }
 
-    console.log('📋 Tool registration complete, registered tools:', registeredTools.join(', '));
 
     // Mark as registered
     if (typeof window !== 'undefined') {
@@ -176,20 +171,16 @@ export async function setupToolsForUltravox(): Promise<void> {
 
     // Create or update the tools registry
     window.__hominio_tools = { ...toolRegistry };
-    console.log('🔗 Tool registry prepared with tools:', Object.keys(window.__hominio_tools).join(', '));
 
     // Set up listener for Ultravox readiness
     window.addEventListener('ultravox-ready', () => {
-        console.log('🔄 Ultravox ready event received, registering tools');
         registerToolsWithUltravox();
     });
 
     // Also set up a listener for when Ultravox client is created
     window.addEventListener('ultravox-client-ready', () => {
-        console.log('🔄 Ultravox client is ready, dispatching ultravox-ready event');
         const event = new Event('ultravox-ready');
         window.dispatchEvent(event);
     });
 
-    console.log('🎧 Tool registration listeners setup completed');
 } 

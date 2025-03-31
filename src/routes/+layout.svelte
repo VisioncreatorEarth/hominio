@@ -1,41 +1,21 @@
 <script lang="ts">
 	import '../app.css';
-	import { onMount, onDestroy, setContext } from 'svelte';
-	import { loroStorage } from '$lib/stores/loroStorage';
-	import { loroPGLiteStorage } from '$lib/stores/loroPGLiteStorage';
-	import { LoroDoc } from 'loro-crdt';
-	import { generateShortUUID } from '$lib/utils/uuid';
+	import { onMount, onDestroy } from 'svelte';
 	import { startCall, endCall } from '$lib/ultravox/callFunctions';
 	import CallInterface from '$lib/components/CallInterface.svelte';
 	import { initializeVibe, getActiveVibe } from '$lib/ultravox';
 	import { DEFAULT_CALL_CONFIG } from '$lib/ultravox/callConfig';
 	import { initDocs } from '$lib/docs';
-	import { hominio } from '$lib/client/hominio';
 
 	// Disable Server-Side Rendering since Tauri is client-only
 	export const ssr = false;
 
-	// Context keys
-	const LORO_STORAGE_KEY = 'loro-storage';
-	const LORO_DOCS_KEY = 'loro-docs';
-	const STORAGE_INFO_KEY = 'storage-info';
-
-	// Constants
-	const MAX_INIT_ATTEMPTS = 5;
 	const DEFAULT_VIBE = 'home';
 
-	// Global state - use let for variables we need to update
-	let isInitializing = $state(false);
-	let initAttempts = $state(0);
-	let clientId = $state(generateShortUUID());
-	let isStorageInitialized = $state(false);
 	let isCallActive = $state(false);
 	let callStatus = $state<string>('off');
 	let transcripts = $state<any[]>([]);
 	let isVibeInitialized = $state(false);
-
-	// Loro document registry
-	let loroDocsRegistry = $state<Record<string, { doc: LoroDoc }>>({});
 
 	// Global state for notifications
 	let recentToolActivity = $state<{ action: string; message: string; timestamp: number } | null>(
@@ -62,10 +42,8 @@
 	async function initVibe() {
 		try {
 			if (!isVibeInitialized) {
-				console.log('🔮 Initializing vibe:', DEFAULT_VIBE);
 				await initializeVibe(DEFAULT_VIBE);
 				isVibeInitialized = true;
-				console.log('✅ Vibe initialized successfully');
 			}
 		} catch (error) {
 			console.error('❌ Failed to initialize vibe:', error);
@@ -91,7 +69,6 @@
 
 			// Get active vibe configuration
 			const vibe = await getActiveVibe(DEFAULT_VIBE);
-			console.log(`📞 Starting call with vibe: ${DEFAULT_VIBE}`);
 
 			// Wait for DOM to be fully rendered
 			await new Promise((resolve) => setTimeout(resolve, 100));
@@ -105,7 +82,6 @@
 							status !== 'disconnected' && status !== 'call_ended' && status !== 'error';
 
 						if (isCallActive) {
-							console.log('📱 Call is now active with status:', status);
 						}
 					},
 					onTranscriptChange: (newTranscripts) => {
@@ -134,150 +110,24 @@
 		}
 	}
 
-	// Initialize storage
-	async function initializeStorage() {
-		if (isInitializing) {
-			return false;
-		}
-
-		isInitializing = true;
-		initAttempts++;
-
-		try {
-			// Direct call to initialize the storage system
-			await loroPGLiteStorage.initialize();
-
-			// Update storage state after initialization
-			isStorageInitialized = true;
-
-			// Set the client ID for identification
-			if (typeof window !== 'undefined') {
-				(window as any).__CLIENT_ID = clientId;
-			}
-
-			isInitializing = false;
-			return true;
-		} catch (error) {
-			// Update state with error information
-			isStorageInitialized = false;
-			console.error('Storage initialization failed:', error);
-
-			isInitializing = false;
-			return false;
-		}
-	}
-
-	// Create a simple store pattern for reactivity
-	function createStore<T>(initialValue: T) {
-		const subscribers = new Set<(value: T) => void>();
-		let value = initialValue;
-
-		return {
-			subscribe(callback: (value: T) => void) {
-				// Call immediately with current value
-				callback(value);
-
-				// Add to subscribers
-				subscribers.add(callback);
-
-				// Return unsubscribe function
-				return () => {
-					subscribers.delete(callback);
-				};
-			},
-			set(newValue: T) {
-				if (value === newValue) return;
-				value = newValue;
-
-				// Notify all subscribers
-				subscribers.forEach((callback) => callback(value));
-			},
-			update(updater: (value: T) => T) {
-				this.set(updater(value));
-			}
-		};
-	}
-
-	// Create the storage info object for context
-	function getStorageInfo() {
-		return {
-			isInitialized: isStorageInitialized,
-			clientId
-		};
-	}
-
-	// Create stores for context
-	const loroDocsStore = createStore(loroDocsRegistry);
-	const storageInfoStore = createStore(getStorageInfo());
-
-	// Keep stores in sync with state
-	$effect(() => {
-		loroDocsStore.set(loroDocsRegistry);
-	});
-
-	// Track individual state properties to ensure reactivity
-	$effect(() => {
-		// Reference the state variables directly so they're tracked
-		const info = {
-			isInitialized: isStorageInitialized,
-			clientId
-		};
-		storageInfoStore.set(info);
-	});
-
-	// Set context for child components
-	setContext(LORO_STORAGE_KEY, loroStorage);
-	setContext(LORO_DOCS_KEY, loroDocsStore);
-	setContext(STORAGE_INFO_KEY, storageInfoStore);
-
-	// Perform immediate initialization before mounting
 	// This helps ensure storage is ready before child components need it
 	if (typeof window !== 'undefined') {
-		initializeStorage();
 		initVibe(); // Initialize vibe as well
 	}
 
 	// Initialize on mount
 	onMount(() => {
-		// If storage isn't initialized yet, try again
-		if (!isStorageInitialized) {
-			initializeStorage().catch((error) => {
-				console.error('Failed to initialize Loro storage:', error);
-			});
-		}
-
 		// If vibe isn't initialized, try to initialize it
 		if (!isVibeInitialized) {
 			initVibe().catch((error) => {
 				console.error('Failed to initialize vibe:', error);
 			});
 		}
-
-		// Make available for debugging
-		(window as any).loroStorage = loroStorage;
-		(window as any).loroDocsRegistry = loroDocsRegistry;
-
-		// Setup polling to retry initialization if needed
-		const checkStorageStatus = () => {
-			// Retry initialization if needed
-			if (!isStorageInitialized && initAttempts < MAX_INIT_ATTEMPTS && !isInitializing) {
-				initializeStorage();
-			}
-		};
-
-		// Poll for storage state changes
-		const interval = setInterval(checkStorageStatus, 3000);
-
-		// Return a cleanup function
-		return () => {
-			clearInterval(interval);
-		};
 	});
 
 	// Clean up on component destruction
 	onDestroy(() => {
 		// Clean up registry
-		loroDocsRegistry = {};
 
 		// End any active call
 		if (isCallActive) {
@@ -289,7 +139,6 @@
 	onMount(async () => {
 		try {
 			await initDocs();
-			console.log('Docs system initialized successfully');
 		} catch (error) {
 			console.error('Failed to initialize docs system:', error);
 		}

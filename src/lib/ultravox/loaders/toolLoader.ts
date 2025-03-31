@@ -44,7 +44,6 @@ export async function loadTool(toolName: string): Promise<ToolDefinition> {
             // Get the implementation function from the module
             if (typeof module[implementationName] === 'function') {
                 toolDefinition.implementation = module[implementationName];
-                console.log(`✅ Loaded implementation for tool: ${toolName}`);
             } else {
                 console.error(`❌ Tool implementation "${implementationName}" not found in module`);
             }
