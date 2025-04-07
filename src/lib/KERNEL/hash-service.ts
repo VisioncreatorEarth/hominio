@@ -21,11 +21,8 @@ export class HashService {
         return computedHashHex === hashHex;
     }
 
-    // --- Kept for potential other uses, but snapshot methods are primary for Hypercore ---
-
     /**
      * Generate Blake3 hash for a full Loro document object.
-     * Note: Generally prefer hashSnapshot for Hypercore blocks.
      */
     async hashDoc(doc: LoroDoc): Promise<string> {
         // Exporting snapshot is more direct for hashing the canonical block content

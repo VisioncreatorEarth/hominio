@@ -42,6 +42,11 @@ The content is organized as follows:
     first-principles.mdc
 src/
   db/
+    migrations/
+      meta/
+        _journal.json
+        0000_snapshot.json
+      0000_fresh_albert_cleary.sql
     drizzle.config.ts
     index.ts
     model.ts
@@ -71,6 +76,7 @@ src/
       loroAPI.ts
     KERNEL/
       hash-service.ts
+      loro-service.ts
     server/
       elysiaLegacy.ts
       index.ts
@@ -139,8 +145,6 @@ src/
     api/
       [...slugs]/
         +server.ts
-    callHominio/
-      +server.ts
     me/
       +page.server.ts
       +page.svelte
@@ -184,6 +188,180 @@ vite.config.ts
 
 # Files
 
+## File: src/db/migrations/meta/_journal.json
+````json
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1744040147050,
+      "tag": "0000_fresh_albert_cleary",
+      "breakpoints": true
+    }
+  ]
+}
+````
+
+## File: src/db/migrations/meta/0000_snapshot.json
+````json
+{
+  "id": "1ccac0ed-2a12-4023-b833-5211eb45f0bd",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.content": {
+      "name": "content",
+      "schema": "",
+      "columns": {
+        "cid": {
+          "name": "cid",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "type": {
+          "name": "type",
+          "type": "content_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "data": {
+          "name": "data",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.docs": {
+      "name": "docs",
+      "schema": "",
+      "columns": {
+        "pub_key": {
+          "name": "pub_key",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "snapshot_cid": {
+          "name": "snapshot_cid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "update_cids": {
+          "name": "update_cids",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'{}'"
+        },
+        "owner_id": {
+          "name": "owner_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {
+    "public.content_type": {
+      "name": "content_type",
+      "schema": "public",
+      "values": [
+        "snapshot",
+        "update"
+      ]
+    }
+  },
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}
+````
+
+## File: src/db/migrations/0000_fresh_albert_cleary.sql
+````sql
+CREATE TYPE "public"."content_type" AS ENUM('snapshot', 'update');--> statement-breakpoint
+CREATE TABLE "content" (
+	"cid" text PRIMARY KEY NOT NULL,
+	"type" "content_type" NOT NULL,
+	"data" jsonb NOT NULL,
+	"created_at" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "docs" (
+	"pub_key" text PRIMARY KEY NOT NULL,
+	"snapshot_cid" text NOT NULL,
+	"update_cids" text[] DEFAULT '{}',
+	"owner_id" uuid NOT NULL,
+	"title" text NOT NULL,
+	"description" text,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL
+);
+````
+
 ## File: src/db/drizzle.config.ts
 ````typescript
 import type { Config } from 'drizzle-kit';
@@ -200,48 +378,69 @@ export default {
 ## File: src/db/model.ts
 ````typescript
 import { t } from 'elysia'
-import { docs } from './schema'
+import { docs, content } from './schema'
 // Create models with type refinements
 export const db = {
     insert: {
         docs: t.Object({
-            content: t.Object({
-                title: t.String(),
-                body: t.String(),
-                version: t.Number(),
-                blocks: t.Array(t.Object({
-                    type: t.String(),
-                    text: t.Optional(t.String()),
-                    language: t.Optional(t.String()),
-                    code: t.Optional(t.String())
-                }))
-            }),
-            metadata: t.Object({
-                author: t.String(),
-                tags: t.Array(t.String()),
-                createdBy: t.String(),
-                status: t.String()
-            })
+            pubKey: t.String(),
+            snapshotCid: t.String(),
+            updateCids: t.Array(t.String()),
+            ownerId: t.String(),
+            title: t.String(),
+            description: t.Optional(t.String())
+        }),
+        content: t.Object({
+            cid: t.String(),
+            type: t.Union([t.Literal('snapshot'), t.Literal('update')]),
+            data: t.Any() // For Loro-doc binary content
         })
     },
     select: {
-        docs
+        docs,
+        content
     }
 } as const;
 ````
 
 ## File: src/db/schema.ts
 ````typescript
-import { pgTable, uuid, jsonb, timestamp } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, jsonb, timestamp, pgEnum } from 'drizzle-orm/pg-core';
+// Type enum for content records (snapshot or update)
+export const contentTypeEnum = pgEnum('content_type', ['snapshot', 'update']);
+// Main document registry (like IPNS)
 export const docs = pgTable('docs', {
-    id: uuid('id').defaultRandom().primaryKey(),
-    content: jsonb('content').notNull(),
-    metadata: jsonb('metadata').notNull(),
+    // Public key (similar to hypercore's public key)
+    pubKey: text('pub_key').primaryKey(),
+    // Latest snapshot CID
+    snapshotCid: text('snapshot_cid').notNull(),
+    // Array of update CIDs (as native PostgreSQL array)
+    updateCids: text('update_cids').array().default([]),
+    // Access control - owner's user ID
+    ownerId: uuid('owner_id').notNull(),
+    // Document metadata
+    title: text('title').notNull(),
+    description: text('description'),
+    // Timestamps
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow()
+});
+// Content blocks (like IPFS immutable content)
+export const content = pgTable('content', {
+    // Content identifier (generated by hash-service)
+    cid: text('cid').primaryKey(),
+    // Type of content (snapshot or update)
+    type: contentTypeEnum('type').notNull(),
+    // Binary content (loro-doc export)
+    data: jsonb('data').notNull(),
+    // Timestamp when this content was created
     createdAt: timestamp('created_at').notNull().defaultNow()
 });
 // Types for type safety
 export type Doc = typeof docs.$inferSelect;
 export type InsertDoc = typeof docs.$inferInsert;
+export type Content = typeof content.$inferSelect;
+export type InsertContent = typeof content.$inferInsert;
 ````
 
 ## File: src/lib/components/views/CounterView.svelte
@@ -1078,50 +1277,6 @@ declare global {
 export { };
 ````
 
-## File: src/routes/callHominio/+server.ts
-````typescript
-import { json } from '@sveltejs/kit';
-import { ULTRAVOX_API_KEY } from '$env/static/private';
-export async function POST(event) {
-    try {
-        const body = await event.request.json();
-        console.log('Attempting to call Ultravox API...');
-        const response = await fetch('https://api.ultravox.ai/api/calls', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-API-Key': ULTRAVOX_API_KEY
-            },
-            body: JSON.stringify(body)
-        });
-        console.log('Ultravox API response status:', response.status);
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Ultravox API error:', errorText);
-            return json(
-                { error: 'Error calling Ultravox API', details: errorText },
-                { status: response.status }
-            );
-        }
-        const data = await response.json();
-        return json(data);
-    } catch (error) {
-        console.error('Error in API route:', error);
-        if (error instanceof Error) {
-            return json(
-                { error: 'Error calling Ultravox API', details: error.message },
-                { status: 500 }
-            );
-        } else {
-            return json(
-                { error: 'An unknown error occurred.' },
-                { status: 500 }
-            );
-        }
-    }
-}
-````
-
 ## File: src/routes/me/+page.ts
 ````typescript
 // This file is needed for the /hominio route to work properly
@@ -1475,47 +1630,57 @@ Transform any problem, goal or desire into:
 ## File: src/db/seed.ts
 ````typescript
 import { db } from './index';
-import type { InsertDoc } from './schema';
+import { randomBytes } from 'crypto';
 import * as schema from './schema';
-// Seed function to create a random doc
-export async function seedRandomDoc() {
-    const randomDoc: InsertDoc = {
-        content: {
-            title: 'Sample Document',
-            body: 'This is a randomly generated document for testing purposes.',
-            version: 1,
-            blocks: [
-                {
-                    type: 'paragraph',
-                    text: 'Hello world!'
-                },
-                {
-                    type: 'code',
-                    language: 'typescript',
-                    code: 'console.log("Hello from Hominio!");'
-                }
-            ]
-        },
-        metadata: {
-            author: 'Seed Script',
-            tags: ['sample', 'test'],
-            createdBy: 'system',
-            status: 'draft'
-        }
-    };
+import { loroService } from '$lib/KERNEL/loro-service';
+// Seed function to create a random Loro doc
+export async function seedRandomLoroDoc() {
     try {
-        const result = await db.insert(schema.docs).values(randomDoc).returning();
-        console.log('Created random doc:', result[0]);
-        return result[0];
+        // Use the LoroService to create a demo document
+        const { snapshot, cid, pubKey, jsonState } = await loroService.createDemoDoc();
+        // First, store the content
+        const contentEntry: schema.InsertContent = {
+            cid,
+            type: 'snapshot',
+            data: {
+                binary: Array.from(snapshot), // Convert Uint8Array to regular array for JSON storage
+                docState: jsonState // Store the JSON representation for easier debugging
+            }
+        };
+        // Save the content
+        const contentResult = await db.insert(schema.content)
+            .values(contentEntry)
+            .returning();
+        console.log('Created content entry:', contentResult[0].cid);
+        // Then create document entry that references the content
+        const docEntry: schema.InsertDoc = {
+            pubKey,
+            snapshotCid: cid,
+            updateCids: [],
+            ownerId: randomBytes(16).toString('hex'), // Fake UUID for now
+            title: 'Example Loro Document',
+            description: 'A test document using Loro CRDT'
+        };
+        // Save the document entry
+        const docResult = await db.insert(schema.docs)
+            .values(docEntry)
+            .returning();
+        console.log('Created document entry:', docResult[0].pubKey);
+        return {
+            doc: docResult[0],
+            content: contentResult[0]
+        };
     } catch (error) {
-        console.error('Error creating random doc:', error);
+        console.error('Error creating Loro doc:', error);
         throw error;
     }
 }
-console.log('🌱 Seeding database...');
-seedRandomDoc()
-    .then((doc) => {
-        console.log('✅ Successfully created doc:', doc.id);
+console.log('🌱 Seeding database with Loro documents...');
+seedRandomLoroDoc()
+    .then((result) => {
+        console.log('✅ Successfully created Loro document:');
+        console.log('  - Public Key:', result.doc.pubKey);
+        console.log('  - Snapshot CID:', result.doc.snapshotCid);
         process.exit(0);
     })
     .catch((error) => {
@@ -1532,6 +1697,40 @@ import {
     createSelectSchema
 } from 'drizzle-typebox'
 import type { Table } from 'drizzle-orm'
+import { db } from './index';
+/**
+ * Drop all tables in the database for a clean reset
+ */
+export async function dropAllTables() {
+    try {
+        // Execute raw SQL to drop all tables in public schema
+        await db.execute(`
+            DO $$ DECLARE
+                r RECORD;
+            BEGIN
+                FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
+                    EXECUTE 'DROP TABLE IF EXISTS ' || quote_ident(r.tablename) || ' CASCADE';
+                END LOOP;
+            END $$;
+        `);
+        console.log('✅ All tables dropped successfully');
+    } catch (error) {
+        console.error('❌ Error dropping tables:', error);
+        throw error;
+    }
+}
+// Command line handler for direct execution
+if (process.argv[2] === 'dropAllTables') {
+    dropAllTables()
+        .then(() => {
+            console.log('Database reset completed');
+            process.exit(0);
+        })
+        .catch((error) => {
+            console.error('Database reset failed:', error);
+            process.exit(1);
+        });
+}
 type Spread<
     T extends TObject | Table,
     Mode extends 'select' | 'insert' | undefined,
@@ -1876,10 +2075,8 @@ export class HashService {
         const computedHashHex = await this.hashSnapshot(snapshot);
         return computedHashHex === hashHex;
     }
-    // --- Kept for potential other uses, but snapshot methods are primary for Hypercore ---
     /**
      * Generate Blake3 hash for a full Loro document object.
-     * Note: Generally prefer hashSnapshot for Hypercore blocks.
      */
     async hashDoc(doc: LoroDoc): Promise<string> {
         // Exporting snapshot is more direct for hashing the canonical block content
@@ -2822,68 +3019,6 @@ export async function setupToolsForUltravox(): Promise<void> {
 }
 ````
 
-## File: src/lib/ultravox/callConfig.ts
-````typescript
-/**
- * Call configuration for Ultravox.
- * This file contains immutable root call configurations that don't change with agent stages.
- */
-import type { CallConfig } from './callFunctions';
-/**
- * Default root call configuration
- * 
- * IMMUTABLE PROPERTIES
- * These settings are used for all calls and cannot be changed during a call:
- * - model
- * - firstSpeaker
- * - maxDuration
- * - joinTimeout
- * - timeExceededMessage
- * - inactivityMessages
- * - medium
- * - recordingEnabled
- * 
- * MUTABLE PROPERTIES
- * These properties can be changed with a new stage and should come from vibe manifests:
- * - systemPrompt
- * - temperature
- * - voice
- * - languageHint
- * - initialMessages
- * - selectedTools
- */
-export const DEFAULT_CALL_CONFIG: CallConfig = {
-    // Immutable properties (cannot change with new stage)
-    model: 'fixie-ai/ultravox-70B',
-    firstSpeaker: 'FIRST_SPEAKER_AGENT',
-    maxDuration: '600s',
-    joinTimeout: '30s',
-    timeExceededMessage: 'The maximum call duration has been reached.',
-    inactivityMessages: [],
-    // medium is set in createCall.ts as a complex object { webRtc: {} }
-    recordingEnabled: false,
-    // Default values for mutable properties
-    // These will be overridden by the vibe manifest
-    systemPrompt: '',
-    temperature: 0.7,
-    languageHint: 'en'
-};
-/**
- * Get the base call configuration that should be used for all calls
- * @returns The base call configuration
- */
-export function getBaseCallConfig(): CallConfig {
-    return { ...DEFAULT_CALL_CONFIG };
-}
-/**
- * Todo vibe specific call configuration
- * This only contains the immutable properties
- */
-export const TODO_CALL_CONFIG: CallConfig = {
-    ...DEFAULT_CALL_CONFIG
-};
-````
-
 ## File: src/lib/ultravox/globalTools.ts
 ````typescript
 /**
@@ -3317,6 +3452,109 @@ fn main() {
 </style>
 ````
 
+## File: src/lib/KERNEL/loro-service.ts
+````typescript
+import { randomBytes } from 'crypto';
+import { LoroDoc } from 'loro-crdt';
+import { hashService } from './hash-service';
+// Define proper types for Loro document JSON state
+type LoroJsonValue = string | number | boolean | null | LoroJsonObject | LoroJsonArray;
+interface LoroJsonObject { [key: string]: LoroJsonValue }
+type LoroJsonArray = LoroJsonValue[];
+/**
+ * Service for managing Loro documents using content-addressable storage patterns.
+ * Handles document creation, import/export, and integrates with hash-service.
+ */
+export class LoroService {
+    /**
+     * Create a new empty Loro document with basic initialization
+     */
+    createEmptyDoc(): LoroDoc {
+        const doc = new LoroDoc();
+        // Assign a random peer ID by default
+        doc.setPeerId(Math.floor(Math.random() * 1000000));
+        return doc;
+    }
+    /**
+     * Generate a public key in the style of hypercore/IPNS
+     * @returns A z-prefixed base64url-encoded public key
+     */
+    generatePublicKey(): string {
+        // Format: z + base64url encoding of 32 bytes
+        return 'z' + randomBytes(32).toString('base64url');
+    }
+    /**
+     * Create a document snapshot and generate its CID
+     * @param doc The Loro document to snapshot
+     * @returns The snapshot data and its CID
+     */
+    async createSnapshot(doc: LoroDoc): Promise<{
+        snapshot: Uint8Array;
+        cid: string;
+        jsonState: LoroJsonObject;
+    }> {
+        // Export the document as a snapshot
+        const snapshot = doc.exportSnapshot();
+        // Generate content ID using hash-service
+        const cid = await hashService.hashSnapshot(snapshot);
+        // Get JSON representation for easier debugging
+        const jsonState = doc.toJSON() as LoroJsonObject;
+        return { snapshot, cid, jsonState };
+    }
+    /**
+     * Create a document update and generate its CID
+     * @param doc The Loro document to create an update from
+     * @returns The update data and its CID
+     */
+    async createUpdate(doc: LoroDoc): Promise<{
+        update: Uint8Array;
+        cid: string;
+    }> {
+        // Export the document as an update
+        const update = doc.export({ mode: 'update' });
+        // Generate content ID using hash-service
+        const cid = await hashService.hashSnapshot(update);
+        return { update, cid };
+    }
+    /**
+     * Apply an update to a document
+     * @param doc The document to update
+     * @param update The update to apply
+     */
+    applyUpdate(doc: LoroDoc, update: Uint8Array): void {
+        doc.import(update);
+    }
+    /**
+     * Create a demo document with sample content
+     * @returns A document with sample content
+     */
+    async createDemoDoc(): Promise<{
+        doc: LoroDoc;
+        snapshot: Uint8Array;
+        cid: string;
+        pubKey: string;
+        jsonState: LoroJsonObject;
+    }> {
+        // Create a new document
+        const doc = this.createEmptyDoc();
+        // Add some sample content
+        doc.getText('title').insert(0, 'Example Loro Document');
+        doc.getText('body').insert(0, 'This is a test document created with Loro CRDT library.');
+        // Add metadata
+        const meta = doc.getMap('metadata');
+        meta.set('author', 'LoroService');
+        meta.set('createdAt', new Date().toISOString());
+        // Generate public key
+        const pubKey = this.generatePublicKey();
+        // Create snapshot
+        const { snapshot, cid, jsonState } = await this.createSnapshot(doc);
+        return { doc, snapshot, cid, pubKey, jsonState };
+    }
+}
+// Export a singleton instance
+export const loroService = new LoroService();
+````
+
 ## File: src/lib/server/index.ts
 ````typescript
 import { app } from './elysiaLegacy';
@@ -3369,81 +3607,66 @@ export { app };
 }
 ````
 
-## File: src/lib/ultravox/createCall.ts
+## File: src/lib/ultravox/callConfig.ts
 ````typescript
 /**
- * Create Call Implementation
- * This file contains the logic for creating calls with the Ultravox API using the
- * centralized call configuration.
+ * Call configuration for Ultravox.
+ * This file contains immutable root call configurations that don't change with agent stages.
  */
-import { browser } from '$app/environment';
-import type { JoinUrlResponse, CallConfig } from './types';
-import { getActiveVibe } from './stageManager';
-import { setupToolRegistrationListeners } from './loaders/toolLoader';
+import type { CallConfig } from './callFunctions';
 /**
- * Creates a call using the API and returns a join URL
- * @param callConfig Call configuration
- * @param vibeId Optional vibe ID to use for the call (defaults to 'home')
- * @returns Join URL and other call details
+ * Default root call configuration
+ * 
+ * IMMUTABLE PROPERTIES
+ * These settings are used for all calls and cannot be changed during a call:
+ * - model
+ * - firstSpeaker
+ * - maxDuration
+ * - joinTimeout
+ * - timeExceededMessage
+ * - inactivityMessages
+ * - medium
+ * - recordingEnabled
+ * 
+ * MUTABLE PROPERTIES
+ * These properties can be changed with a new stage and should come from vibe manifests:
+ * - systemPrompt
+ * - temperature
+ * - voice
+ * - languageHint
+ * - initialMessages
+ * - selectedTools
  */
-export async function createCall(callConfig: CallConfig, vibeId = 'home'): Promise<JoinUrlResponse> {
-    if (!browser) {
-        throw new Error('createCall must be called from the browser environment');
-    }
-    try {
-        // Setup tool registration listeners to ensure tools are registered
-        setupToolRegistrationListeners();
-        // Get active vibe configuration with mutable properties
-        console.log(`📞 Creating call with vibe: ${vibeId}`);
-        const activeVibe = await getActiveVibe(vibeId);
-        // Format tools for the API request using the correct structure
-        // The Ultravox API expects "temporaryTool" objects, not direct properties
-        const formattedTools = activeVibe.resolvedCallTools.map(tool => ({
-            // Use the original format which is already correct
-            temporaryTool: {
-                modelToolName: tool.name,
-                description: tool.temporaryTool.description,
-                dynamicParameters: tool.temporaryTool.dynamicParameters,
-                client: {} // Empty client object is required
-            }
-        }));
-        console.log(`🔧 Formatted tools for API request: ${activeVibe.resolvedCallTools.map(t => t.name).join(', ')}`);
-        // Create the API request
-        // Base configuration - unchangeable properties from callConfig
-        const apiRequest = {
-            ...callConfig,
-            // Changeable properties from vibe manifest
-            systemPrompt: activeVibe.manifest.systemPrompt || '',
-            temperature: activeVibe.manifest.temperature || 0.7,
-            languageHint: activeVibe.manifest.languageHint || 'en',
-            // selectedTools is a special case - always computed from the vibe
-            selectedTools: formattedTools,
-            // Use WebRTC as the medium for browser-based calls
-            medium: {
-                webRtc: {}
-            }
-        };
-        console.log('📡 Making API call to create a call session');
-        // Use the known working endpoint
-        const response = await fetch('/callHominio', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(apiRequest)
-        });
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Failed to create call: ${response.status} ${errorText}`);
-        }
-        const data: JoinUrlResponse = await response.json();
-        console.log(`✅ Call created. Join URL: ${data.joinUrl}`);
-        return data;
-    } catch (error) {
-        console.error('❌ Error creating call:', error);
-        throw error;
-    }
+export const DEFAULT_CALL_CONFIG: CallConfig = {
+    // Immutable properties (cannot change with new stage)
+    model: 'fixie-ai/ultravox-70B',
+    firstSpeaker: 'FIRST_SPEAKER_AGENT',
+    maxDuration: '600s',
+    joinTimeout: '30s',
+    timeExceededMessage: 'The maximum call duration has been reached.',
+    inactivityMessages: [],
+    // medium is set in createCall.ts as a complex object { webRtc: {} }
+    recordingEnabled: false,
+    // Default values for mutable properties
+    // These will be overridden by the vibe manifest
+    systemPrompt: '',
+    temperature: 0.7,
+    languageHint: 'en'
+};
+/**
+ * Get the base call configuration that should be used for all calls
+ * @returns The base call configuration
+ */
+export function getBaseCallConfig(): CallConfig {
+    return { ...DEFAULT_CALL_CONFIG };
 }
+/**
+ * Todo vibe specific call configuration
+ * This only contains the immutable properties
+ */
+export const TODO_CALL_CONFIG: CallConfig = {
+    ...DEFAULT_CALL_CONFIG
+};
 ````
 
 ## File: src/routes/me/+page.svelte
@@ -4184,6 +4407,82 @@ export const defaultCallConfig: CallConfiguration = {
     temperature: 0.7,
     firstSpeaker: 'FIRST_SPEAKER_USER'
 };
+````
+
+## File: src/lib/ultravox/createCall.ts
+````typescript
+/**
+ * Create Call Implementation
+ * This file contains the logic for creating calls with the Ultravox API using the
+ * centralized call configuration.
+ */
+import { browser } from '$app/environment';
+import type { JoinUrlResponse, CallConfig } from './types';
+import { getActiveVibe } from './stageManager';
+import { setupToolRegistrationListeners } from './loaders/toolLoader';
+import { hominio } from '$lib/client/hominio';
+/**
+ * Creates a call using the API and returns a join URL
+ * @param callConfig Call configuration
+ * @param vibeId Optional vibe ID to use for the call (defaults to 'home')
+ * @returns Join URL and other call details
+ */
+export async function createCall(callConfig: CallConfig, vibeId = 'home'): Promise<JoinUrlResponse> {
+    if (!browser) {
+        throw new Error('createCall must be called from the browser environment');
+    }
+    try {
+        // Setup tool registration listeners to ensure tools are registered
+        setupToolRegistrationListeners();
+        // Get active vibe configuration with mutable properties
+        console.log(`📞 Creating call with vibe: ${vibeId}`);
+        const activeVibe = await getActiveVibe(vibeId);
+        // Format tools for the API request using the correct structure
+        // The Ultravox API expects "temporaryTool" objects, not direct properties
+        const formattedTools = activeVibe.resolvedCallTools.map(tool => ({
+            // Use the original format which is already correct
+            temporaryTool: {
+                modelToolName: tool.name,
+                description: tool.temporaryTool.description,
+                dynamicParameters: tool.temporaryTool.dynamicParameters,
+                client: {} // Empty client object is required
+            }
+        }));
+        console.log(`🔧 Formatted tools for API request: ${activeVibe.resolvedCallTools.map(t => t.name).join(', ')}`);
+        // Create the API request
+        // Base configuration - unchangeable properties from callConfig
+        const apiRequest = {
+            ...callConfig,
+            // Changeable properties from vibe manifest
+            systemPrompt: activeVibe.manifest.systemPrompt || '',
+            temperature: activeVibe.manifest.temperature || 0.7,
+            languageHint: activeVibe.manifest.languageHint || 'en',
+            // selectedTools is a special case - always computed from the vibe
+            selectedTools: formattedTools,
+            // Use WebRTC as the medium for browser-based calls
+            medium: {
+                webRtc: {}
+            },
+            // Store vibeId in metadata (proper field for Ultravox API)
+            metadata: {
+                vibeId: vibeId
+            }
+        };
+        console.log('📡 Making API call to create a call session using Eden Treaty client');
+        // Use Eden Treaty client instead of fetch
+        // Type safety handling for Eden client
+        const response = await hominio.api.call.create.post(apiRequest as Record<string, unknown>);
+        if (!response.data) {
+            throw new Error('Invalid response from API: No data returned');
+        }
+        const data = response.data as JoinUrlResponse;
+        console.log(`✅ Call created via Eden client. Join URL: ${data.joinUrl}`);
+        return data;
+    } catch (error) {
+        console.error('❌ Error creating call:', error);
+        throw error;
+    }
+}
 ````
 
 ## File: src-tauri/capabilities/default.json
@@ -5035,140 +5334,6 @@ export async function createAgentStageChangeData(agentName: AgentName, vibeId?: 
 }
 ````
 
-## File: src/routes/api/[...slugs]/+server.ts
-````typescript
-// Disable prerendering for this dynamic API endpoint
-export const prerender = false;
-import { Elysia } from 'elysia';
-import { cors } from '@elysiajs/cors'
-import { swagger } from '@elysiajs/swagger'
-import { getAuthClient } from '$lib/auth/auth';
-import { db as dbModels } from '$db/model';
-import { db } from '$db';
-import { docs } from '$db/schema';
-import { eq } from 'drizzle-orm';
-import type { Context } from 'elysia';
-// Get the auth instance immediately as this is server-side code
-const auth = getAuthClient();
-const betterAuthView = (context: Context) => {
-    const BETTER_AUTH_ACCEPT_METHODS = ["POST", "GET"]
-    // validate request method
-    if (BETTER_AUTH_ACCEPT_METHODS.includes(context.request.method)) {
-        return auth.handler(context.request);
-    } else {
-        context.error(405)
-    }
-}
-// Session protection middleware
-const requireAuth = async ({ request, set }: Context) => {
-    const session = await auth.api.getSession({
-        headers: request.headers
-    });
-    if (!session) {
-        set.status = 401;
-        throw new Error('Unauthorized: Valid session required');
-    }
-    return {
-        session
-    };
-}
-const app = new Elysia({ prefix: '/api' })
-    .use(
-        cors({
-            origin: 'http://localhost:5173',
-            methods: ['GET', 'POST', 'PUT', 'DELETE'],
-            credentials: true,
-            allowedHeaders: ['Content-Type', 'Authorization'],
-        }),
-    )
-    .use(
-        swagger({
-            documentation: {
-                info: {
-                    title: 'Hominio Documentation',
-                    version: '0.1.0'
-                }
-            }
-        })
-    )
-    // Public routes
-    .group('/auth', app => app
-        .all('/*', betterAuthView)
-    )
-    // Protected routes
-    .group('/me', app => app
-        .derive(requireAuth) // Use derive instead of use for type safety
-        .get('/hi', ({ session }) => {
-            return {
-                message: 'Protected hello!',
-                user: session.user
-            }
-        })
-    )
-    // Docs routes
-    .group('/docs', app => app
-        .derive(requireAuth)
-        .get('/', async () => {
-            return await db.select().from(docs);
-        })
-        .get('/:id', async ({ params: { id } }) => {
-            const doc = await db.select().from(docs).where(eq(docs.id, id));
-            if (!doc.length) throw new Error('Document not found');
-            return doc[0];
-        })
-        .post('/', async ({ body }) => {
-            const result = await db.insert(docs).values({
-                content: body.content,
-                metadata: body.metadata
-            }).returning();
-            return result[0];
-        }, {
-            body: dbModels.insert.docs
-        })
-        .put('/:id', async ({ params: { id }, body }) => {
-            const result = await db.update(docs)
-                .set({
-                    content: body.content,
-                    metadata: body.metadata
-                })
-                .where(eq(docs.id, id))
-                .returning();
-            if (!result.length) throw new Error('Document not found');
-            return result[0];
-        }, {
-            body: dbModels.insert.docs
-        })
-        .delete('/:id', async ({ params: { id } }) => {
-            const result = await db.delete(docs)
-                .where(eq(docs.id, id))
-                .returning();
-            if (!result.length) throw new Error('Document not found');
-            return { success: true };
-        })
-    )
-    .onError(({ code, error }) => {
-        console.error(`API Error [${code}]:`, error);
-        return new Response(JSON.stringify({
-            error: error instanceof Error ? error.message : 'Internal Server Error'
-        }), {
-            status: code === 'NOT_FOUND' ? 404 :
-                code === 'INTERNAL_SERVER_ERROR' && error.message.includes('Unauthorized') ? 401 : 500,
-            headers: {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': 'http://localhost:5173',
-                'Access-Control-Allow-Credentials': 'true'
-            }
-        });
-    });
-type RequestHandler = (v: { request: Request }) => Response | Promise<Response>
-export type App = typeof app
-export const GET: RequestHandler = async ({ request }) => app.handle(request)
-export const POST: RequestHandler = async ({ request }) => app.handle(request)
-export const OPTIONS: RequestHandler = async ({ request }) => app.handle(request)
-export const PUT: RequestHandler = async ({ request }) => app.handle(request)
-export const DELETE: RequestHandler = async ({ request }) => app.handle(request)
-````
-
 ## File: svelte.config.js
 ````javascript
 import adapter from "@sveltejs/adapter-static";
@@ -5794,6 +5959,250 @@ export function toggleTodoImplementation(parameters: ToolParameters): string {
 }
 ````
 
+## File: src/routes/api/[...slugs]/+server.ts
+````typescript
+// Disable prerendering for this dynamic API endpoint
+export const prerender = false;
+import { Elysia } from 'elysia';
+import { cors } from '@elysiajs/cors'
+import { swagger } from '@elysiajs/swagger'
+import { getAuthClient } from '$lib/auth/auth';
+import { db as dbModels } from '$db/model';
+import { db } from '$db';
+import { docs, content } from '$db/schema';
+import { eq } from 'drizzle-orm';
+import type { Context } from 'elysia';
+import { ULTRAVOX_API_KEY } from '$env/static/private';
+import { hashService } from '$lib/KERNEL/hash-service';
+// Get the auth instance immediately as this is server-side code
+const auth = getAuthClient();
+// Convert array-like object to Uint8Array
+function arrayToUint8Array(arr: number[]): Uint8Array {
+    return new Uint8Array(arr);
+}
+// Types for API responses
+type ContentResponse = {
+    cid: string;
+    type: string;
+    data: Record<string, unknown>;
+    verified: boolean;
+    createdAt: string;
+};
+const betterAuthView = (context: Context) => {
+    const BETTER_AUTH_ACCEPT_METHODS = ["POST", "GET"]
+    // validate request method
+    if (BETTER_AUTH_ACCEPT_METHODS.includes(context.request.method)) {
+        return auth.handler(context.request);
+    } else {
+        context.error(405)
+    }
+}
+// Session protection middleware
+const requireAuth = async ({ request, set }: Context) => {
+    const session = await auth.api.getSession({
+        headers: request.headers
+    });
+    if (!session) {
+        set.status = 401;
+        throw new Error('Unauthorized: Valid session required');
+    }
+    return {
+        session
+    };
+}
+const app = new Elysia({ prefix: '/api' })
+    .use(
+        cors({
+            origin: 'http://localhost:5173',
+            methods: ['GET', 'POST', 'PUT', 'DELETE'],
+            credentials: true,
+            allowedHeaders: ['Content-Type', 'Authorization'],
+        }),
+    )
+    .use(
+        swagger({
+            documentation: {
+                info: {
+                    title: 'Hominio Documentation',
+                    version: '0.1.0'
+                }
+            }
+        })
+    )
+    // Public routes
+    .group('/auth', app => app
+        .all('/*', betterAuthView)
+    )
+    // Call endpoints - protected with authentication
+    .group('/call', app => app
+        .derive(requireAuth)
+        .post('/create', async ({ body, session, set }) => {
+            try {
+                // Cast body to handle unknown structure
+                const requestData = body as Record<string, unknown>;
+                // Log request for debugging
+                console.log('Call API request with body:', JSON.stringify(requestData, null, 2));
+                // Store vibeId in proper metadata field if provided
+                // The API supports a 'metadata' field (without underscore)
+                let requestBody: Record<string, unknown> = { ...requestData };
+                // If _metadata exists (our temporary field), move it to the proper metadata field
+                if (requestData._metadata && typeof requestData._metadata === 'object') {
+                    const metadata = requestData._metadata as Record<string, unknown>;
+                    if ('vibeId' in metadata) {
+                        const { _metadata, ...rest } = requestData;
+                        requestBody = {
+                            ...rest,
+                            metadata: {
+                                vibeId: metadata.vibeId,
+                                userId: session.user.id
+                            }
+                        };
+                    }
+                } else {
+                    // Add userId to metadata if no custom metadata
+                    const existingMetadata = (requestData.metadata as Record<string, unknown> | undefined) || {};
+                    requestBody = {
+                        ...requestData,
+                        metadata: {
+                            ...existingMetadata,
+                            userId: session.user.id
+                        }
+                    };
+                }
+                console.log('Calling Ultravox API with:', JSON.stringify(requestBody, null, 2));
+                // Forward the request to the Ultravox API
+                const response = await fetch('https://api.ultravox.ai/api/calls', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': ULTRAVOX_API_KEY
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+                console.log('Ultravox API response status:', response.status);
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('Ultravox API error:', errorText);
+                    set.status = response.status;
+                    return {
+                        error: 'Error calling Ultravox API',
+                        details: errorText
+                    };
+                }
+                // Return the Ultravox API response directly
+                const data = await response.json();
+                console.log('Ultravox API response data:', JSON.stringify(data, null, 2));
+                return data;
+            } catch (error) {
+                console.error('Error creating call:', error);
+                set.status = 500;
+                return {
+                    error: 'Failed to create call',
+                    details: error instanceof Error ? error.message : 'Unknown error'
+                };
+            }
+        })
+    )
+    // Protected routes
+    .group('/me', app => app
+        .derive(requireAuth) // Use derive instead of use for type safety
+        .get('/hi', ({ session }) => {
+            return {
+                message: 'Protected hello!',
+                user: session.user
+            }
+        })
+    )
+    // Docs routes
+    .group('/docs', app => app
+        .derive(requireAuth)
+        .get('/', async () => {
+            // Get all docs, ordered by updated date
+            return await db.select().from(docs).orderBy(docs.updatedAt);
+        })
+        .get('/:pubKey', async ({ params: { pubKey }, set }) => {
+            // Get doc by pubKey
+            const doc = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
+            if (!doc.length) {
+                set.status = 404;
+                return { error: 'Document not found' };
+            }
+            // Return the document
+            return doc[0];
+        })
+    )
+    // Content routes
+    .group('/content', app => app
+        .derive(requireAuth)
+        .get('/', async () => {
+            // Get all content items
+            return await db.select().from(content);
+        })
+        .get('/:cid', async ({ params: { cid }, set }) => {
+            try {
+                // Get content by CID
+                const contentItem = await db.select().from(content).where(eq(content.cid, cid));
+                if (!contentItem.length) {
+                    set.status = 404;
+                    return { error: 'Content not found' };
+                }
+                const item = contentItem[0];
+                // Get binary data from content
+                const binaryData = item.data.binary;
+                // Verify content integrity
+                let verified = false;
+                if (Array.isArray(binaryData)) {
+                    try {
+                        // Convert array back to Uint8Array
+                        const contentBytes = arrayToUint8Array(binaryData);
+                        // Verify hash matches CID
+                        verified = await hashService.verifySnapshot(contentBytes, cid);
+                    } catch (err) {
+                        console.error('Error verifying content hash:', err);
+                    }
+                }
+                // Return content with verification status
+                const response: ContentResponse = {
+                    cid: item.cid,
+                    type: item.type,
+                    data: item.data,
+                    verified: verified,
+                    createdAt: item.createdAt.toISOString()
+                };
+                return response;
+            } catch (error) {
+                console.error('Error retrieving content:', error);
+                set.status = 500;
+                return {
+                    error: 'Failed to retrieve content',
+                    details: error instanceof Error ? error.message : 'Unknown error'
+                };
+            }
+        })
+    )
+    .onError(({ code, error }) => {
+        console.error(`API Error [${code}]:`, error);
+        return new Response(JSON.stringify({
+            error: error instanceof Error ? error.message : 'Internal Server Error'
+        }), {
+            status: code === 'NOT_FOUND' ? 404 :
+                code === 'INTERNAL_SERVER_ERROR' && error.message.includes('Unauthorized') ? 401 : 500,
+            headers: {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': 'http://localhost:5173',
+                'Access-Control-Allow-Credentials': 'true'
+            }
+        });
+    });
+type RequestHandler = (v: { request: Request }) => Response | Promise<Response>
+export type App = typeof app
+export const GET: RequestHandler = async ({ request }) => app.handle(request)
+export const POST: RequestHandler = async ({ request }) => app.handle(request)
+export const OPTIONS: RequestHandler = async ({ request }) => app.handle(request)
+export const PUT: RequestHandler = async ({ request }) => app.handle(request)
+export const DELETE: RequestHandler = async ({ request }) => app.handle(request)
+````
+
 ## File: src-tauri/src/lib.rs
 ````rust
 // Setup a minimal Tauri application without filesystem access
@@ -6037,232 +6446,6 @@ export function setupToolRegistrationListeners(): void {
  */
 export function clearToolCache(): void {
     toolCache.clear();
-}
-````
-
-## File: src/lib/ultravox/types.ts
-````typescript
-// Type definitions for Ultravox integration
-import type { ComponentType, SvelteComponent } from 'svelte';
-// Tool parameter and response types
-export type ToolParameters = Record<string, unknown>;
-export type ToolParams = ToolParameters; // Alias for compatibility with existing code
-export type ToolResponse = {
-    success?: boolean;
-    message?: string;
-    error?: string;
-    responseType?: string;
-    systemPrompt?: string;
-    voice?: string;
-    toolResultText?: string;
-    result?: string;
-};
-// Function signature for tool implementations
-export type ToolImplementation = (params: ToolParameters) => Promise<ToolResponse> | string | unknown;
-// Create a more flexible type for the actual client library's implementation
-export type ClientToolReturnType = string | Record<string, unknown>;
-// Call Medium types from callFunctions.ts
-export type WebRtcMedium = { webRtc: Record<string, never> };
-export type TwilioMedium = { twilio: Record<string, unknown> };
-export type CallMedium = WebRtcMedium | TwilioMedium;
-// Call configuration types
-export interface CallConfig {
-    systemPrompt: string;
-    model?: string;
-    languageHint?: string;
-    voice?: string;
-    temperature?: number;
-    maxDuration?: string;
-    timeExceededMessage?: string;
-    firstSpeaker?: string;
-    joinTimeout?: string;
-    inactivityMessages?: string[];
-    medium?: CallMedium | string;
-    recordingEnabled?: boolean;
-    initialMessages?: string[];
-};
-// API response types
-export type JoinUrlResponse = {
-    callId: string;
-    joinUrl: string;
-    created: string;
-    ended: string | null;
-    model: string;
-};
-// Role enum for UI state
-export enum Role {
-    USER = 'user',
-    AGENT = 'agent'
-}
-// Tool parameter types from agents.ts
-export type FilterParams = {
-    tag?: string;
-};
-export type CreateTodoParams = {
-    todoText: string;
-    tags?: string;
-};
-export type ToggleTodoParams = {
-    todoText: string;
-};
-export type UpdateTodoParams = {
-    todoText: string;
-    newText: string;
-    tags?: string;
-};
-export type RemoveTodoParams = {
-    todoText: string;
-};
-export type SwitchAgentParams = {
-    agentName?: string;
-};
-// Ultravox session interface that matches the actual library implementation
-export interface UltravoxSession {
-    registerTool?: (name: string, callback: ToolImplementation) => void;
-    registerToolImplementation: (name: string, implementation: (params: unknown) => ClientToolReturnType | Promise<ClientToolReturnType>) => void;
-    isMicMuted: boolean;
-    isSpeakerMuted: boolean;
-    muteMic: () => void;
-    unmuteMic: () => void;
-    muteSpeaker: () => void;
-    unmuteSpeaker: () => void;
-    joinCall: (joinUrl: string) => void;
-    leaveCall: () => void;
-    status?: string;
-    addEventListener: (event: string, callback: (event: unknown) => void) => void;
-}
-// Call handling types
-export type CallCallbacks = {
-    onStatusChange: (status: string | undefined) => void;
-};
-// Agent configuration
-export type AgentName = string; // Any valid agent name from any vibe manifest
-export interface AgentConfig {
-    name: string;
-    personality: string;
-    voiceId: string;
-    description: string;
-    temperature: number;
-    systemPrompt: string;
-    tools: string[];
-    resolvedTools?: ToolDefinition[];
-}
-// VibeAgent type (for backward compatibility)
-export type VibeAgent = AgentConfig;
-// Call configuration
-export interface CallConfiguration {
-    systemPrompt: string;
-    model: string;
-    voice: string;
-    languageHint: string;
-    temperature: number;
-    maxDuration?: string;
-    timeExceededMessage?: string;
-    firstSpeaker?: string;
-}
-// Tool definitions
-export interface ToolParameter {
-    name: string;
-    location: string;
-    schema: {
-        type: string;
-        description: string;
-    };
-    required: boolean;
-}
-export interface ToolDefinition {
-    name: string;
-    temporaryTool: {
-        modelToolName: string;
-        description: string;
-        dynamicParameters: ToolParameter[];
-        client: Record<string, unknown>;
-    };
-    implementationType: string;
-    implementation?: ToolImplementation;
-}
-// TemporaryToolDefinition from agents.ts
-export interface TemporaryToolDefinition {
-    temporaryTool: {
-        modelToolName: string;
-        description: string;
-        dynamicParameters: {
-            name: string;
-            location: string;
-            schema: {
-                type: string;
-                description: string;
-            };
-            required: boolean;
-        }[];
-        client: Record<string, unknown>;
-    };
-}
-// Resolved tool with guaranteed implementation
-export interface ResolvedTool extends ToolDefinition {
-    implementation: ToolImplementation;
-}
-// Resolved agent with tools
-export interface ResolvedAgent extends AgentConfig {
-    resolvedTools: ResolvedTool[];
-}
-// Vibe configuration
-export interface VibeManifest {
-    name: string;
-    description: string;
-    systemPrompt: string;
-    // Top-level call properties
-    temperature?: number;
-    languageHint?: string;
-    model?: string;
-    maxDuration?: string;
-    firstSpeaker?: string;
-    voice?: string;
-    initialMessages?: string[];
-    // UI properties
-    view: string;
-    vibeTools: string[];
-    // Visual properties
-    icon?: string;
-    color?: string;
-    // Agent configuration
-    defaultAgent: string;
-    agents: AgentConfig[];
-    // Additional properties found in vibeLoader
-    callSystemPrompt?: string;
-    // Legacy nested configuration (deprecated)
-    rootCallConfig?: {
-        model: string;
-        firstSpeaker: string;
-        maxDuration: string;
-        languageHint: string;
-        temperature: number;
-    };
-}
-export interface ResolvedVibe {
-    manifest: VibeManifest;
-    resolvedCallTools: ResolvedTool[];
-    resolvedAgents: ResolvedAgent[];
-    defaultAgent: ResolvedAgent;
-}
-// Stage change data type for agent transitions
-export interface StageChangeData {
-    systemPrompt: string;
-    voice: string;
-    toolResultText: string;
-    selectedTools: ResolvedTool[];
-}
-// View component types
-// Make it more compatible with actual Svelte component types
-export type VibeComponent = ComponentType | SvelteComponent | unknown;
-// Global window augmentation for consistent TypeScript across files
-declare global {
-    interface Window {
-        __hominio_tools?: Record<string, ToolImplementation>;
-        __hominio_tools_registered?: boolean;
-        __ULTRAVOX_SESSION?: UltravoxSession;
-        __DEBUG_STAGE_CHANGES?: boolean;
-    }
 }
 ````
 
@@ -6729,6 +6912,317 @@ export {
 };
 ````
 
+## File: src/lib/ultravox/types.ts
+````typescript
+// Type definitions for Ultravox integration
+import type { ComponentType, SvelteComponent } from 'svelte';
+// Tool parameter and response types
+export type ToolParameters = Record<string, unknown>;
+export type ToolParams = ToolParameters; // Alias for compatibility with existing code
+export type ToolResponse = {
+    success?: boolean;
+    message?: string;
+    error?: string;
+    responseType?: string;
+    systemPrompt?: string;
+    voice?: string;
+    toolResultText?: string;
+    result?: string;
+};
+// Function signature for tool implementations
+export type ToolImplementation = (params: ToolParameters) => Promise<ToolResponse> | string | unknown;
+// Create a more flexible type for the actual client library's implementation
+export type ClientToolReturnType = string | Record<string, unknown>;
+// Call Medium types from callFunctions.ts
+export type WebRtcMedium = { webRtc: Record<string, never> };
+export type TwilioMedium = { twilio: Record<string, unknown> };
+export type CallMedium = WebRtcMedium | TwilioMedium;
+// Call configuration types
+export interface CallConfig {
+    systemPrompt: string;
+    model?: string;
+    languageHint?: string;
+    voice?: string;
+    temperature?: number;
+    maxDuration?: string;
+    timeExceededMessage?: string;
+    firstSpeaker?: string;
+    joinTimeout?: string;
+    inactivityMessages?: string[];
+    medium?: CallMedium | string;
+    recordingEnabled?: boolean;
+    initialMessages?: string[];
+};
+// API response types
+export type JoinUrlResponse = {
+    callId: string;
+    joinUrl: string;
+    created: string;
+    ended: string | null;
+    model: string;
+};
+// Role enum for UI state
+export enum Role {
+    USER = 'user',
+    AGENT = 'agent'
+}
+// Tool parameter types from agents.ts
+export type FilterParams = {
+    tag?: string;
+};
+export type CreateTodoParams = {
+    todoText: string;
+    tags?: string;
+};
+export type ToggleTodoParams = {
+    todoText: string;
+};
+export type UpdateTodoParams = {
+    todoText: string;
+    newText: string;
+    tags?: string;
+};
+export type RemoveTodoParams = {
+    todoText: string;
+};
+export type SwitchAgentParams = {
+    agentName?: string;
+};
+// Ultravox session interface that matches the actual library implementation
+export interface UltravoxSession {
+    registerTool?: (name: string, callback: ToolImplementation) => void;
+    registerToolImplementation: (name: string, implementation: (params: unknown) => ClientToolReturnType | Promise<ClientToolReturnType>) => void;
+    isMicMuted: boolean;
+    isSpeakerMuted: boolean;
+    muteMic: () => void;
+    unmuteMic: () => void;
+    muteSpeaker: () => void;
+    unmuteSpeaker: () => void;
+    joinCall: (joinUrl: string) => void;
+    leaveCall: () => void;
+    status?: string;
+    addEventListener: (event: string, callback: (event: unknown) => void) => void;
+}
+// Call handling types
+export type CallCallbacks = {
+    onStatusChange: (status: string | undefined) => void;
+};
+// Agent configuration
+export type AgentName = string; // Any valid agent name from any vibe manifest
+export interface AgentConfig {
+    name: string;
+    personality: string;
+    voiceId: string;
+    description: string;
+    temperature: number;
+    systemPrompt: string;
+    tools: string[];
+    resolvedTools?: ToolDefinition[];
+}
+// VibeAgent type (for backward compatibility)
+export type VibeAgent = AgentConfig;
+// Call configuration
+export interface CallConfiguration {
+    systemPrompt: string;
+    model: string;
+    voice: string;
+    languageHint: string;
+    temperature: number;
+    maxDuration?: string;
+    timeExceededMessage?: string;
+    firstSpeaker?: string;
+}
+// Tool definitions
+export interface ToolParameter {
+    name: string;
+    location: string;
+    schema: {
+        type: string;
+        description: string;
+    };
+    required: boolean;
+}
+export interface ToolDefinition {
+    name: string;
+    temporaryTool: {
+        modelToolName: string;
+        description: string;
+        dynamicParameters: ToolParameter[];
+        client: Record<string, unknown>;
+    };
+    implementationType: string;
+    implementation?: ToolImplementation;
+}
+// TemporaryToolDefinition from agents.ts
+export interface TemporaryToolDefinition {
+    temporaryTool: {
+        modelToolName: string;
+        description: string;
+        dynamicParameters: {
+            name: string;
+            location: string;
+            schema: {
+                type: string;
+                description: string;
+            };
+            required: boolean;
+        }[];
+        client: Record<string, unknown>;
+    };
+}
+// Resolved tool with guaranteed implementation
+export interface ResolvedTool extends ToolDefinition {
+    implementation: ToolImplementation;
+}
+// Resolved agent with tools
+export interface ResolvedAgent extends AgentConfig {
+    resolvedTools: ResolvedTool[];
+}
+// Vibe configuration
+export interface VibeManifest {
+    name: string;
+    description: string;
+    systemPrompt: string;
+    // Top-level call properties
+    temperature?: number;
+    languageHint?: string;
+    model?: string;
+    maxDuration?: string;
+    firstSpeaker?: string;
+    voice?: string;
+    initialMessages?: string[];
+    // UI properties
+    view: string;
+    vibeTools: string[];
+    // Visual properties
+    icon?: string;
+    color?: string;
+    // Agent configuration
+    defaultAgent: string;
+    agents: AgentConfig[];
+    // Additional properties found in vibeLoader
+    callSystemPrompt?: string;
+    // Legacy nested configuration (deprecated)
+    rootCallConfig?: {
+        model: string;
+        firstSpeaker: string;
+        maxDuration: string;
+        languageHint: string;
+        temperature: number;
+    };
+}
+export interface ResolvedVibe {
+    manifest: VibeManifest;
+    resolvedCallTools: ResolvedTool[];
+    resolvedAgents: ResolvedAgent[];
+    defaultAgent: ResolvedAgent;
+}
+// Stage change data type for agent transitions
+export interface StageChangeData {
+    systemPrompt: string;
+    voice: string;
+    toolResultText: string;
+    selectedTools: ResolvedTool[];
+}
+// View component types
+// Make it more compatible with actual Svelte component types
+export type VibeComponent = ComponentType | SvelteComponent | unknown;
+// Global window augmentation for consistent TypeScript across files
+declare global {
+    interface Window {
+        __hominio_tools?: Record<string, ToolImplementation>;
+        __hominio_tools_registered?: boolean;
+        __ULTRAVOX_SESSION?: UltravoxSession;
+        __DEBUG_STAGE_CHANGES?: boolean;
+    }
+}
+````
+
+## File: src/lib/vibes/todos/manifest.json
+````json
+{
+    "name": "todos",
+    "description": "Todo management voice application",
+    "systemPrompt": "IMPORTANT INSTRUCTIONS:\n1. You MUST use these tools directly without asking for confirmation\n2. Call the appropriate tool as soon as a user EXPLICITLY requests them\n3. Execute the tool when needed WITHOUT typing out the function in your response\n4. AFTER the tool executes, respond with text confirming what you did\n5. DO NOT tell the user \"I'll use the tool\" - just USE it directly.",
+    "temperature": 0.7,
+    "languageHint": "en",
+    "view": "TodoView",
+    "icon": "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4",
+    "color": "indigo",
+    "vibeTools": [
+        "switchAgent"
+    ],
+    "defaultAgent": "Oliver",
+    "agents": [
+        {
+            "name": "Oliver",
+            "personality": "professional and efficient",
+            "voiceId": "dcb65d6e-9a56-459e-bf6f-d97572e2fe64",
+            "description": "specialized in todo creation and management",
+            "temperature": 0.6,
+            "systemPrompt": "You are Oliver, a professional and efficient todo management specialist.\n\nYou specialize in:\n- Creating new todo items with appropriate tags\n- Toggling todo completion status\n- Updating existing todos\n- Removing todos\n- Filtering todos by tags\n\nYou should use your specialized tools to directly help users manage their tasks without unnecessary conversation.\n\nBe direct, efficient, and helpful in your responses, focusing on getting the job done well.\n\nIMPORTANT: NEVER call the filterTodos tool unless a user EXPLICITLY asks to filter or view todos by a specific tag.",
+            "tools": [
+                "createTodo",
+                "toggleTodo",
+                "updateTodo",
+                "deleteTodo",
+                "queryTodos",
+                "filterTodos"
+            ]
+        }
+    ]
+}
+````
+
+## File: vite.config.ts
+````typescript
+import tailwindcss from "@tailwindcss/vite";
+import { sveltekit } from '@sveltejs/kit/vite';
+import { defineConfig } from 'vite';
+import wasm from "vite-plugin-wasm";
+// import topLevelAwait from "vite-plugin-top-level-await"; // Temporarily removed
+export default defineConfig({
+	plugins: [
+		tailwindcss(),
+		sveltekit(),
+		wasm(),
+		// topLevelAwait(), // Temporarily removed
+	],
+	resolve: {
+		// Handle Tauri API as external module to avoid dev-time errors
+		conditions: ['browser']
+	},
+	server: {
+		host: '0.0.0.0',  // Listen on all network interfaces
+		port: 5173,       // Same port as in package.json
+		strictPort: true, // Fail if port is already in use
+		// Enable HTTPS for iOS if needed (comment out if not using HTTPS)
+		// https: true,
+		watch: {
+			ignored: [
+				'**/node_modules/**',
+				'**/.git/**'
+			]
+		}
+	},
+	optimizeDeps: {
+		exclude: ['loro-crdt']
+	},
+	build: {
+		// Ensure assets are copied
+		copyPublicDir: true,
+		// Make it compatible with Tauri
+		target: 'esnext',
+		// Smaller chunks for better loading
+		chunkSizeWarningLimit: 1000
+	},
+	// Properly handle WASM files
+	assetsInclude: ['**/*.wasm', '**/*.data'],
+	// Configure public directory for static assets
+	publicDir: 'static'
+});
+````
+
 ## File: src/lib/components/CallInterface.svelte
 ````
 <script lang="ts">
@@ -6867,91 +7361,6 @@ export {
 		box-shadow: 0 0 15px rgba(59, 130, 246, 0.2);
 	}
 </style>
-````
-
-## File: src/lib/vibes/todos/manifest.json
-````json
-{
-    "name": "todos",
-    "description": "Todo management voice application",
-    "systemPrompt": "IMPORTANT INSTRUCTIONS:\n1. You MUST use these tools directly without asking for confirmation\n2. Call the appropriate tool as soon as a user EXPLICITLY requests them\n3. Execute the tool when needed WITHOUT typing out the function in your response\n4. AFTER the tool executes, respond with text confirming what you did\n5. DO NOT tell the user \"I'll use the tool\" - just USE it directly.",
-    "temperature": 0.7,
-    "languageHint": "en",
-    "view": "TodoView",
-    "icon": "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4",
-    "color": "indigo",
-    "vibeTools": [
-        "switchAgent"
-    ],
-    "defaultAgent": "Oliver",
-    "agents": [
-        {
-            "name": "Oliver",
-            "personality": "professional and efficient",
-            "voiceId": "dcb65d6e-9a56-459e-bf6f-d97572e2fe64",
-            "description": "specialized in todo creation and management",
-            "temperature": 0.6,
-            "systemPrompt": "You are Oliver, a professional and efficient todo management specialist.\n\nYou specialize in:\n- Creating new todo items with appropriate tags\n- Toggling todo completion status\n- Updating existing todos\n- Removing todos\n- Filtering todos by tags\n\nYou should use your specialized tools to directly help users manage their tasks without unnecessary conversation.\n\nBe direct, efficient, and helpful in your responses, focusing on getting the job done well.\n\nIMPORTANT: NEVER call the filterTodos tool unless a user EXPLICITLY asks to filter or view todos by a specific tag.",
-            "tools": [
-                "createTodo",
-                "toggleTodo",
-                "updateTodo",
-                "deleteTodo",
-                "queryTodos",
-                "filterTodos"
-            ]
-        }
-    ]
-}
-````
-
-## File: vite.config.ts
-````typescript
-import tailwindcss from "@tailwindcss/vite";
-import { sveltekit } from '@sveltejs/kit/vite';
-import { defineConfig } from 'vite';
-import wasm from "vite-plugin-wasm";
-// import topLevelAwait from "vite-plugin-top-level-await"; // Temporarily removed
-export default defineConfig({
-	plugins: [
-		tailwindcss(),
-		sveltekit(),
-		wasm(),
-		// topLevelAwait(), // Temporarily removed
-	],
-	resolve: {
-		// Handle Tauri API as external module to avoid dev-time errors
-		conditions: ['browser']
-	},
-	server: {
-		host: '0.0.0.0',  // Listen on all network interfaces
-		port: 5173,       // Same port as in package.json
-		strictPort: true, // Fail if port is already in use
-		// Enable HTTPS for iOS if needed (comment out if not using HTTPS)
-		// https: true,
-		watch: {
-			ignored: [
-				'**/node_modules/**',
-				'**/.git/**'
-			]
-		}
-	},
-	optimizeDeps: {
-		exclude: ['loro-crdt']
-	},
-	build: {
-		// Ensure assets are copied
-		copyPublicDir: true,
-		// Make it compatible with Tauri
-		target: 'esnext',
-		// Smaller chunks for better loading
-		chunkSizeWarningLimit: 1000
-	},
-	// Properly handle WASM files
-	assetsInclude: ['**/*.wasm', '**/*.data'],
-	// Configure public directory for static assets
-	publicDir: 'static'
-});
 ````
 
 ## File: src/routes/+page.svelte
@@ -7126,6 +7535,8 @@ export default defineConfig({
     "db:studio": "cd src/db && SECRET_DATABASE_URL_HOMINIO=$SECRET_DATABASE_URL_HOMINIO drizzle-kit studio",
     "db:generate": "cd src/db && SECRET_DATABASE_URL_HOMINIO=$SECRET_DATABASE_URL_HOMINIO drizzle-kit generate",
     "db:drop": "cd src/db && SECRET_DATABASE_URL_HOMINIO=$SECRET_DATABASE_URL_HOMINIO drizzle-kit drop",
+    "db:drop-tables": "cd src/db && SECRET_DATABASE_URL_HOMINIO=$SECRET_DATABASE_URL_HOMINIO bun run ./utils.ts dropAllTables",
+    "db:reset": "bun run db:drop-tables && bun run db:push && bun run db:seed",
     "db:seed": "SECRET_DATABASE_URL_HOMINIO=$SECRET_DATABASE_URL_HOMINIO bun run src/db/seed.ts"
   },
   "devDependencies": {

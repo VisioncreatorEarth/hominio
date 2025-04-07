@@ -17,6 +17,8 @@
     "db:studio": "cd src/db && SECRET_DATABASE_URL_HOMINIO=$SECRET_DATABASE_URL_HOMINIO drizzle-kit studio",
     "db:generate": "cd src/db && SECRET_DATABASE_URL_HOMINIO=$SECRET_DATABASE_URL_HOMINIO drizzle-kit generate",
     "db:drop": "cd src/db && SECRET_DATABASE_URL_HOMINIO=$SECRET_DATABASE_URL_HOMINIO drizzle-kit drop",
+    "db:drop-tables": "cd src/db && SECRET_DATABASE_URL_HOMINIO=$SECRET_DATABASE_URL_HOMINIO bun run ./utils.ts dropAllTables",
+    "db:reset": "bun run db:drop-tables && bun run db:push && bun run db:seed",
     "db:seed": "SECRET_DATABASE_URL_HOMINIO=$SECRET_DATABASE_URL_HOMINIO bun run src/db/seed.ts"
   },
   "devDependencies": {

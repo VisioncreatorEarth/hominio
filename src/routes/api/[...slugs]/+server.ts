@@ -5,15 +5,29 @@ import { Elysia } from 'elysia';
 import { cors } from '@elysiajs/cors'
 import { swagger } from '@elysiajs/swagger'
 import { getAuthClient } from '$lib/auth/auth';
-import { db as dbModels } from '$db/model';
 import { db } from '$db';
-import { docs } from '$db/schema';
+import { docs, content } from '$db/schema';
 import { eq } from 'drizzle-orm';
 import type { Context } from 'elysia';
 import { ULTRAVOX_API_KEY } from '$env/static/private';
+import { hashService } from '$lib/KERNEL/hash-service';
 
 // Get the auth instance immediately as this is server-side code
 const auth = getAuthClient();
+
+// Convert array-like object to Uint8Array
+function arrayToUint8Array(arr: number[]): Uint8Array {
+    return new Uint8Array(arr);
+}
+
+// Types for API responses
+type ContentResponse = {
+    cid: string;
+    type: string;
+    data: unknown;
+    verified: boolean;
+    createdAt: string;
+};
 
 const betterAuthView = (context: Context) => {
     const BETTER_AUTH_ACCEPT_METHODS = ["POST", "GET"]
@@ -69,32 +83,38 @@ const app = new Elysia({ prefix: '/api' })
         .derive(requireAuth)
         .post('/create', async ({ body, session, set }) => {
             try {
-                // Cast body to any to handle unknown structure
-                const requestData = body as Record<string, any>;
+                // Cast body to handle unknown structure
+                const requestData = body as Record<string, unknown>;
 
                 // Log request for debugging
                 console.log('Call API request with body:', JSON.stringify(requestData, null, 2));
 
                 // Store vibeId in proper metadata field if provided
                 // The API supports a 'metadata' field (without underscore)
-                let requestBody: Record<string, any> = { ...requestData };
+                let requestBody: Record<string, unknown> = { ...requestData };
 
                 // If _metadata exists (our temporary field), move it to the proper metadata field
-                if (requestData._metadata && requestData._metadata.vibeId) {
-                    const { _metadata, ...rest } = requestData;
-                    requestBody = {
-                        ...rest,
-                        metadata: {
-                            vibeId: _metadata.vibeId,
-                            userId: session.user.id
-                        }
-                    };
+                if (requestData._metadata && typeof requestData._metadata === 'object') {
+                    const metadata = requestData._metadata as Record<string, unknown>;
+                    if ('vibeId' in metadata) {
+                        // Use object destructuring with rest to exclude _metadata
+                        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                        const { _metadata, ...rest } = requestData;
+                        requestBody = {
+                            ...rest,
+                            metadata: {
+                                vibeId: metadata.vibeId,
+                                userId: session.user.id
+                            }
+                        };
+                    }
                 } else {
                     // Add userId to metadata if no custom metadata
+                    const existingMetadata = (requestData.metadata as Record<string, unknown> | undefined) || {};
                     requestBody = {
                         ...requestData,
                         metadata: {
-                            ...(requestData.metadata || {}),
+                            ...existingMetadata,
                             userId: session.user.id
                         }
                     };
@@ -152,41 +172,77 @@ const app = new Elysia({ prefix: '/api' })
     .group('/docs', app => app
         .derive(requireAuth)
         .get('/', async () => {
-            return await db.select().from(docs);
+            // Get all docs, ordered by updated date
+            return await db.select().from(docs).orderBy(docs.updatedAt);
         })
-        .get('/:id', async ({ params: { id } }) => {
-            const doc = await db.select().from(docs).where(eq(docs.id, id));
-            if (!doc.length) throw new Error('Document not found');
+        .get('/:pubKey', async ({ params: { pubKey }, set }) => {
+            // Get doc by pubKey
+            const doc = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
+            if (!doc.length) {
+                set.status = 404;
+                return { error: 'Document not found' };
+            }
+
+            // Return the document
             return doc[0];
         })
-        .post('/', async ({ body }) => {
-            const result = await db.insert(docs).values({
-                content: body.content,
-                metadata: body.metadata
-            }).returning();
-            return result[0];
-        }, {
-            body: dbModels.insert.docs
+    )
+    // Content routes
+    .group('/content', app => app
+        .derive(requireAuth)
+        .get('/', async () => {
+            // Get all content items
+            return await db.select().from(content);
         })
-        .put('/:id', async ({ params: { id }, body }) => {
-            const result = await db.update(docs)
-                .set({
-                    content: body.content,
-                    metadata: body.metadata
-                })
-                .where(eq(docs.id, id))
-                .returning();
-            if (!result.length) throw new Error('Document not found');
-            return result[0];
-        }, {
-            body: dbModels.insert.docs
-        })
-        .delete('/:id', async ({ params: { id } }) => {
-            const result = await db.delete(docs)
-                .where(eq(docs.id, id))
-                .returning();
-            if (!result.length) throw new Error('Document not found');
-            return { success: true };
+        .get('/:cid', async ({ params: { cid }, set }) => {
+            try {
+                // Get content by CID
+                const contentItem = await db.select().from(content).where(eq(content.cid, cid));
+
+                if (!contentItem.length) {
+                    set.status = 404;
+                    return { error: 'Content not found' };
+                }
+
+                const item = contentItem[0];
+
+                // Get binary data from content
+                const itemData = item.data as Record<string, unknown>;
+                const binaryData = itemData.binary;
+
+                // Verify content integrity
+                let verified = false;
+
+                if (Array.isArray(binaryData)) {
+                    try {
+                        // Convert array back to Uint8Array
+                        const contentBytes = arrayToUint8Array(binaryData);
+
+                        // Verify hash matches CID
+                        verified = await hashService.verifySnapshot(contentBytes, cid);
+                    } catch (err) {
+                        console.error('Error verifying content hash:', err);
+                    }
+                }
+
+                // Return content with verification status
+                const response: ContentResponse = {
+                    cid: item.cid,
+                    type: item.type,
+                    data: item.data,
+                    verified: verified,
+                    createdAt: item.createdAt.toISOString()
+                };
+
+                return response;
+            } catch (error) {
+                console.error('Error retrieving content:', error);
+                set.status = 500;
+                return {
+                    error: 'Failed to retrieve content',
+                    details: error instanceof Error ? error.message : 'Unknown error'
+                };
+            }
         })
     )
     .onError(({ code, error }) => {

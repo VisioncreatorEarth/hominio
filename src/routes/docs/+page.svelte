@@ -1,0 +1,269 @@
+<script lang="ts">
+	import { onMount } from 'svelte';
+	import { hominio } from '$lib/client/hominio';
+
+	// Define proper types
+	type Doc = {
+		pubKey: string;
+		title: string;
+		snapshotCid: string;
+		updateCids: string[];
+		ownerId: string;
+		createdAt: string;
+		updatedAt: string;
+		description?: string;
+	};
+
+	type ContentItem = {
+		cid: string;
+		type: string;
+		data: Record<string, unknown>;
+		verified: boolean;
+		createdAt: string;
+	};
+
+	let docs: Doc[] = [];
+	let contentMap = new Map<string, ContentItem>();
+	let loading = true;
+	let error: string | null = null;
+	let selectedDoc: Doc | null = null;
+
+	async function fetchDocs() {
+		try {
+			loading = true;
+			error = null;
+
+			// Fetch all docs
+			const docsResponse = await hominio.api.docs.get();
+
+			if (!docsResponse.data) {
+				throw new Error('Failed to fetch documents');
+			}
+
+			docs = docsResponse.data as Doc[];
+
+			// Select first doc by default if available
+			if (docs.length > 0 && !selectedDoc) {
+				selectedDoc = docs[0];
+				await fetchDocContent(selectedDoc);
+			}
+		} catch (e) {
+			const err = e as Error;
+			error = err.message || 'Failed to fetch documents';
+			console.error('Error fetching docs:', e);
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function fetchDocContent(doc: Doc) {
+		if (!doc.snapshotCid) return;
+
+		try {
+			const contentResponse = await hominio.api.content[doc.snapshotCid].get();
+			if (contentResponse.data) {
+				contentMap.set(doc.pubKey, contentResponse.data as ContentItem);
+			}
+		} catch (e) {
+			console.error(`Error fetching content for doc ${doc.pubKey}:`, e);
+		}
+	}
+
+	function selectDoc(doc: Doc) {
+		selectedDoc = doc;
+		if (!contentMap.has(doc.pubKey) && doc.snapshotCid) {
+			fetchDocContent(doc);
+		}
+	}
+
+	// Process data to remove binary property
+	function processContentData(data: Record<string, unknown>): Record<string, unknown> {
+		if (!data) return {};
+
+		const processed = { ...data };
+		if (processed.binary) {
+			delete processed.binary;
+		}
+		return processed;
+	}
+
+	onMount(() => {
+		fetchDocs();
+	});
+</script>
+
+<div class="min-h-screen bg-slate-900 text-slate-200">
+	<!-- Sidebar and Main Content Layout -->
+	<div class="grid min-h-screen grid-cols-[250px_1fr]">
+		<!-- Sidebar - Doc List -->
+		<aside class="overflow-y-auto border-r border-slate-700 bg-slate-800">
+			<div class="border-b border-slate-700 p-4">
+				<h1 class="text-xl font-bold text-white">Documents</h1>
+			</div>
+
+			{#if loading && docs.length === 0}
+				<div class="flex h-32 items-center justify-center">
+					<div
+						class="h-8 w-8 animate-spin rounded-full border-t-2 border-b-2 border-blue-500"
+					></div>
+				</div>
+			{:else if error && docs.length === 0}
+				<div class="p-4">
+					<div class="rounded-lg bg-red-900/50 p-3 text-sm">
+						<p class="text-red-300">{error}</p>
+						<button
+							class="mt-2 rounded-md bg-slate-700 px-3 py-1 text-sm text-white hover:bg-slate-600"
+							on:click={fetchDocs}
+						>
+							Retry
+						</button>
+					</div>
+				</div>
+			{:else if docs.length === 0}
+				<div class="p-4">
+					<p class="text-slate-400">No documents found</p>
+				</div>
+			{:else}
+				<div>
+					{#each docs as doc}
+						<div
+							class="cursor-pointer border-b border-slate-700 p-4 hover:bg-slate-700 {selectedDoc?.pubKey ===
+							doc.pubKey
+								? 'bg-slate-700'
+								: ''}"
+							on:click={() => selectDoc(doc)}
+						>
+							<h2 class="font-medium text-blue-400">Example Loro Document</h2>
+							<div class="mt-1 font-mono text-xs text-slate-300">{doc.pubKey}</div>
+						</div>
+					{/each}
+				</div>
+			{/if}
+		</aside>
+
+		<!-- Main Content Area -->
+		<main class="flex-grow">
+			{#if selectedDoc}
+				<!-- Document title shared across both columns -->
+				<div class="border-b border-slate-700 p-6">
+					<h1 class="text-3xl font-bold text-blue-400">Example Loro Document</h1>
+					<p class="text-slate-300">A test document using Loro CRDT</p>
+				</div>
+
+				<!-- 50/50 split content area -->
+				<div class="grid h-[calc(100vh-124px)] grid-cols-2">
+					<!-- Left side: Document Metadata -->
+					<div class="overflow-y-auto border-r border-slate-700 p-6">
+						<h2 class="mb-4 text-xl font-bold">Document Metadata</h2>
+
+						<div class="space-y-1">
+							<div>
+								<span class="font-medium">Public Key:</span>
+								<span class="ml-2 font-mono">{selectedDoc.pubKey}</span>
+							</div>
+							<div>
+								<span class="font-medium">Owner ID:</span>
+								<span class="ml-2 font-mono">{selectedDoc.ownerId}</span>
+							</div>
+							<div>
+								<span class="font-medium">Created:</span>
+								<span class="ml-2">
+									{new Date(selectedDoc.createdAt).toLocaleString()}
+								</span>
+							</div>
+							<div>
+								<span class="font-medium">Updated:</span>
+								<span class="ml-2">
+									{new Date(selectedDoc.updatedAt).toLocaleString()}
+								</span>
+							</div>
+							<div>
+								<span class="font-medium">Snapshot CID:</span>
+								<span class="ml-2 font-mono">{selectedDoc.snapshotCid}</span>
+							</div>
+						</div>
+
+						{#if selectedDoc.updateCids && selectedDoc.updateCids.length > 0}
+							<div class="mt-6">
+								<h3 class="mb-2 text-lg font-bold">Updates ({selectedDoc.updateCids.length})</h3>
+								<div>
+									<ul class="space-y-1">
+										{#each selectedDoc.updateCids as cid}
+											<li class="font-mono text-xs">{cid}</li>
+										{/each}
+									</ul>
+								</div>
+							</div>
+						{/if}
+					</div>
+
+					<!-- Right side: Content Snapshot -->
+					<div class="overflow-y-auto p-6">
+						<h2 class="mb-4 text-xl font-bold">Content Snapshot</h2>
+
+						{#if !selectedDoc.snapshotCid}
+							<div>
+								<p class="text-slate-400">No content snapshot associated with this document</p>
+							</div>
+						{:else if contentMap.has(selectedDoc.pubKey)}
+							<div>
+								{#if contentMap.get(selectedDoc.pubKey)?.verified}
+									<div class="mb-4 text-green-400">✓ Content verified</div>
+								{:else}
+									<div class="mb-4 text-red-400">✗ Content not verified</div>
+								{/if}
+
+								<pre class="font-mono whitespace-pre-wrap text-slate-200">
+{JSON.stringify(
+										processContentData(
+											(contentMap.get(selectedDoc.pubKey)?.data as Record<string, unknown>) || {}
+										),
+										null,
+										2
+									)}
+								</pre>
+							</div>
+						{:else}
+							<div class="flex items-center">
+								<div
+									class="mr-3 h-8 w-8 animate-spin rounded-full border-t-2 border-b-2 border-blue-500"
+								></div>
+								<span>Loading content...</span>
+							</div>
+						{/if}
+					</div>
+				</div>
+			{:else}
+				<!-- Empty state when no document is selected -->
+				<div class="flex h-full items-center justify-center">
+					{#if loading}
+						<div
+							class="h-12 w-12 animate-spin rounded-full border-t-2 border-b-2 border-blue-500"
+						></div>
+					{:else}
+						<div class="p-6 text-center">
+							<svg
+								class="mx-auto h-12 w-12 text-slate-400"
+								xmlns="http://www.w3.org/2000/svg"
+								fill="none"
+								viewBox="0 0 24 24"
+								stroke="currentColor"
+							>
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+								/>
+							</svg>
+							<h3 class="mt-2 text-xl font-medium text-slate-300">No document selected</h3>
+							<p class="mt-1 text-slate-400">
+								Please select a document from the sidebar to view its content
+							</p>
+						</div>
+					{/if}
+				</div>
+			{/if}
+		</main>
+	</div>
+</div>
