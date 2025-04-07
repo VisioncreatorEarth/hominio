@@ -31,7 +31,7 @@ import type { CallConfig } from './callFunctions';
 export const DEFAULT_CALL_CONFIG: CallConfig = {
     // Immutable properties (cannot change with new stage)
     model: 'fixie-ai/ultravox-70B',
-    firstSpeaker: 'FIRST_SPEAKER_USER',
+    firstSpeaker: 'FIRST_SPEAKER_AGENT',
     maxDuration: '600s',
     joinTimeout: '30s',
     timeExceededMessage: 'The maximum call duration has been reached.',

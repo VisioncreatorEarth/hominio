@@ -5,7 +5,6 @@ import { createCall } from './createCall';
 import { Role } from './types';
 import type {
     CallCallbacks,
-    UltravoxExperimentalMessageEvent,
     CallConfig,
 } from './types';
 
@@ -20,7 +19,6 @@ export { Role };
 
 // Ultravox session
 let uvSession: UVSession | null = null;
-const debugMessages: Set<string> = new Set(["debug"]);
 
 // Toggle mic/speaker mute state
 export function toggleMute(role: Role): void {
@@ -65,9 +63,6 @@ export function forceUnmuteSpeaker(): void {
         uvSession.unmuteMic();
     }
 }
-
-// Track last processed transcript to prevent loops
-let lastProcessedTranscriptCount = 0;
 
 // Start a call
 export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig, vibeId = 'home'): Promise<void> {
@@ -160,13 +155,6 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
                 if (isRunningInTauri && isLinux) {
                     console.warn('⚠️ This is a known issue with Tauri on Linux - microphone access is not properly supported');
                 }
-
-                callbacks.onDebugMessage?.({
-                    type: 'warning',
-                    detail: {
-                        message: 'Microphone access unavailable - using text input only.'
-                    }
-                });
             }
         } else {
             console.warn('⚠️ Media devices API not available - microphone input will be disabled');
@@ -175,12 +163,6 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
                 console.warn('⚠️ This is expected in Tauri WebView environment');
                 console.warn('⚠️ See: https://github.com/tauri-apps/tauri/issues/5370');
                 callbacks.onStatusChange('warning');
-                callbacks.onDebugMessage?.({
-                    type: 'warning',
-                    detail: {
-                        message: 'Microphone not supported in this Tauri environment - using text input only.'
-                    }
-                });
             }
         }
 
@@ -206,35 +188,15 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
         } catch (importError) {
             console.error('❌ Failed to import Ultravox client:', importError);
             callbacks.onStatusChange('error');
-            callbacks.onDebugMessage?.({
-                type: 'error',
-                detail: {
-                    message: 'Failed to load voice chat component. Please try again later.'
-                }
-            });
             throw new Error('Failed to import Ultravox client');
         }
 
-        // Configure Ultravox Session appropriately for the environment
-        interface UltravoxSessionConfig {
-            experimentalMessages: Set<string>;
-            microphoneEnabled?: boolean;
-            enableTextMode?: boolean;
-            // For any other options Ultravox might accept
-            [key: string]: Set<string> | boolean | undefined;
-        }
-
-        const sessionConfig: UltravoxSessionConfig = {
-            experimentalMessages: debugMessages
+        // Configure Ultravox Session with appropriate options
+        const sessionConfig = {
+            experimentalMessages: new Set<string>(["debug"]),
+            microphoneEnabled: isRunningInTauri || !microphoneAvailable ? false : true,
+            enableTextMode: isRunningInTauri || !microphoneAvailable ? true : false
         };
-
-        // Disable microphone in Tauri or when microphone isn't available
-        // Always enable text mode as a fallback
-        if (isRunningInTauri || !microphoneAvailable) {
-            console.log('⚠️ Configuring Ultravox for text-only mode');
-            sessionConfig.microphoneEnabled = false;
-            sessionConfig.enableTextMode = true;
-        }
 
         console.log('Creating Ultravox session with config:', sessionConfig);
 
@@ -244,12 +206,6 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
         } catch (sessionError) {
             console.error('❌ Failed to create Ultravox session:', sessionError);
             callbacks.onStatusChange('error');
-            callbacks.onDebugMessage?.({
-                type: 'error',
-                detail: {
-                    message: 'Failed to initialize voice chat. Please try again later.'
-                }
-            });
             throw new Error('Failed to create Ultravox session');
         }
 
@@ -361,7 +317,6 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
 
         // Add more logging for main events
         uvSession.addEventListener('status', () => {
-            console.log('📡 ULTRAVOX STATUS CHANGE:', uvSession?.status);
             callbacks.onStatusChange(uvSession?.status);
 
             // Ensure speaker is unmuted after status change, especially when speaking
@@ -369,37 +324,6 @@ export async function startCall(callbacks: CallCallbacks, callConfig: CallConfig
                 console.log('🔊 Unmuting speaker for speaking state');
                 uvSession.unmuteSpeaker();
             }
-        });
-
-        uvSession.addEventListener('transcripts', () => {
-            const transcripts = uvSession?.transcripts;
-            const currentCount = transcripts?.length || 0;
-
-            // Only process if we have new transcripts and not in a feedback loop
-            if (currentCount > lastProcessedTranscriptCount) {
-                console.log('📝 NEW TRANSCRIPTS, count:', currentCount - lastProcessedTranscriptCount);
-
-                // Update the processed count
-                lastProcessedTranscriptCount = currentCount;
-
-                // Only send the new transcripts to the callback
-                callbacks.onTranscriptChange(transcripts);
-
-                // Ensure speaker is unmuted when transcripts update (agent likely about to speak)
-                if (uvSession && uvSession.isSpeakerMuted) {
-                    console.log('🔊 Unmuting speaker after transcript update');
-                    uvSession.unmuteSpeaker();
-                }
-            } else {
-                console.log('🔄 Skipping duplicate transcript update');
-            }
-        });
-
-        uvSession.addEventListener('experimental_message', (evt: Event) => {
-            // Cast event to our expected type since the library's typings might not match exactly
-            const msg = evt as unknown as UltravoxExperimentalMessageEvent;
-            console.log('🧪 EXPERIMENTAL MESSAGE:', msg);
-            callbacks?.onDebugMessage?.(msg);
         });
 
         // Expose the session globally for client tools

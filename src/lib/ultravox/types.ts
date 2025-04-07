@@ -59,14 +59,6 @@ export enum Role {
     AGENT = 'agent'
 }
 
-// Event types
-export type UltravoxExperimentalMessageEvent = {
-    message: {
-        message: string;
-        timestamp: number;
-    };
-};
-
 // Tool parameter types from agents.ts
 export type FilterParams = {
     tag?: string;
@@ -108,20 +100,12 @@ export interface UltravoxSession {
     joinCall: (joinUrl: string) => void;
     leaveCall: () => void;
     status?: string;
-    transcripts?: unknown[];
     addEventListener: (event: string, callback: (event: unknown) => void) => void;
 }
 
 // Call handling types
 export type CallCallbacks = {
     onStatusChange: (status: string | undefined) => void;
-    onTranscriptChange: (transcripts: unknown[] | undefined) => void;
-    onDebugMessage?: (message: unknown) => void;
-};
-
-export type Transcript = {
-    speaker: 'agent' | 'user';
-    text: string;
 };
 
 // Agent configuration

@@ -11,7 +11,6 @@
 
 	let isCallActive = $state(false);
 	let callStatus = $state<string>('off');
-	let transcripts = $state<any[]>([]);
 	let isVibeInitialized = $state(false);
 
 	// Global state for notifications
@@ -19,7 +18,7 @@
 		null
 	);
 
-	// // Use effect to monitor window.__recentToolActivity for changes
+	// Use effect to monitor window.__recentToolActivity for changes
 	$effect(() => {
 		if (typeof window !== 'undefined') {
 			// Set up interval to check for notifications
@@ -49,7 +48,7 @@
 		}
 	}
 
-	// // Toggle modal state
+	// Toggle modal state
 	async function toggleCall() {
 		if (isCallActive) {
 			await handleEndCall();
@@ -58,7 +57,7 @@
 		}
 	}
 
-	// // Handle starting a call
+	// Handle starting a call
 	async function handleStartCall() {
 		try {
 			isCallActive = true;
@@ -69,11 +68,6 @@
 			const callbacks = {
 				onStatusChange: (status: string | undefined) => {
 					callStatus = status || 'unknown';
-				},
-				onTranscriptChange: (newTranscripts: unknown[] | undefined) => {
-					if (newTranscripts) {
-						transcripts = newTranscripts as any[];
-					}
 				}
 			};
 
@@ -85,7 +79,7 @@
 		}
 	}
 
-	// // Handle ending a call
+	// Handle ending a call
 	async function handleEndCall() {
 		try {
 			callStatus = 'ending';
@@ -145,7 +139,7 @@
 		</div>
 
 		{#if isCallActive}
-			<CallInterface {callStatus} {transcripts} onEndCall={handleEndCall} />
+			<CallInterface {callStatus} onEndCall={handleEndCall} />
 		{/if}
 	</div>
 </div>
