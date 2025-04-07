@@ -92,46 +92,31 @@ export function createTodoImplementation(parameters: ToolParameters): string {
             return JSON.stringify(result);
         }
 
-        // Create a unique transition ID for tracking this operation
-        const transitionId = crypto.randomUUID();
-        console.log(`Starting todo creation with transition ID: ${transitionId}`);
-
-        // Convert to the format expected by our new implementation and store the promise
-        const operationPromise = execute({
+        // Convert to the format expected by our new implementation
+        execute({
             text: todoText.trim(),
             tags,
             docId: listName
+        }).then(result => {
+            console.log('Todo created with result:', result);
+        }).catch(err => {
+            console.error('Error in createTodo execution:', err);
         });
 
-        // Set up immediate checking for completion
-        setTimeout(() => {
-            operationPromise.then(result => {
-                console.log(`Todo creation completed (ID: ${transitionId}):`, result);
-                // Dispatch a custom event that UI components can listen for
-                window.dispatchEvent(new CustomEvent('todo-created', {
-                    detail: { transitionId, result, text: todoText }
-                }));
-            }).catch(err => {
-                console.error(`Todo creation failed (ID: ${transitionId}):`, err);
-                window.dispatchEvent(new CustomEvent('todo-error', {
-                    detail: { transitionId, error: err }
-                }));
-            });
-        }, 0);
-
-        // Return initial state with tracking ID
+        // Return success immediately (the actual operation happens async)
         const result = {
             success: true,
-            transitionId,
-            message: `Creating todo: "${todoText}"${tags ? ' with tags: ' + tags : ''}`,
-            status: "pending"
+            message: `Created todo: "${todoText}"${tags ? ' with tags: ' + tags : ''}`
         };
 
         return JSON.stringify(result);
-    } catch {
+    } catch (error) {
+        console.error('Error in createTodo tool:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
         const result = {
             success: false,
-            message: `Error creating todo`
+            message: `Error creating todo: ${errorMessage}`
         };
 
         return JSON.stringify(result);
