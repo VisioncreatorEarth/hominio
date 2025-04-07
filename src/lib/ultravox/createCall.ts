@@ -7,6 +7,7 @@ import { browser } from '$app/environment';
 import type { JoinUrlResponse, CallConfig } from './types';
 import { getActiveVibe } from './stageManager';
 import { setupToolRegistrationListeners } from './loaders/toolLoader';
+import { hominio } from '$lib/client/hominio';
 
 /**
  * Creates a call using the API and returns a join URL
@@ -57,27 +58,26 @@ export async function createCall(callConfig: CallConfig, vibeId = 'home'): Promi
             // Use WebRTC as the medium for browser-based calls
             medium: {
                 webRtc: {}
+            },
+
+            // Store vibeId in metadata (proper field for Ultravox API)
+            metadata: {
+                vibeId: vibeId
             }
         };
 
-        console.log('📡 Making API call to create a call session');
+        console.log('📡 Making API call to create a call session using Eden Treaty client');
 
-        // Use the known working endpoint
-        const response = await fetch('/callHominio', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(apiRequest)
-        });
+        // Use Eden Treaty client instead of fetch
+        // Type safety handling for Eden client
+        const response = await hominio.api.call.create.post(apiRequest as Record<string, unknown>);
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Failed to create call: ${response.status} ${errorText}`);
+        if (!response.data) {
+            throw new Error('Invalid response from API: No data returned');
         }
 
-        const data: JoinUrlResponse = await response.json();
-        console.log(`✅ Call created. Join URL: ${data.joinUrl}`);
+        const data = response.data as JoinUrlResponse;
+        console.log(`✅ Call created via Eden client. Join URL: ${data.joinUrl}`);
 
         return data;
     } catch (error) {
