@@ -34,6 +34,7 @@
 	let error: string | null = null;
 	let selectedDoc: Doc | null = null;
 	let autoSelectFirstDoc = false; // Set to false to prevent auto-selection
+	let creatingDoc = false;
 
 	async function fetchDocs() {
 		try {
@@ -87,6 +88,36 @@
 		}
 	}
 
+	async function createNewDocument() {
+		try {
+			if (creatingDoc) return; // Prevent multiple clicks
+
+			creatingDoc = true;
+
+			// Call the create document API
+			const response = await hominio.api.docs.post({});
+
+			if (response && response.data && response.data.success) {
+				console.log('Created new document:', response.data.document);
+
+				// Add the new document to the list
+				const newDoc = response.data.document as Doc;
+				docs = [newDoc, ...docs];
+
+				// Select the new document
+				await selectDoc(newDoc);
+			} else {
+				throw new Error(response?.data?.error || 'Failed to create document');
+			}
+		} catch (e) {
+			const err = e as Error;
+			error = err.message || 'Failed to create document';
+			console.error('Error creating document:', e);
+		} finally {
+			creatingDoc = false;
+		}
+	}
+
 	// Process data to remove binary property
 	function processContentData(data: Record<string, unknown>): Record<string, unknown> {
 		if (!data) return {};
@@ -107,9 +138,35 @@
 	<!-- Sidebar and Main Content Layout -->
 	<div class="grid min-h-screen grid-cols-[250px_1fr]">
 		<!-- Sidebar - Doc List -->
-		<aside class="overflow-y-auto border-r border-slate-700 bg-[#0F1525]">
+		<aside class="flex flex-col overflow-y-auto border-r border-slate-700 bg-[#0F1525]">
 			<div class="border-b border-slate-700 p-4">
 				<h1 class="text-xl font-bold text-white">Documents</h1>
+			</div>
+
+			<!-- Create New Document Button -->
+			<div class="border-b border-slate-700 p-4">
+				<button
+					class="flex w-full items-center justify-center rounded-md bg-blue-600 py-2 text-white transition-colors hover:bg-blue-700"
+					on:click={createNewDocument}
+					disabled={creatingDoc}
+				>
+					{#if creatingDoc}
+						<div
+							class="mr-2 h-5 w-5 animate-spin rounded-full border-t-2 border-b-2 border-white"
+						></div>
+						Creating...
+					{:else}
+						<svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="2"
+								d="M12 4v16m8-8H4"
+							/>
+						</svg>
+						New Document
+					{/if}
+				</button>
 			</div>
 
 			{#if loading && docs.length === 0}
@@ -131,11 +188,27 @@
 					</div>
 				</div>
 			{:else if docs.length === 0}
-				<div class="p-4">
-					<p class="text-slate-400">No documents found</p>
+				<div class="flex flex-grow flex-col items-center justify-center p-4 text-center">
+					<svg
+						class="mb-3 h-12 w-12 text-slate-500"
+						fill="none"
+						stroke="currentColor"
+						viewBox="0 0 24 24"
+					>
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							stroke-width="2"
+							d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+						/>
+					</svg>
+					<p class="mb-4 text-slate-400">No documents found</p>
+					<p class="text-sm text-slate-500">
+						Click the "New Document" button to create your first document
+					</p>
 				</div>
 			{:else}
-				<div>
+				<div class="flex-grow overflow-y-auto">
 					{#each docs as doc}
 						<div
 							class="cursor-pointer border-b border-slate-700 p-4 hover:bg-slate-800 {selectedDoc?.pubKey ===
@@ -144,8 +217,13 @@
 								: ''}"
 							on:click={() => selectDoc(doc)}
 						>
-							<h2 class="font-medium text-blue-400">Example Loro Document</h2>
-							<div class="mt-1 font-mono text-xs text-slate-300">{doc.pubKey}</div>
+							<h2 class="font-medium text-blue-400">{doc.title}</h2>
+							<p class="mt-1 truncate text-xs text-slate-400">
+								{doc.description || 'No description'}
+							</p>
+							<div class="mt-1 font-mono text-xs text-slate-300">
+								{doc.pubKey.substring(0, 10)}...
+							</div>
 						</div>
 					{/each}
 				</div>
@@ -157,8 +235,10 @@
 			{#if selectedDoc}
 				<!-- Document title at the top -->
 				<div class="p-6 pb-0">
-					<h1 class="text-3xl font-bold text-blue-400">Example Loro Document</h1>
-					<p class="mb-6 text-slate-300">A test document using Loro CRDT</p>
+					<h1 class="text-3xl font-bold text-blue-400">{selectedDoc.title}</h1>
+					<p class="mb-6 text-slate-300">
+						{selectedDoc.description || 'A document using Loro CRDT'}
+					</p>
 				</div>
 
 				<!-- 50/50 split content area -->

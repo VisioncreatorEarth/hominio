@@ -7,10 +7,12 @@ import { swagger } from '@elysiajs/swagger'
 import { getAuthClient } from '$lib/auth/auth';
 import { db } from '$db';
 import { docs, content } from '$db/schema';
+import * as schema from '$db/schema';
 import { eq } from 'drizzle-orm';
 import type { Context } from 'elysia';
 import { ULTRAVOX_API_KEY } from '$env/static/private';
 import { hashService } from '$lib/KERNEL/hash-service';
+import { loroService } from '$lib/KERNEL/loro-service';
 
 // Get the auth instance immediately as this is server-side code
 const auth = getAuthClient();
@@ -227,6 +229,60 @@ const app = new Elysia({ prefix: '/api' })
             return await db.select().from(docs)
                 .where(eq(docs.ownerId, session.user.id))
                 .orderBy(docs.updatedAt);
+        })
+        .post('/', async ({ session, set }) => {
+            try {
+                // Use loroService to create a new document
+                const { snapshot, cid, pubKey, jsonState } = await loroService.createDemoDoc();
+
+                // First, store the content
+                const contentEntry: schema.InsertContent = {
+                    cid,
+                    type: 'snapshot',
+                    data: {
+                        binary: Array.from(snapshot), // Convert Uint8Array to regular array for JSON storage
+                        docState: jsonState // Store the JSON representation for easier debugging
+                    }
+                };
+
+                // Save the content
+                const contentResult = await db.insert(schema.content)
+                    .values(contentEntry)
+                    .returning();
+
+                console.log('Created content entry:', contentResult[0].cid);
+
+                // Create document entry with the current user as owner
+                const docEntry: schema.InsertDoc = {
+                    pubKey,
+                    snapshotCid: cid,
+                    updateCids: [],
+                    ownerId: session.user.id, // Associate with current user
+                    title: 'New Loro Document',
+                    description: 'Created on ' + new Date().toLocaleString()
+                };
+
+                // Save the document
+                const docResult = await db.insert(schema.docs)
+                    .values(docEntry)
+                    .returning();
+
+                console.log('Created document entry:', docResult[0].pubKey);
+
+                // Return the created document
+                return {
+                    success: true,
+                    document: docResult[0]
+                };
+            } catch (error) {
+                console.error('Error creating document:', error);
+                set.status = 500;
+                return {
+                    success: false,
+                    error: 'Failed to create document',
+                    details: error instanceof Error ? error.message : 'Unknown error'
+                };
+            }
         })
         .get('/:pubKey', async ({ params: { pubKey }, session, set }) => {
             try {
