@@ -325,6 +325,106 @@ const app = new Elysia({ prefix: '/api' })
                 };
             }
         })
+        .post('/:pubKey/update', async ({ params: { pubKey }, body, session, set }) => {
+            try {
+                // Verify document exists and user owns it
+                const docResult = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
+                if (!docResult.length) {
+                    set.status = 404;
+                    return { error: 'Document not found' };
+                }
+
+                const document = docResult[0];
+
+                // Verify the user owns this document
+                if (document.ownerId !== session.user.id) {
+                    set.status = 403;
+                    return { error: 'Not authorized to update this document' };
+                }
+
+                // Parse the update data from request body
+                const updateData = body as {
+                    binaryUpdate: number[]; // Array of bytes as numbers
+                };
+
+                if (!updateData.binaryUpdate || !Array.isArray(updateData.binaryUpdate)) {
+                    set.status = 400;
+                    return { error: 'Invalid update data. Binary update required.' };
+                }
+
+                // Convert the array to Uint8Array
+                const binaryUpdate = arrayToUint8Array(updateData.binaryUpdate);
+
+                // Get current document content
+                const contentItem = await db.select().from(content).where(eq(content.cid, document.snapshotCid));
+                if (!contentItem.length) {
+                    set.status = 500;
+                    return { error: 'Document content not found' };
+                }
+
+                // Load the document from snapshot
+                const loroDoc = loroService.createEmptyDoc();
+                const itemData = contentItem[0].data as Record<string, unknown>;
+                const binaryData = itemData.binary;
+
+                if (!Array.isArray(binaryData)) {
+                    set.status = 500;
+                    return { error: 'Invalid document binary data' };
+                }
+
+                // Import the snapshot to the document
+                loroDoc.import(arrayToUint8Array(binaryData));
+
+                // Apply the update
+                loroService.applyUpdate(loroDoc, binaryUpdate);
+
+                // Get update CID
+                const { update, cid } = await loroService.createUpdate(loroDoc);
+
+                // Store the update content
+                const updateContentEntry: schema.InsertContent = {
+                    cid,
+                    type: 'update',
+                    data: {
+                        binary: Array.from(update), // Convert to regular array for storage
+                        appliedTo: document.snapshotCid // Store which snapshot this update applies to
+                    }
+                };
+
+                const updateResult = await db.insert(schema.content)
+                    .values(updateContentEntry)
+                    .returning();
+
+                console.log('Created update content entry:', updateResult[0].cid);
+
+                // Update the document's updateCids array to include this update
+                // Handle the case where updateCids might be null
+                const currentCids = document.updateCids || [];
+                const updatedCids = [...currentCids, cid];
+
+                await db.update(schema.docs)
+                    .set({
+                        updateCids: updatedCids,
+                        updatedAt: new Date()
+                    })
+                    .where(eq(schema.docs.pubKey, pubKey))
+                    .returning();
+
+                // Return success response
+                return {
+                    success: true,
+                    updateCid: cid,
+                    updatedCids
+                };
+            } catch (error) {
+                console.error('Error updating document:', error);
+                set.status = 500;
+                return {
+                    error: 'Failed to update document',
+                    details: error instanceof Error ? error.message : 'Unknown error'
+                };
+            }
+        })
     )
     // Content routes
     .group('/content', app => app

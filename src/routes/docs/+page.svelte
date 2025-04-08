@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { hominio } from '$lib/client/hominio';
+	import { LoroDoc } from 'loro-crdt';
 
 	// Define proper types
 	type Doc = {
@@ -35,14 +36,16 @@
 	let selectedDoc: Doc | null = null;
 	let autoSelectFirstDoc = false; // Set to false to prevent auto-selection
 	let creatingDoc = false;
+	let updatingDoc = false;
+	let updateMessage: string | null = null;
 
 	async function fetchDocs() {
 		try {
 			loading = true;
 			error = null;
 
-			// Use the correct Eden Treaty syntax
-			const docsResponse = await hominio.api.docs.get();
+			// Use the correct Eden Treaty syntax - with empty object parameter
+			const docsResponse = await hominio.api.docs.get({});
 
 			if (!docsResponse.data) {
 				throw new Error('Failed to fetch documents');
@@ -67,8 +70,8 @@
 		try {
 			selectedDoc = doc;
 
-			// Use the correct Eden Treaty syntax
-			const response = await hominio.api.docs[doc.pubKey].get();
+			// Use the correct Eden Treaty syntax - with empty object parameter
+			const response = await hominio.api.docs[doc.pubKey].get({});
 
 			console.log('Document response:', response);
 
@@ -94,7 +97,7 @@
 
 			creatingDoc = true;
 
-			// Call the create document API
+			// Call the create document API - with empty object parameter
 			const response = await hominio.api.docs.post({});
 
 			if (response && response.data && response.data.success) {
@@ -115,6 +118,68 @@
 			console.error('Error creating document:', e);
 		} finally {
 			creatingDoc = false;
+		}
+	}
+
+	async function updateDocument() {
+		try {
+			if (!selectedDoc || updatingDoc) return;
+
+			updatingDoc = true;
+			updateMessage = null;
+
+			// Get the current content data to create a meaningful update
+			const contentData = contentMap.get(selectedDoc.pubKey);
+			if (!contentData) {
+				throw new Error('Document content not loaded');
+			}
+
+			// Get the binary data from content
+			const itemData = contentData.data as Record<string, unknown>;
+			const binaryData = itemData.binary;
+
+			if (!Array.isArray(binaryData)) {
+				throw new Error('Invalid document binary data');
+			}
+
+			// Create a new Loro document and import the current snapshot
+			const loroDoc = new LoroDoc();
+			loroDoc.setPeerId(Math.floor(Math.random() * 1000000)); // Random peer ID
+
+			// Convert the array back to Uint8Array and import
+			const binaryArray = new Uint8Array(binaryData);
+			loroDoc.import(binaryArray);
+
+			// Make changes to the document using Loro CRDT operations
+			// Update the title with a timestamp to show changes
+			const newTitle = `Updated ${new Date().toLocaleTimeString()}`;
+			loroDoc.getText('title').insert(0, newTitle);
+
+			// Generate the update binary data using Loro's export function
+			const updateBinary = loroDoc.export({ mode: 'update' });
+
+			// Call the update endpoint with the proper Loro binary update
+			const response = await hominio.api.docs[selectedDoc.pubKey].update.post({
+				binaryUpdate: Array.from(updateBinary) // Convert Uint8Array to regular array for JSON
+			});
+
+			if (response && response.data && response.data.success) {
+				console.log('Updated document:', response.data);
+
+				// Refresh the document to get the updated data
+				await selectDoc(selectedDoc);
+
+				// Show success message
+				updateMessage = 'Document updated successfully!';
+			} else {
+				throw new Error(response?.data?.error || 'Failed to update document');
+			}
+		} catch (e) {
+			const err = e as Error;
+			updateMessage = 'Error: ' + (err.message || 'Failed to update document');
+			console.error('Error updating document:', e);
+		} finally {
+			updatingDoc = false;
 		}
 	}
 
@@ -239,6 +304,42 @@
 					<p class="mb-6 text-slate-300">
 						{selectedDoc.description || 'A document using Loro CRDT'}
 					</p>
+
+					<!-- Update Document Button -->
+					<div class="mb-4">
+						<button
+							class="flex items-center rounded-md bg-green-600 px-4 py-2 text-white transition-colors hover:bg-green-700"
+							on:click={updateDocument}
+							disabled={updatingDoc}
+						>
+							{#if updatingDoc}
+								<div
+									class="mr-2 h-4 w-4 animate-spin rounded-full border-t-2 border-b-2 border-white"
+								></div>
+								Updating...
+							{:else}
+								<svg class="mr-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="2"
+										d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+									/>
+								</svg>
+								Update Document
+							{/if}
+						</button>
+
+						{#if updateMessage}
+							<div
+								class="mt-2 text-sm {updateMessage.startsWith('Error')
+									? 'text-red-400'
+									: 'text-green-400'}"
+							>
+								{updateMessage}
+							</div>
+						{/if}
+					</div>
 				</div>
 
 				<!-- 50/50 split content area -->
@@ -271,6 +372,20 @@
 							<div>
 								<span class="font-medium">Snapshot CID:</span>
 								<div class="ml-2 font-mono break-all">{selectedDoc.snapshotCid}</div>
+							</div>
+
+							<!-- Display Update CIDs -->
+							<div>
+								<span class="font-medium">Updates:</span>
+								{#if selectedDoc.updateCids && selectedDoc.updateCids.length > 0}
+									<div class="ml-2 font-mono">
+										{#each selectedDoc.updateCids as cid}
+											<div class="mt-1 text-xs break-all">{cid}</div>
+										{/each}
+									</div>
+								{:else}
+									<div class="ml-2 text-slate-400">No updates</div>
+								{/if}
 							</div>
 						</div>
 					</div>
