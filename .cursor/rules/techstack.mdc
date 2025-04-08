@@ -1,0 +1,14 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+This repository uses the following techstack
+
+- bun
+- SvelteKit (use svelte5 syntax)
+- Tailwind (always use inline syntax)
+- Drizzle as ORM-Adapter to our neon postgres database
+- BetterAuth for everything Auth / Account related
+- Elysia as server on sveltekits api server route
+- Eden Treaty as client for api interactions
