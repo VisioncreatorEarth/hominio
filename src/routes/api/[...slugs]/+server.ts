@@ -455,6 +455,121 @@ const app = new Elysia({ prefix: '/api' })
                 };
             }
         })
+        // New endpoint for updating a document's snapshot
+        .post('/:pubKey/snapshot', async ({ params: { pubKey }, body, session, set }) => {
+            try {
+                // Verify document exists and user owns it
+                const docResult = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
+                if (!docResult.length) {
+                    set.status = 404;
+                    return { error: 'Document not found' };
+                }
+
+                const document = docResult[0];
+
+                // Verify the user owns this document
+                if (document.ownerId !== session.user.id) {
+                    set.status = 403;
+                    return { error: 'Not authorized to update this document' };
+                }
+
+                // Parse the snapshot data from request body
+                const snapshotBody = body as {
+                    data?: { binarySnapshot: number[] };
+                    binarySnapshot?: number[]
+                };
+
+                // Extract binarySnapshot from either format
+                const binarySnapshot = snapshotBody.data?.binarySnapshot || snapshotBody.binarySnapshot;
+
+                if (!binarySnapshot || !Array.isArray(binarySnapshot)) {
+                    set.status = 400;
+                    return { error: 'Invalid snapshot data. Binary snapshot required.' };
+                }
+
+                // Convert the array to Uint8Array for processing
+                const snapshotData = arrayToUint8Array(binarySnapshot);
+
+                // Verify this is a valid Loro snapshot
+                const loroDoc = loroService.createEmptyDoc();
+                try {
+                    // Import to verify it's valid
+                    loroDoc.import(snapshotData);
+                } catch (error) {
+                    set.status = 400;
+                    return {
+                        error: 'Invalid Loro snapshot',
+                        details: error instanceof Error ? error.message : 'Unknown error'
+                    };
+                }
+
+                // Generate a CID for the snapshot
+                const snapshotCid = await hashService.hashSnapshot(snapshotData);
+
+                // Check if this exact snapshot already exists (same CID)
+                if (snapshotCid === document.snapshotCid) {
+                    return {
+                        success: true,
+                        document,
+                        snapshotCid,
+                        message: 'Document unchanged, snapshot is already up to date'
+                    };
+                }
+
+                // Check if content with this CID already exists
+                const existingContent = await db.select()
+                    .from(content)
+                    .where(eq(content.cid, snapshotCid));
+
+                // If the content already exists, we can just update the document to point to it
+                if (existingContent.length === 0) {
+                    // Create a content entry for the snapshot
+                    const contentEntry: schema.InsertContent = {
+                        cid: snapshotCid,
+                        type: 'snapshot',
+                        // Store binary data directly
+                        data: Buffer.from(snapshotData),
+                        // Store metadata with docState if available
+                        metadata: {
+                            updatedAt: new Date().toISOString(),
+                            previousSnapshotCid: document.snapshotCid
+                        }
+                    };
+
+                    // Store the snapshot content
+                    const contentResult = await db.insert(schema.content)
+                        .values(contentEntry)
+                        .returning();
+
+                    console.log('Created snapshot content entry:', contentResult[0].cid);
+                } else {
+                    console.log('Content already exists with CID:', snapshotCid);
+                }
+
+                // Update the document's snapshotCid to point to the new snapshot
+                const updatedDoc = await db.update(schema.docs)
+                    .set({
+                        snapshotCid: snapshotCid,
+                        updatedAt: new Date()
+                    })
+                    .where(eq(schema.docs.pubKey, pubKey))
+                    .returning();
+
+                // Return success response
+                return {
+                    success: true,
+                    document: updatedDoc[0],
+                    snapshotCid
+                };
+            } catch (error) {
+                console.error('Error updating document snapshot:', error);
+                set.status = 500;
+                return {
+                    error: 'Failed to update document snapshot',
+                    details: error instanceof Error ? error.message : 'Unknown error'
+                };
+            }
+        })
     )
     // Content routes
     .group('/content', app => app

@@ -41,14 +41,16 @@
 	let creatingDoc = false;
 	let updatingDoc = false;
 	let updateMessage: string | null = null;
+	let creatingSnapshot = false;
+	let snapshotMessage: string | null = null;
 
 	async function fetchDocs() {
 		try {
 			loading = true;
 			error = null;
 
-			// Use the correct Eden Treaty syntax - with empty object parameter
-			const docsResponse = await hominio.api.docs.get({});
+			// Call the method directly
+			const docsResponse = await hominio.api.docs.get();
 
 			if (!docsResponse.data) {
 				throw new Error('Failed to fetch documents');
@@ -73,7 +75,7 @@
 		try {
 			selectedDoc = doc;
 
-			// Use the Eden Treaty client with includeBinary parameter
+			// Use the correct method call with query param
 			const response = await hominio.api.docs[doc.pubKey].get({
 				$query: { includeBinary: 'true' }
 			});
@@ -102,8 +104,8 @@
 
 			creatingDoc = true;
 
-			// Call the create document API - with empty object parameter
-			const response = await hominio.api.docs.post({});
+			// Call the method directly
+			const response = await hominio.api.docs.post();
 
 			if (response && response.data && response.data.success) {
 				console.log('Created new document:', response.data.document);
@@ -162,9 +164,7 @@
 
 			// Call the update endpoint with the proper Loro binary update
 			const updateResponse = await hominio.api.docs[selectedDoc.pubKey].update.post({
-				data: {
-					binaryUpdate: Array.from(updateBinary) // Convert Uint8Array to regular array for JSON
-				}
+				binaryUpdate: Array.from(updateBinary) // Convert Uint8Array to regular array for JSON
 			});
 
 			if (updateResponse && updateResponse.data && updateResponse.data.success) {
@@ -184,6 +184,68 @@
 			console.error('Error updating document:', e);
 		} finally {
 			updatingDoc = false;
+		}
+	}
+
+	async function createSnapshot() {
+		try {
+			if (!selectedDoc || creatingSnapshot) return;
+
+			creatingSnapshot = true;
+			snapshotMessage = null;
+
+			// Get the current content data
+			const contentData = contentMap.get(selectedDoc.pubKey);
+			if (!contentData) {
+				throw new Error('Document content not loaded');
+			}
+
+			// Create a new Loro document and import the current snapshot
+			const loroDoc = new LoroDoc();
+			loroDoc.setPeerId(Math.floor(Math.random() * 1000000)); // Random peer ID
+
+			// Use the binary data from the content response if available
+			if (!contentData.binaryData) {
+				throw new Error('Binary data not loaded. Try refreshing the document.');
+			}
+
+			// Convert the binary data and import
+			const binaryArray = new Uint8Array(contentData.binaryData);
+			loroDoc.import(binaryArray);
+
+			// Generate a complete snapshot (mode: 'snapshot')
+			const snapshotBinary = loroDoc.export({ mode: 'snapshot' });
+
+			// Call the snapshot endpoint with the binary snapshot - use proper method syntax
+			const snapshotResponse = await hominio.api.docs[selectedDoc.pubKey].snapshot.post({
+				binarySnapshot: Array.from(snapshotBinary) // Convert Uint8Array to regular array for JSON
+			});
+
+			if (snapshotResponse && snapshotResponse.data) {
+				if (snapshotResponse.data.success) {
+					console.log('Created snapshot:', snapshotResponse.data);
+
+					// Show custom message if one was provided
+					if (snapshotResponse.data.message) {
+						snapshotMessage = snapshotResponse.data.message;
+					} else {
+						snapshotMessage = 'Snapshot created successfully!';
+					}
+
+					// Refresh the document to get the updated data
+					await selectDoc(selectedDoc);
+				} else {
+					throw new Error(snapshotResponse.data.error || 'Failed to create snapshot');
+				}
+			} else {
+				throw new Error('Invalid response from server');
+			}
+		} catch (e) {
+			const err = e as Error;
+			snapshotMessage = 'Error: ' + (err.message || 'Failed to create snapshot');
+			console.error('Error creating snapshot:', e);
+		} finally {
+			creatingSnapshot = false;
 		}
 	}
 
@@ -306,8 +368,9 @@
 						{selectedDoc.description || 'A document using Loro CRDT'}
 					</p>
 
-					<!-- Update Document Button -->
-					<div class="mb-4">
+					<!-- Action Buttons Row -->
+					<div class="mb-4 flex space-x-4">
+						<!-- Update Document Button -->
 						<button
 							class="flex items-center rounded-md bg-green-600 px-4 py-2 text-white transition-colors hover:bg-green-700"
 							on:click={updateDocument}
@@ -331,16 +394,50 @@
 							{/if}
 						</button>
 
-						{#if updateMessage}
-							<div
-								class="mt-2 text-sm {updateMessage.startsWith('Error')
-									? 'text-red-400'
-									: 'text-green-400'}"
-							>
-								{updateMessage}
-							</div>
-						{/if}
+						<!-- Create Snapshot Button -->
+						<button
+							class="flex items-center rounded-md bg-blue-600 px-4 py-2 text-white transition-colors hover:bg-blue-700"
+							on:click={createSnapshot}
+							disabled={creatingSnapshot}
+						>
+							{#if creatingSnapshot}
+								<div
+									class="mr-2 h-4 w-4 animate-spin rounded-full border-t-2 border-b-2 border-white"
+								></div>
+								Creating Snapshot...
+							{:else}
+								<svg class="mr-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="2"
+										d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"
+									/>
+								</svg>
+								Create Snapshot
+							{/if}
+						</button>
 					</div>
+
+					{#if updateMessage}
+						<div
+							class="mt-2 text-sm {updateMessage.startsWith('Error')
+								? 'text-red-400'
+								: 'text-green-400'}"
+						>
+							{updateMessage}
+						</div>
+					{/if}
+
+					{#if snapshotMessage}
+						<div
+							class="mt-2 text-sm {snapshotMessage.startsWith('Error')
+								? 'text-red-400'
+								: 'text-green-400'}"
+						>
+							{snapshotMessage}
+						</div>
+					{/if}
 				</div>
 
 				<!-- 50/50 split content area -->
