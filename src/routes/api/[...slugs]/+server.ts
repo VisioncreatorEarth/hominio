@@ -250,10 +250,45 @@ const app = new Elysia({ prefix: '/api' })
                 .where(eq(docs.ownerId, session.user.id))
                 .orderBy(docs.updatedAt);
         })
-        .post('/', async ({ session, set }) => {
+        .post('/', async ({ body, session, set }) => {
             try {
-                // Use loroService to create a new document
-                const { snapshot, cid, pubKey, jsonState } = await loroService.createDemoDoc();
+                // Parse request body to extract optional snapshot
+                const createDocBody = body as {
+                    binarySnapshot?: number[];
+                    title?: string;
+                    description?: string;
+                };
+
+                let snapshot, cid, pubKey, jsonState;
+
+                // If a snapshot is provided, use it; otherwise create a default one
+                if (createDocBody.binarySnapshot && Array.isArray(createDocBody.binarySnapshot)) {
+                    // Use the provided snapshot
+                    const snapshotData = arrayToUint8Array(createDocBody.binarySnapshot);
+
+                    // Verify this is a valid Loro snapshot
+                    const loroDoc = loroService.createEmptyDoc();
+                    try {
+                        // Import to verify it's valid
+                        loroDoc.import(snapshotData);
+
+                        // Generate state information from the imported doc
+                        snapshot = snapshotData;
+                        cid = await hashService.hashSnapshot(snapshotData);
+                        pubKey = loroService.generatePublicKey();
+                        jsonState = loroDoc.toJSON();
+                    } catch (error) {
+                        set.status = 400;
+                        return {
+                            success: false,
+                            error: 'Invalid Loro snapshot',
+                            details: error instanceof Error ? error.message : 'Unknown error'
+                        };
+                    }
+                } else {
+                    // Create a default document if no snapshot provided
+                    ({ snapshot, cid, pubKey, jsonState } = await loroService.createDemoDoc());
+                }
 
                 // First, store the content
                 const contentEntry: schema.InsertContent = {
@@ -280,8 +315,8 @@ const app = new Elysia({ prefix: '/api' })
                     snapshotCid: cid,
                     updateCids: [],
                     ownerId: session.user.id, // Associate with current user
-                    title: 'New Loro Document',
-                    description: 'Created on ' + new Date().toLocaleString()
+                    title: createDocBody.title || 'New Loro Document',
+                    description: createDocBody.description || 'Created on ' + new Date().toLocaleString()
                 };
 
                 // Save the document

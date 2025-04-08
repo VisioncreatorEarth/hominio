@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { hominio } from '$lib/client/hominio';
 	import { LoroDoc } from 'loro-crdt';
+	import { writable } from 'svelte/store';
 
 	// Define proper types
 	type Doc = {
@@ -43,16 +44,26 @@
 	let updateMessage: string | null = null;
 	let creatingSnapshot = false;
 	let snapshotMessage: string | null = null;
+	let addingTodo = false;
+	let processedDocState: Record<string, unknown> | null = null;
+	let processingState = false;
+
+	// Add a reactive Loro document
+	let activeLoroDoc: LoroDoc | null = null;
+	// Create a Svelte store for the document state
+	const docState = writable<Record<string, unknown> | null>(null);
+	// Keep track of subscriptions
+	let docSubscription: any = null;
 
 	async function fetchDocs() {
 		try {
 			loading = true;
 			error = null;
 
-			// Call the method directly
+			// Correct Eden Treaty syntax
 			const docsResponse = await hominio.api.docs.get();
 
-			if (!docsResponse.data) {
+			if (!docsResponse || !docsResponse.data) {
 				throw new Error('Failed to fetch documents');
 			}
 
@@ -75,22 +86,31 @@
 		try {
 			selectedDoc = doc;
 
-			// Use the correct method call with query param
+			// Use Eden Treaty client instead of fetch
 			const response = await hominio.api.docs[doc.pubKey].get({
 				$query: { includeBinary: 'true' }
 			});
 
-			console.log('Document response:', response);
-
 			if (response && response.data) {
-				if (response.data.content) {
-					// Store content in the contentMap
-					contentMap.set(doc.pubKey, response.data.content as ContentItem);
-				}
+				const responseData = response.data;
+				console.log('Document response:', responseData);
 
-				// If we're using a full response with document included, update the selected doc
-				if (response.data.document) {
-					selectedDoc = response.data.document as Doc;
+				if (responseData) {
+					if (responseData.content) {
+						// Store content in the contentMap
+						contentMap.set(doc.pubKey, responseData.content as ContentItem);
+
+						// Initialize the Loro document with this content
+						await initializeLoroDoc(
+							responseData.content as ContentItem,
+							responseData.document?.updateCids || []
+						);
+					}
+
+					// If we're using a full response with document included, update the selected doc
+					if (responseData.document) {
+						selectedDoc = responseData.document as Doc;
+					}
 				}
 			}
 		} catch (e) {
@@ -104,8 +124,8 @@
 
 			creatingDoc = true;
 
-			// Call the method directly
-			const response = await hominio.api.docs.post();
+			// Use correct Eden Treaty syntax
+			const response = await hominio.api.docs.post({});
 
 			if (response && response.data && response.data.success) {
 				console.log('Created new document:', response.data.document);
@@ -128,7 +148,7 @@
 		}
 	}
 
-	async function updateDocument() {
+	async function updateDocument(updateOperation?: (doc: LoroDoc) => void) {
 		try {
 			if (!selectedDoc || updatingDoc) return;
 
@@ -154,15 +174,19 @@
 			const binaryArray = new Uint8Array(contentData.binaryData);
 			loroDoc.import(binaryArray);
 
-			// Make changes to the document using Loro CRDT operations
-			// Update the title with a timestamp to show changes
-			const newTitle = `Updated ${new Date().toLocaleTimeString()}`;
-			loroDoc.getText('title').insert(0, newTitle);
+			// If an operation is provided, apply it
+			if (updateOperation) {
+				updateOperation(loroDoc);
+			} else {
+				// Default operation: update the title with a timestamp
+				const newTitle = `Updated ${new Date().toLocaleTimeString()}`;
+				loroDoc.getText('title').insert(0, newTitle);
+			}
 
 			// Generate the update binary data using Loro's export function
 			const updateBinary = loroDoc.export({ mode: 'update' });
 
-			// Call the update endpoint with the proper Loro binary update
+			// Correct Eden Treaty syntax for post - pass body directly
 			const updateResponse = await hominio.api.docs[selectedDoc.pubKey].update.post({
 				binaryUpdate: Array.from(updateBinary) // Convert Uint8Array to regular array for JSON
 			});
@@ -216,7 +240,7 @@
 			// Generate a complete snapshot (mode: 'snapshot')
 			const snapshotBinary = loroDoc.export({ mode: 'snapshot' });
 
-			// Call the snapshot endpoint with the binary snapshot - use proper method syntax
+			// Correct Eden Treaty syntax for post - pass body directly
 			const snapshotResponse = await hominio.api.docs[selectedDoc.pubKey].snapshot.post({
 				binarySnapshot: Array.from(snapshotBinary) // Convert Uint8Array to regular array for JSON
 			});
@@ -249,6 +273,197 @@
 		}
 	}
 
+	// Add a function to create a Todo List document
+	async function createTodoListDocument() {
+		try {
+			if (creatingDoc) return; // Prevent multiple clicks
+
+			creatingDoc = true;
+			error = null;
+
+			// Create a new Loro document
+			const loroDoc = new LoroDoc();
+			loroDoc.setPeerId(Math.floor(Math.random() * 1000000)); // Random peer ID
+
+			// Set up the document with todo list structure
+			loroDoc.getText('title').insert(0, 'Todo List');
+			loroDoc.getMap('meta').set('description', 'A simple todo list using Loro CRDT');
+
+			// Initialize an empty todos array
+			loroDoc.getList('todos'); // This creates an empty list named 'todos'
+
+			// Generate snapshot binary data
+			const snapshotBinary = loroDoc.export({ mode: 'snapshot' });
+
+			// Correct Eden Treaty syntax for post - pass body directly
+			const response = await hominio.api.docs.post({
+				binarySnapshot: Array.from(snapshotBinary),
+				title: 'Todo List',
+				description: 'A simple todo list using Loro CRDT'
+			});
+
+			if (response && response.data && response.data.success) {
+				console.log('Created todo list document:', response.data.document);
+
+				// Add the new document to the list
+				const newDoc = response.data.document as Doc;
+				docs = [newDoc, ...docs];
+
+				// Select the new document
+				await selectDoc(newDoc);
+			} else {
+				throw new Error(response?.data?.error || 'Failed to create todo list document');
+			}
+		} catch (e) {
+			const err = e as Error;
+			error = err.message || 'Failed to create todo list document';
+			console.error('Error creating todo list document:', e);
+		} finally {
+			creatingDoc = false;
+		}
+	}
+
+	// Function to initialize or update the Loro document
+	async function initializeLoroDoc(contentItem: ContentItem, updateCids: string[] = []) {
+		// Clean up any existing subscription
+		if (docSubscription) {
+			docSubscription.unsubscribe();
+			docSubscription = null;
+		}
+
+		// Create a new Loro document or reset the existing one
+		if (!activeLoroDoc) {
+			activeLoroDoc = new LoroDoc();
+		}
+
+		// Import the snapshot
+		if (contentItem?.binaryData) {
+			try {
+				// Import the snapshot
+				activeLoroDoc.import(new Uint8Array(contentItem.binaryData));
+				console.log('Imported base snapshot');
+
+				// Update the store with the initial state
+				docState.set(activeLoroDoc.toJSON());
+
+				// Set up subscription for changes
+				docSubscription = activeLoroDoc.subscribe((event) => {
+					console.log('Document changed:', event);
+					// Update the store with the new state
+					docState.set(activeLoroDoc?.toJSON() || null);
+				});
+
+				// Apply any existing updates
+				if (updateCids && updateCids.length > 0) {
+					await applyUpdatesToDocs(updateCids);
+				}
+			} catch (error) {
+				console.error('Error initializing Loro document:', error);
+				docState.set({ error: 'Failed to initialize document' });
+			}
+		}
+	}
+
+	// Function to apply updates to the active Loro document
+	async function applyUpdatesToDocs(updateCids: string[]) {
+		if (!activeLoroDoc) return;
+
+		for (const updateCid of updateCids) {
+			try {
+				// Correct Eden Treaty syntax
+				const updateResp = await hominio.api.content[updateCid].binary.get();
+
+				if (updateResp && updateResp.data && updateResp.data.binaryData) {
+					// Apply the update locally to our active document
+					activeLoroDoc.import(new Uint8Array(updateResp.data.binaryData));
+					console.log(`Applied update: ${updateCid}`);
+				} else {
+					console.warn(`Update ${updateCid} missing binary data`);
+				}
+			} catch (error) {
+				console.warn(`Error applying update ${updateCid}:`, error);
+			}
+		}
+	}
+
+	// Function to add a todo to the Loro document
+	function addTodoToDoc(text: string) {
+		if (!activeLoroDoc) return false;
+
+		try {
+			// Try to get the todos list
+			const todos = activeLoroDoc.getList('todos');
+
+			// Add the new todo
+			todos.push({
+				id: crypto.randomUUID(),
+				text,
+				completed: false,
+				createdAt: new Date().toISOString()
+			});
+
+			return true;
+		} catch (e) {
+			console.error('Error adding todo to document:', e);
+			return false;
+		}
+	}
+
+	// Update the addRandomTodo function to use Eden Treaty
+	async function addRandomTodo() {
+		if (addingTodo || !activeLoroDoc || !selectedDoc) return;
+
+		addingTodo = true;
+
+		try {
+			// Generate a random todo
+			const todoText = `Task ${Math.floor(Math.random() * 1000)}: ${
+				[
+					'Buy groceries',
+					'Call mom',
+					'Fix the bug',
+					'Write documentation',
+					'Go for a run',
+					'Read a book',
+					'Learn a new language',
+					'Cook dinner'
+				][Math.floor(Math.random() * 8)]
+			}`;
+
+			// Add the todo directly to the active document - LOCAL UPDATE
+			const added = addTodoToDoc(todoText);
+
+			if (added) {
+				// Export the update
+				const updateBinary = activeLoroDoc.export({ mode: 'update' });
+
+				// Send the update to the server - REMOTE PERSISTENCE
+				// Correct Eden Treaty syntax - pass body directly
+				const updateResponse = await hominio.api.docs[selectedDoc.pubKey].update.post({
+					binaryUpdate: Array.from(updateBinary)
+				});
+
+				if (updateResponse && updateResponse.data && updateResponse.data.success) {
+					console.log('Server update response:', updateResponse.data);
+
+					// We don't need to refresh the document here because
+					// we already updated the activeLoroDoc and the UI will update reactively
+					updateMessage = 'Todo added successfully!';
+				} else {
+					throw new Error(`Server error: ${updateResponse?.data?.error || 'Unknown server error'}`);
+				}
+			} else {
+				throw new Error('Failed to add todo to document');
+			}
+		} catch (e) {
+			const err = e as Error;
+			updateMessage = 'Error: ' + (err.message || 'Failed to add todo');
+			console.error('Error adding todo:', e);
+		} finally {
+			addingTodo = false;
+		}
+	}
+
 	// Process data to display metadata nicely
 	function processContentData(content: ContentItem): Record<string, unknown> {
 		if (!content || !content.metadata) return {};
@@ -257,8 +472,67 @@
 		return { ...content.metadata };
 	}
 
+	// Function to process the full document state
+	async function processDocumentState() {
+		if (!selectedDoc || !contentMap.has(selectedDoc.pubKey) || processingState) return;
+
+		processingState = true;
+		processedDocState = null;
+
+		try {
+			const contentItem = contentMap.get(selectedDoc.pubKey);
+			if (!contentItem?.binaryData) {
+				throw new Error('No binary data available for processing');
+			}
+
+			// Create and initialize the Loro document with the snapshot
+			const loroDoc = new LoroDoc();
+			loroDoc.import(new Uint8Array(contentItem.binaryData));
+
+			// If there are updates, fetch and apply them
+			if (selectedDoc.updateCids && selectedDoc.updateCids.length > 0) {
+				for (const updateCid of selectedDoc.updateCids) {
+					try {
+						// Use Eden Treaty client with empty params
+						const updateResp = await fetch(`/api/content/${updateCid}/binary`);
+						if (!updateResp.ok) {
+							console.warn(`Failed to fetch update ${updateCid}`);
+							continue;
+						}
+
+						const updateData = await updateResp.json();
+						if (updateData && updateData.binaryData) {
+							// Apply the update
+							loroDoc.import(new Uint8Array(updateData.binaryData));
+							console.log(`Applied update: ${updateCid}`);
+						}
+					} catch (error) {
+						console.warn(`Error applying update ${updateCid}:`, error);
+					}
+				}
+			}
+
+			// Get the final document state
+			processedDocState = loroDoc.toJSON();
+			console.log('Processed document state:', processedDocState);
+		} catch (error) {
+			console.error('Error processing document state:', error);
+			processedDocState = { error: 'Failed to process document state' };
+		} finally {
+			processingState = false;
+		}
+	}
+
 	onMount(() => {
 		fetchDocs();
+	});
+
+	// Clean up subscription when component is destroyed
+	onDestroy(() => {
+		if (docSubscription) {
+			docSubscription.unsubscribe();
+			docSubscription = null;
+		}
 	});
 </script>
 
@@ -273,28 +547,53 @@
 
 			<!-- Create New Document Button -->
 			<div class="border-b border-slate-700 p-4">
-				<button
-					class="flex w-full items-center justify-center rounded-md bg-blue-600 py-2 text-white transition-colors hover:bg-blue-700"
-					on:click={createNewDocument}
-					disabled={creatingDoc}
-				>
-					{#if creatingDoc}
-						<div
-							class="mr-2 h-5 w-5 animate-spin rounded-full border-t-2 border-b-2 border-white"
-						></div>
-						Creating...
-					{:else}
-						<svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-							<path
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								stroke-width="2"
-								d="M12 4v16m8-8H4"
-							/>
-						</svg>
-						New Document
-					{/if}
-				</button>
+				<div class="flex flex-col space-y-2">
+					<button
+						class="flex w-full items-center justify-center rounded-md bg-blue-600 py-2 text-white transition-colors hover:bg-blue-700"
+						on:click={createNewDocument}
+						disabled={creatingDoc}
+					>
+						{#if creatingDoc}
+							<div
+								class="mr-2 h-5 w-5 animate-spin rounded-full border-t-2 border-b-2 border-white"
+							></div>
+							Creating...
+						{:else}
+							<svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M12 4v16m8-8H4"
+								/>
+							</svg>
+							New Document
+						{/if}
+					</button>
+
+					<button
+						class="flex w-full items-center justify-center rounded-md bg-emerald-600 py-2 text-white transition-colors hover:bg-emerald-700"
+						on:click={createTodoListDocument}
+						disabled={creatingDoc}
+					>
+						{#if creatingDoc}
+							<div
+								class="mr-2 h-5 w-5 animate-spin rounded-full border-t-2 border-b-2 border-white"
+							></div>
+							Creating...
+						{:else}
+							<svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
+								/>
+							</svg>
+							New Todo List
+						{/if}
+					</button>
+				</div>
 			</div>
 
 			{#if loading && docs.length === 0}
@@ -373,7 +672,7 @@
 						<!-- Update Document Button -->
 						<button
 							class="flex items-center rounded-md bg-green-600 px-4 py-2 text-white transition-colors hover:bg-green-700"
-							on:click={updateDocument}
+							on:click={() => updateDocument()}
 							disabled={updatingDoc}
 						>
 							{#if updatingDoc}
@@ -390,7 +689,7 @@
 										d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
 									/>
 								</svg>
-								Update Document
+								Update Title
 							{/if}
 						</button>
 
@@ -511,9 +810,86 @@
 									>
 								</div>
 
-								<pre class="font-mono whitespace-pre-wrap text-slate-200">
+								<div class="mb-4">
+									<span class="font-medium">Updates:</span>
+									<span class="ml-2">{selectedDoc.updateCids?.length || 0}</span>
+
+									{#if selectedDoc.updateCids?.length > 0}
+										<button
+											class="ml-4 rounded bg-blue-600 px-2 py-1 text-sm transition-colors hover:bg-blue-700"
+											on:click={processDocumentState}
+											disabled={processingState}
+										>
+											{#if processingState}
+												<div
+													class="inline-block h-3 w-3 animate-spin rounded-full border-t-2 border-b-2 border-white"
+												></div>
+												Processing...
+											{:else}
+												Refresh State
+											{/if}
+										</button>
+									{/if}
+								</div>
+
+								<!-- Add Todo Button for Todo List docs - always visible -->
+								<div class="mb-4">
+									<button
+										class="flex items-center rounded-md bg-purple-600 px-4 py-2 text-white transition-colors hover:bg-purple-700"
+										on:click={addRandomTodo}
+										disabled={addingTodo || updatingDoc}
+									>
+										{#if addingTodo}
+											<div
+												class="mr-2 h-4 w-4 animate-spin rounded-full border-t-2 border-b-2 border-white"
+											></div>
+											Adding Todo...
+										{:else}
+											<svg
+												class="mr-2 h-4 w-4"
+												fill="none"
+												stroke="currentColor"
+												viewBox="0 0 24 24"
+											>
+												<path
+													stroke-linecap="round"
+													stroke-linejoin="round"
+													stroke-width="2"
+													d="M12 6v6m0 0v6m0-6h6m-6 0H6"
+												/>
+											</svg>
+											Add Random Todo
+										{/if}
+									</button>
+								</div>
+
+								<!-- Document state tabs -->
+								<div class="mb-4 border-b border-slate-700">
+									<div class="flex space-x-4">
+										<h3 class="font-bold text-blue-400">Current Document State</h3>
+									</div>
+								</div>
+
+								<!-- Display the reactive document state -->
+								{#if $docState}
+									<div class="mb-4 rounded-md bg-slate-800 p-4">
+										<div class="mb-2 flex items-center justify-between">
+											<h3 class="text-lg font-semibold text-green-400">Live Document State</h3>
+											<span class="text-sm text-slate-400"> Updates applied in real-time </span>
+										</div>
+										<pre class="font-mono whitespace-pre-wrap text-slate-200">
+{JSON.stringify($docState, null, 2)}
+										</pre>
+									</div>
+								{/if}
+
+								<!-- Content Metadata Section -->
+								<div class="mb-4">
+									<h3 class="mb-2 text-lg font-semibold text-slate-300">Content Metadata</h3>
+									<pre class="font-mono whitespace-pre-wrap text-slate-200">
 {JSON.stringify(processContentData(contentMap.get(selectedDoc.pubKey) as ContentItem), null, 2)}
-								</pre>
+									</pre>
+								</div>
 							</div>
 						{:else}
 							<div class="flex items-center">
