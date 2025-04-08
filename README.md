@@ -110,6 +110,66 @@ bun db:generate
 bun db:push
 ```
 
+## Local-First Architecture
+
+Hominio implements a local-first approach for document management, providing offline capabilities with seamless server synchronization:
+
+### Core Components
+
+1. **Document Service (`src/lib/KERNEL/doc-state.ts`)**
+   - Manages local document state using IndexedDB
+   - Provides Svelte stores for reactive UI updates
+   - Uses Loro CRDT as the source of truth for document content
+   - Handles document creation and selection
+
+2. **Sync Service (`src/lib/KERNEL/sync-service.ts`)**
+   - Automatically synchronizes with the server on application load
+   - Pulls server documents and stores them locally
+   - Handles content binary data (snapshots and updates)
+   - Provides sync status information via Svelte stores
+
+### Data Flow
+
+1. **Server to Local**
+   - Server is considered the source of truth for document metadata
+   - On initialization, all server documents are fetched and stored locally
+   - Server documents override local documents with the same ID
+   - Both document metadata and binary content are synchronized
+
+2. **Local to Server** (future implementation)
+   - Local documents are created with temporary IDs
+   - Updates are applied locally first, then queued for server sync
+   - Conflict resolution is handled by Loro CRDT
+
+### Storage Schema
+
+Our IndexedDB database mirrors the server schema for consistency:
+
+1. **Docs Store**
+   - Stores document metadata (title, description, owner, timestamps, etc.)
+   - Keyed by `pubKey` for efficient document lookup
+   - Includes references to snapshot and update CIDs
+
+2. **Content Store**
+   - Content-addressable storage using CIDs (Content IDs)
+   - Stores binary data for both snapshots and updates
+   - Includes metadata about content type and associated document
+
+### Visual Indicators
+
+The UI provides clear status information:
+- Sync status indicator shows when data is being synchronized
+- "Local Only" badges for documents not yet synced to server
+- Local CID indicators for content with temporary IDs
+- Sync progress counter during synchronization
+
+### Future Enhancements
+
+- Bi-directional sync (pushing local changes to server)
+- Automatic conflict resolution for concurrent edits
+- Offline editing with background synchronization
+- Selective sync for large documents
+
 ## Architecture
 
 The application follows a modern full-stack architecture:
@@ -119,7 +179,7 @@ The application follows a modern full-stack architecture:
    - Real-time updates via Loro CRDT
    - Type-safe API calls
    - Responsive UI with Tailwind
-   - PG-Lite for offline-capable storage
+   - IndexedDB for local-first storage
    - Better Auth for authentication UI
 
 2. **API Layer** (ElysiaJS)
@@ -144,6 +204,7 @@ The application follows a modern full-stack architecture:
    - Conflict-free replicated data types (CRDT)
    - Real-time synchronization
    - Offline support
+   - Local-first document management
 
 ## Contributing
 
