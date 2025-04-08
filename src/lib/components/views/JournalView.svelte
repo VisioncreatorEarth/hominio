@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { getLoroAPIInstance } from '$lib/docs/loroAPI';
+	import { getLoroAPIInstance } from '$lib/KERNEL/loroAPI';
 	import type { JournalEntry } from '$lib/docs/schemas/journalEntry';
 	import { onMount } from 'svelte';
 	import { writable, type Writable } from 'svelte/store';

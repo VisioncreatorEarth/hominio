@@ -1,4 +1,4 @@
-import { getLoroAPIInstance } from '$lib/docs/loroAPI';
+import { getLoroAPIInstance } from '$lib/KERNEL/loroAPI';
 import type { TodoItem } from '$lib/docs/schemas/todo';
 import { logToolActivity } from '$lib/ultravox/stores';
 import type { ToolParameters } from '$lib/ultravox/types';

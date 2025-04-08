@@ -91,8 +91,10 @@ bun db:generate
 # View and manage data with Drizzle Studio
 bun db:studio
 
-# Drop all tables (use with caution!)
-bun db:drop
+# (USE WITH CAUTION!)
+# Reset database (drops all tables, pushes schema, seeds data)
+# (USE WITH CAUTION!)
+bun db:reset
 ```
 
 ### Working with Migrations

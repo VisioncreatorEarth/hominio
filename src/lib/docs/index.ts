@@ -4,7 +4,7 @@
  * This module provides a unified API for working with Loro documents and collections.
  */
 
-import { getLoroAPIInstance, type LoroAPI } from './loroAPI';
+import { getLoroAPIInstance, type LoroAPI } from '../KERNEL/loroAPI';
 
 // Get the instance when needed, not at module load
 const getLoroAPI = (): LoroAPI => getLoroAPIInstance();

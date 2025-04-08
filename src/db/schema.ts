@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, jsonb, timestamp, pgEnum } from 'drizzle-orm/pg-core';
+import { pgTable, text, jsonb, timestamp, pgEnum } from 'drizzle-orm/pg-core';
 
 // Type enum for content records (snapshot or update)
 export const contentTypeEnum = pgEnum('content_type', ['snapshot', 'update']);
@@ -14,8 +14,8 @@ export const docs = pgTable('docs', {
     // Array of update CIDs (as native PostgreSQL array)
     updateCids: text('update_cids').array().default([]),
 
-    // Access control - owner's user ID
-    ownerId: uuid('owner_id').notNull(),
+    // Access control - owner's user ID (text to match BetterAuth's ID format)
+    ownerId: text('owner_id').notNull(),
 
     // Document metadata
     title: text('title').notNull(),

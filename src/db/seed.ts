@@ -1,7 +1,9 @@
 import { db } from './index';
-import { randomBytes } from 'crypto';
 import * as schema from './schema';
 import { loroService } from '$lib/KERNEL/loro-service';
+
+// Sample user ID for seed documents - use a real user ID from your BetterAuth database
+const SAMPLE_USER_ID = "0DaaHRf7Khtw3UcBxcofmnTM4V27Dasd"; // Replace with a real user ID from your db
 
 // Seed function to create a random Loro doc
 export async function seedRandomLoroDoc() {
@@ -31,7 +33,7 @@ export async function seedRandomLoroDoc() {
             pubKey,
             snapshotCid: cid,
             updateCids: [],
-            ownerId: randomBytes(16).toString('hex'), // Fake UUID for now
+            ownerId: SAMPLE_USER_ID, // Use the sample user ID for ownership
             title: 'Example Loro Document',
             description: 'A test document using Loro CRDT'
         };
@@ -53,6 +55,7 @@ export async function seedRandomLoroDoc() {
     }
 }
 
+// Self-executing code for when file is run directly
 console.log('🌱 Seeding database with Loro documents...');
 
 seedRandomLoroDoc()
@@ -60,7 +63,7 @@ seedRandomLoroDoc()
         console.log('✅ Successfully created Loro document:');
         console.log('  - Public Key:', result.doc.pubKey);
         console.log('  - Snapshot CID:', result.doc.snapshotCid);
-        process.exit(0);
+        console.log('  - Owner ID:', result.doc.ownerId);
     })
     .catch((error) => {
         console.error('❌ Error seeding database:', error);

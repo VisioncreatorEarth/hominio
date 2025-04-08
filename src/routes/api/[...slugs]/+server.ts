@@ -31,7 +31,7 @@ type ContentResponse = {
 
 // Combined document and content response
 type DocWithContentResponse = {
-    document: any;
+    document: typeof docs.$inferSelect;
     content?: ContentResponse;
 };
 
@@ -222,11 +222,13 @@ const app = new Elysia({ prefix: '/api' })
     // Docs routes
     .group('/docs', app => app
         .derive(requireAuth)
-        .get('/', async () => {
-            // Get all docs, ordered by updated date
-            return await db.select().from(docs).orderBy(docs.updatedAt);
+        .get('/', async ({ session }) => {
+            // Get only docs owned by the current user
+            return await db.select().from(docs)
+                .where(eq(docs.ownerId, session.user.id))
+                .orderBy(docs.updatedAt);
         })
-        .get('/:pubKey', async ({ params: { pubKey }, set }) => {
+        .get('/:pubKey', async ({ params: { pubKey }, session, set }) => {
             try {
                 // Get doc by pubKey
                 const doc = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
@@ -236,6 +238,12 @@ const app = new Elysia({ prefix: '/api' })
                 }
 
                 const document = doc[0];
+
+                // Verify the user owns this document
+                if (document.ownerId !== session.user.id) {
+                    set.status = 403;
+                    return { error: 'Not authorized to access this document' };
+                }
 
                 // Create the response including document data
                 const response: DocWithContentResponse = {

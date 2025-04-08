@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { getLoroAPIInstance } from '$lib/docs/loroAPI';
+	import { getLoroAPIInstance } from '$lib/KERNEL/loroAPI';
 	import type { TodoItem } from '$lib/docs/schemas/todo';
 	import { filterState } from '$lib/tools/filterTodos/function';
 	import { getAllUniqueTags } from '$lib/tools/filterTodos/function';
