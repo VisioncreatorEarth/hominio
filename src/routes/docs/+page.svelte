@@ -18,9 +18,12 @@
 	type ContentItem = {
 		cid: string;
 		type: string;
-		data: Record<string, unknown>;
+		metadata?: Record<string, unknown>;
+		hasBinaryData: boolean;
+		contentLength: number;
 		verified: boolean;
 		createdAt: string;
+		binaryData?: number[]; // Add binary data field
 	};
 
 	// New combined response type
@@ -70,8 +73,10 @@
 		try {
 			selectedDoc = doc;
 
-			// Use the correct Eden Treaty syntax - with empty object parameter
-			const response = await hominio.api.docs[doc.pubKey].get({});
+			// Use the Eden Treaty client with includeBinary parameter
+			const response = await hominio.api.docs[doc.pubKey].get({
+				$query: { includeBinary: 'true' }
+			});
 
 			console.log('Document response:', response);
 
@@ -134,20 +139,17 @@
 				throw new Error('Document content not loaded');
 			}
 
-			// Get the binary data from content
-			const itemData = contentData.data as Record<string, unknown>;
-			const binaryData = itemData.binary;
-
-			if (!Array.isArray(binaryData)) {
-				throw new Error('Invalid document binary data');
-			}
-
 			// Create a new Loro document and import the current snapshot
 			const loroDoc = new LoroDoc();
 			loroDoc.setPeerId(Math.floor(Math.random() * 1000000)); // Random peer ID
 
-			// Convert the array back to Uint8Array and import
-			const binaryArray = new Uint8Array(binaryData);
+			// Use the binary data from the content response if available
+			if (!contentData.binaryData) {
+				throw new Error('Binary data not loaded. Try refreshing the document.');
+			}
+
+			// Convert the binary data and import
+			const binaryArray = new Uint8Array(contentData.binaryData);
 			loroDoc.import(binaryArray);
 
 			// Make changes to the document using Loro CRDT operations
@@ -159,12 +161,14 @@
 			const updateBinary = loroDoc.export({ mode: 'update' });
 
 			// Call the update endpoint with the proper Loro binary update
-			const response = await hominio.api.docs[selectedDoc.pubKey].update.post({
-				binaryUpdate: Array.from(updateBinary) // Convert Uint8Array to regular array for JSON
+			const updateResponse = await hominio.api.docs[selectedDoc.pubKey].update.post({
+				data: {
+					binaryUpdate: Array.from(updateBinary) // Convert Uint8Array to regular array for JSON
+				}
 			});
 
-			if (response && response.data && response.data.success) {
-				console.log('Updated document:', response.data);
+			if (updateResponse && updateResponse.data && updateResponse.data.success) {
+				console.log('Updated document:', updateResponse.data);
 
 				// Refresh the document to get the updated data
 				await selectDoc(selectedDoc);
@@ -172,7 +176,7 @@
 				// Show success message
 				updateMessage = 'Document updated successfully!';
 			} else {
-				throw new Error(response?.data?.error || 'Failed to update document');
+				throw new Error(updateResponse?.data?.error || 'Failed to update document');
 			}
 		} catch (e) {
 			const err = e as Error;
@@ -183,15 +187,12 @@
 		}
 	}
 
-	// Process data to remove binary property
-	function processContentData(data: Record<string, unknown>): Record<string, unknown> {
-		if (!data) return {};
+	// Process data to display metadata nicely
+	function processContentData(content: ContentItem): Record<string, unknown> {
+		if (!content || !content.metadata) return {};
 
-		const processed = { ...data };
-		if (processed.binary) {
-			delete processed.binary;
-		}
-		return processed;
+		// Return a copy of the metadata for display
+		return { ...content.metadata };
 	}
 
 	onMount(() => {
@@ -406,14 +407,15 @@
 									<div class="mb-4 text-red-400">✗ Content not verified</div>
 								{/if}
 
+								<div class="mb-4">
+									<span class="font-medium">Binary size:</span>
+									<span class="ml-2"
+										>{contentMap.get(selectedDoc.pubKey)?.contentLength || 0} bytes</span
+									>
+								</div>
+
 								<pre class="font-mono whitespace-pre-wrap text-slate-200">
-{JSON.stringify(
-										processContentData(
-											(contentMap.get(selectedDoc.pubKey)?.data as Record<string, unknown>) || {}
-										),
-										null,
-										2
-									)}
+{JSON.stringify(processContentData(contentMap.get(selectedDoc.pubKey) as ContentItem), null, 2)}
 								</pre>
 							</div>
 						{:else}

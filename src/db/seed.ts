@@ -11,12 +11,14 @@ export async function seedRandomLoroDoc() {
         // Use the LoroService to create a demo document
         const { snapshot, cid, pubKey, jsonState } = await loroService.createDemoDoc();
 
-        // First, store the content
+        // First, store the content with BYTEA data
         const contentEntry: schema.InsertContent = {
             cid,
             type: 'snapshot',
-            data: {
-                binary: Array.from(snapshot), // Convert Uint8Array to regular array for JSON storage
+            // Store binary data directly as Buffer
+            data: Buffer.from(snapshot),
+            // Store metadata separately as JSON
+            metadata: {
                 docState: jsonState // Store the JSON representation for easier debugging
             }
         };

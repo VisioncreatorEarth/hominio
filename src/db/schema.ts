@@ -1,4 +1,23 @@
-import { pgTable, text, jsonb, timestamp, pgEnum } from 'drizzle-orm/pg-core';
+import { pgTable, text, jsonb, timestamp, pgEnum, customType } from 'drizzle-orm/pg-core';
+
+// Define custom BYTEA type
+const bytea = customType<{ data: Buffer }>({
+    dataType() {
+        return 'bytea';
+    },
+    toDriver(value: unknown): Buffer {
+        if (Buffer.isBuffer(value)) return value;
+        if (value instanceof Uint8Array) return Buffer.from(value);
+        // Handle arrays of numbers
+        if (Array.isArray(value)) return Buffer.from(value);
+        // Default fallback for other cases
+        return Buffer.from([]);
+    },
+    fromDriver(value: unknown): Buffer {
+        if (Buffer.isBuffer(value)) return value;
+        return Buffer.from([]);
+    }
+});
 
 // Type enum for content records (snapshot or update)
 export const contentTypeEnum = pgEnum('content_type', ['snapshot', 'update']);
@@ -34,8 +53,11 @@ export const content = pgTable('content', {
     // Type of content (snapshot or update)
     type: contentTypeEnum('type').notNull(),
 
-    // Binary content (loro-doc export)
-    data: jsonb('data').notNull(),
+    // Native binary data storage using PostgreSQL BYTEA type
+    data: bytea('data').notNull(),
+
+    // Optional metadata as JSON
+    metadata: jsonb('metadata'),
 
     // Timestamp when this content was created
     createdAt: timestamp('created_at').notNull().defaultNow()

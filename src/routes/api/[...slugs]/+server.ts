@@ -26,9 +26,12 @@ function arrayToUint8Array(arr: number[]): Uint8Array {
 type ContentResponse = {
     cid: string;
     type: string;
-    data: unknown;
+    metadata?: Record<string, unknown>;
+    hasBinaryData: boolean;
+    contentLength: number;
     verified: boolean;
     createdAt: string;
+    binaryData?: number[]; // Optional binary data as an array of numbers
 };
 
 // Combined document and content response
@@ -75,20 +78,17 @@ async function getContentByCid(cid: string): Promise<ContentResponse | null> {
 
         const item = contentItem[0];
 
-        // Get binary data from content
-        const itemData = item.data as Record<string, unknown>;
-        const binaryData = itemData.binary;
+        // Get binary data and metadata
+        const binaryData = item.data as Buffer;
+        const metadata = item.metadata as Record<string, unknown> || {};
 
         // Verify content integrity
         let verified = false;
 
-        if (Array.isArray(binaryData)) {
+        if (binaryData && binaryData.length > 0) {
             try {
-                // Convert array back to Uint8Array
-                const contentBytes = arrayToUint8Array(binaryData);
-
-                // Verify hash matches CID
-                verified = await hashService.verifySnapshot(contentBytes, cid);
+                // Verify hash matches CID using binary data directly
+                verified = await hashService.verifySnapshot(binaryData, cid);
             } catch (err) {
                 console.error('Error verifying content hash:', err);
             }
@@ -98,12 +98,32 @@ async function getContentByCid(cid: string): Promise<ContentResponse | null> {
         return {
             cid: item.cid,
             type: item.type,
-            data: item.data,
-            verified: verified,
+            metadata,
+            hasBinaryData: binaryData.length > 0,
+            contentLength: binaryData.length,
+            verified,
             createdAt: item.createdAt.toISOString()
         };
     } catch (error) {
         console.error('Error retrieving content:', error);
+        return null;
+    }
+}
+
+// Function to get raw binary data by CID
+async function getBinaryContentByCid(cid: string): Promise<Buffer | null> {
+    try {
+        // Get content by CID
+        const contentItem = await db.select().from(content).where(eq(content.cid, cid));
+
+        if (!contentItem.length) {
+            return null;
+        }
+
+        // Return raw binary data
+        return contentItem[0].data as Buffer;
+    } catch (error) {
+        console.error('Error retrieving binary content:', error);
         return null;
     }
 }
@@ -239,9 +259,11 @@ const app = new Elysia({ prefix: '/api' })
                 const contentEntry: schema.InsertContent = {
                     cid,
                     type: 'snapshot',
-                    data: {
-                        binary: Array.from(snapshot), // Convert Uint8Array to regular array for JSON storage
-                        docState: jsonState // Store the JSON representation for easier debugging
+                    // Store binary data directly
+                    data: Buffer.from(snapshot),
+                    // Store metadata separately
+                    metadata: {
+                        docState: jsonState
                     }
                 };
 
@@ -284,7 +306,7 @@ const app = new Elysia({ prefix: '/api' })
                 };
             }
         })
-        .get('/:pubKey', async ({ params: { pubKey }, session, set }) => {
+        .get('/:pubKey', async ({ params: { pubKey }, query, session, set }) => {
             try {
                 // Get doc by pubKey
                 const doc = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
@@ -311,6 +333,17 @@ const app = new Elysia({ prefix: '/api' })
                     const contentData = await getContentByCid(document.snapshotCid);
                     if (contentData) {
                         response.content = contentData;
+
+                        // Check if binary data was requested using includeBinary query param
+                        const includeBinary = query?.includeBinary === "true";
+                        if (includeBinary) {
+                            // Get the binary data directly
+                            const binaryData = await getBinaryContentByCid(document.snapshotCid);
+                            if (binaryData) {
+                                // Add binary data to the response
+                                response.content.binaryData = Array.from(binaryData);
+                            }
+                        }
                     }
                 }
 
@@ -342,18 +375,19 @@ const app = new Elysia({ prefix: '/api' })
                     return { error: 'Not authorized to update this document' };
                 }
 
-                // Parse the update data from request body
-                const updateData = body as {
-                    binaryUpdate: number[]; // Array of bytes as numbers
-                };
+                // Parse the update data from request body, handling both direct and wrapped formats
+                const updateBody = body as { data?: { binaryUpdate: number[] }; binaryUpdate?: number[] };
 
-                if (!updateData.binaryUpdate || !Array.isArray(updateData.binaryUpdate)) {
+                // Extract binaryUpdate from either format
+                const binaryUpdate = updateBody.data?.binaryUpdate || updateBody.binaryUpdate;
+
+                if (!binaryUpdate || !Array.isArray(binaryUpdate)) {
                     set.status = 400;
                     return { error: 'Invalid update data. Binary update required.' };
                 }
 
                 // Convert the array to Uint8Array
-                const binaryUpdate = arrayToUint8Array(updateData.binaryUpdate);
+                const binaryUpdateArray = arrayToUint8Array(binaryUpdate);
 
                 // Get current document content
                 const contentItem = await db.select().from(content).where(eq(content.cid, document.snapshotCid));
@@ -364,30 +398,26 @@ const app = new Elysia({ prefix: '/api' })
 
                 // Load the document from snapshot
                 const loroDoc = loroService.createEmptyDoc();
-                const itemData = contentItem[0].data as Record<string, unknown>;
-                const binaryData = itemData.binary;
+                const snapshotData = contentItem[0].data as Buffer;
 
-                if (!Array.isArray(binaryData)) {
-                    set.status = 500;
-                    return { error: 'Invalid document binary data' };
-                }
-
-                // Import the snapshot to the document
-                loroDoc.import(arrayToUint8Array(binaryData));
+                // Import the snapshot to the document directly from buffer
+                loroDoc.import(new Uint8Array(snapshotData));
 
                 // Apply the update
-                loroService.applyUpdate(loroDoc, binaryUpdate);
+                loroService.applyUpdate(loroDoc, binaryUpdateArray);
 
                 // Get update CID
                 const { update, cid } = await loroService.createUpdate(loroDoc);
 
-                // Store the update content
+                // Store the update content with metadata
                 const updateContentEntry: schema.InsertContent = {
                     cid,
                     type: 'update',
-                    data: {
-                        binary: Array.from(update), // Convert to regular array for storage
-                        appliedTo: document.snapshotCid // Store which snapshot this update applies to
+                    // Store binary data directly
+                    data: Buffer.from(update),
+                    // Store metadata separately
+                    metadata: {
+                        appliedTo: document.snapshotCid
                     }
                 };
 
@@ -448,6 +478,30 @@ const app = new Elysia({ prefix: '/api' })
                 set.status = 500;
                 return {
                     error: 'Failed to retrieve content',
+                    details: error instanceof Error ? error.message : 'Unknown error'
+                };
+            }
+        })
+        // New route for getting binary data
+        .get('/:cid/binary', async ({ params: { cid }, set }) => {
+            try {
+                const binaryData = await getBinaryContentByCid(cid);
+
+                if (!binaryData) {
+                    set.status = 404;
+                    return { error: 'Binary content not found' };
+                }
+
+                // Return in a format that can be transported over JSON
+                return {
+                    cid,
+                    binaryData: Array.from(binaryData) // Convert to array for transport
+                };
+            } catch (error) {
+                console.error('Error retrieving binary content:', error);
+                set.status = 500;
+                return {
+                    error: 'Failed to retrieve binary content',
                     details: error instanceof Error ? error.message : 'Unknown error'
                 };
             }
