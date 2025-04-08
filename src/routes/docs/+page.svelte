@@ -1,417 +1,89 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
-	import { hominio } from '$lib/client/hominio';
-	import { DocState, type UpdateSource, createDocState } from '$lib/KERNEL/doc-state';
-	import { TodoHelper, type TodoDocument, type TodoItem } from '$lib/todo/todo-helpers';
-	import { LoroDoc } from 'loro-crdt';
+	import { onDestroy } from 'svelte';
+	import { documentService } from '$lib/KERNEL/doc-state';
+	import { TodoHelper } from '$lib/todo/todo-helpers';
 
-	// Define proper types
-	type Doc = {
-		pubKey: string;
-		title: string;
-		snapshotCid: string;
-		updateCids: string[];
-		ownerId: string;
-		createdAt: string;
-		updatedAt: string;
-		description?: string;
-	};
+	// Subscribe to all stores from the DocumentService
+	const docs = documentService.docs;
+	const selectedDoc = documentService.selectedDoc;
+	const contentMap = documentService.contentMap;
+	const status = documentService.status;
+	const error = documentService.error;
+	const updateMessage = documentService.updateMessage;
+	const snapshotMessage = documentService.snapshotMessage;
+	const docState = documentService.docState;
 
-	type ContentItem = {
-		cid: string;
-		type: string;
-		metadata?: Record<string, unknown>;
-		hasBinaryData: boolean;
-		contentLength: number;
-		verified: boolean;
-		createdAt: string;
-		binaryData?: number[]; // Add binary data field
-	};
-
-	// New combined response type
-	type DocWithContent = {
-		document: Doc;
-		content?: ContentItem;
-	};
-
-	let docs: Doc[] = [];
-	let contentMap = new Map<string, ContentItem>();
-	let loading = true;
-	let error: string | null = null;
-	let selectedDoc: Doc | null = null;
-	let autoSelectFirstDoc = false; // Set to false to prevent auto-selection
-	let creatingDoc = false;
-	let updatingDoc = false;
-	let updateMessage: string | null = null;
-	let creatingSnapshot = false;
-	let snapshotMessage: string | null = null;
-	let addingTodo = false;
-	let processingState = false;
-
-	// Initialize document state manager
-	let docState: DocState<TodoDocument> | null = null;
-
-	async function fetchDocs() {
-		try {
-			loading = true;
-			error = null;
-
-			// Correct Eden Treaty syntax
-			const docsResponse = await hominio.api.docs.get();
-
-			if (!docsResponse || !docsResponse.data) {
-				throw new Error('Failed to fetch documents');
-			}
-
-			docs = docsResponse.data as Doc[];
-
-			// Only select first doc if auto-select is enabled
-			if (docs.length > 0 && autoSelectFirstDoc && !selectedDoc) {
-				selectedDoc = docs[0];
-			}
-		} catch (e) {
-			const err = e as Error;
-			error = err.message || 'Failed to fetch documents';
-			console.error('Error fetching docs:', e);
-		} finally {
-			loading = false;
-		}
+	// Handle selecting a document
+	function handleSelectDoc(doc: any) {
+		documentService.selectDoc(doc);
 	}
 
-	async function selectDoc(doc: Doc) {
-		try {
-			selectedDoc = doc;
-
-			// Use Eden Treaty client instead of fetch
-			const response = await hominio.api.docs[doc.pubKey].get({
-				$query: { includeBinary: 'true' }
-			});
-
-			if (response && response.data) {
-				const responseData = response.data;
-				console.log('Document response:', responseData);
-
-				if (responseData) {
-					if (responseData.content) {
-						// Store content in the contentMap
-						contentMap.set(doc.pubKey, responseData.content as ContentItem);
-
-						// Initialize document state with the content
-						await initializeDocState(
-							responseData.content as ContentItem,
-							responseData.document?.updateCids || []
-						);
-					}
-
-					// If we're using a full response with document included, update the selected doc
-					if (responseData.document) {
-						selectedDoc = responseData.document as Doc;
-					}
-				}
-			}
-		} catch (e) {
-			console.error(`Error fetching doc with content for ${doc.pubKey}:`, e);
-		}
+	// Handle creating a new document
+	function handleCreateNewDocument() {
+		documentService.createNewDocument();
 	}
 
-	async function createNewDocument() {
+	// Handle creating a Todo List document
+	async function handleCreateTodoListDocument() {
+		documentService.setStatus({ creatingDoc: true });
 		try {
-			if (creatingDoc) return; // Prevent multiple clicks
-
-			creatingDoc = true;
-
-			// Correct Eden Treaty syntax
-			const response = await hominio.api.docs.post({});
-
-			if (response && response.data && response.data.success) {
-				console.log('Created new document:', response.data.document);
-
-				// Add the new document to the list
-				const newDoc = response.data.document as Doc;
-				docs = [newDoc, ...docs];
-
-				// Select the new document
-				await selectDoc(newDoc);
-			} else {
-				throw new Error(response?.data?.error || 'Failed to create document');
-			}
-		} catch (e) {
-			const err = e as Error;
-			error = err.message || 'Failed to create document';
-			console.error('Error creating document:', e);
-		} finally {
-			creatingDoc = false;
-		}
-	}
-
-	async function updateDocument(updateOperation?: (doc: LoroDoc) => void) {
-		try {
-			if (!selectedDoc || updatingDoc || !docState) return;
-
-			updatingDoc = true;
-			updateMessage = null;
-
-			// Just use the existing document state for updates
-			docState.update(
-				updateOperation ||
-					((doc) => {
-						// Default operation: update the title with a timestamp
-						const newTitle = `Updated ${new Date().toLocaleTimeString()}`;
-						doc.getText('title').insert(0, newTitle);
-					})
-			);
-
-			// Generate the update binary data using Loro's export function
-			const updateBinary = docState.export('update');
-
-			// Send update to server
-			const updateResponse = await hominio.api.docs[selectedDoc.pubKey].update.post({
-				binaryUpdate: Array.from(updateBinary) // Convert Uint8Array to regular array for JSON
-			});
-
-			if (updateResponse && updateResponse.data && updateResponse.data.success) {
-				console.log('Updated document:', updateResponse.data);
-
-				// Update message
-				updateMessage = 'Document updated successfully!';
-
-				// Refresh the doc metadata (but don't reload the content since we already have it)
-				await refreshDocMetadata(selectedDoc.pubKey);
-			} else {
-				throw new Error(updateResponse?.data?.error || 'Failed to update document');
-			}
-		} catch (e) {
-			const err = e as Error;
-			updateMessage = 'Error: ' + (err.message || 'Failed to update document');
-			console.error('Error updating document:', e);
-		} finally {
-			updatingDoc = false;
-		}
-	}
-
-	async function refreshDocMetadata(pubKey: string) {
-		try {
-			const response = await hominio.api.docs[pubKey].get();
-
-			if (response && response.data && response.data.document) {
-				// Update the selected doc metadata (but keep our content)
-				selectedDoc = response.data.document as Doc;
-
-				// Update in our list
-				docs = docs.map((d) => (d.pubKey === pubKey ? selectedDoc! : d));
-			}
-		} catch (e) {
-			console.error('Error refreshing doc metadata:', e);
-		}
-	}
-
-	async function createSnapshot() {
-		try {
-			if (!selectedDoc || creatingSnapshot || !docState) return;
-
-			creatingSnapshot = true;
-			snapshotMessage = null;
-
-			// Generate a complete snapshot from current doc state
-			const snapshotBinary = docState.export('snapshot');
-
-			// Send to server
-			const snapshotResponse = await hominio.api.docs[selectedDoc.pubKey].snapshot.post({
-				binarySnapshot: Array.from(snapshotBinary) // Convert Uint8Array to regular array for JSON
-			});
-
-			if (snapshotResponse && snapshotResponse.data) {
-				if (snapshotResponse.data.success) {
-					console.log('Created snapshot:', snapshotResponse.data);
-
-					// Show custom message if one was provided
-					if (snapshotResponse.data.message) {
-						snapshotMessage = snapshotResponse.data.message;
-					} else {
-						snapshotMessage = 'Snapshot created successfully!';
-					}
-
-					// Refresh the document metadata to get the updated snapshot CID
-					await refreshDocMetadata(selectedDoc.pubKey);
-				} else {
-					throw new Error(snapshotResponse.data.error || 'Failed to create snapshot');
-				}
-			} else {
-				throw new Error('Invalid response from server');
-			}
-		} catch (e) {
-			const err = e as Error;
-			snapshotMessage = 'Error: ' + (err.message || 'Failed to create snapshot');
-			console.error('Error creating snapshot:', e);
-		} finally {
-			creatingSnapshot = false;
-		}
-	}
-
-	// Add a function to create a Todo List document
-	async function createTodoListDocument() {
-		try {
-			if (creatingDoc) return; // Prevent multiple clicks
-
-			creatingDoc = true;
-			error = null;
-
-			// Create a new document state
-			const newDocState = createDocState<TodoDocument>();
-
-			// Set up the document with todo list structure
-			newDocState.update((doc) => {
-				TodoHelper.createTodoList(doc);
-			});
-
-			// Generate snapshot binary data
-			const snapshotBinary = newDocState.export('snapshot');
-
-			// Send to server
-			const response = await hominio.api.docs.post({
-				binarySnapshot: Array.from(snapshotBinary),
-				title: 'Todo List',
+			const newDoc = await TodoHelper.createTodoListDocument({
+				title: 'New Todo List',
 				description: 'A simple todo list using Loro CRDT'
 			});
 
-			if (response && response.data && response.data.success) {
-				console.log('Created todo list document:', response.data.document);
-
-				// Add the new document to the list
-				const newDoc = response.data.document as Doc;
-				docs = [newDoc, ...docs];
-
-				// Select the new document
-				await selectDoc(newDoc);
-			} else {
-				throw new Error(response?.data?.error || 'Failed to create todo list document');
-			}
-		} catch (e) {
-			const err = e as Error;
-			error = err.message || 'Failed to create todo list document';
-			console.error('Error creating todo list document:', e);
-		} finally {
-			creatingDoc = false;
-		}
-	}
-
-	// Function to initialize the document state
-	async function initializeDocState(contentItem: ContentItem, updateCids: string[] = []) {
-		// Clean up any existing document state
-		if (docState) {
-			docState.destroy();
-		}
-
-		// Create new document state
-		docState = createDocState<TodoDocument>();
-
-		// Import the snapshot
-		if (contentItem?.binaryData) {
-			try {
-				// Import the snapshot
-				docState.import(contentItem.binaryData, 'initial');
-				console.log('Imported base snapshot');
-
-				// Apply any existing updates
-				if (updateCids && updateCids.length > 0) {
-					await applyUpdatesToDocs(updateCids);
+			if (newDoc) {
+				// Refresh document list and select the new doc
+				await documentService.fetchDocs();
+				const docs = await documentService.fetchDocs();
+				const createdDoc = docs.find((d) => d.pubKey === newDoc.pubKey);
+				if (createdDoc) {
+					documentService.selectDoc(createdDoc);
 				}
-			} catch (error) {
-				console.error('Error initializing document state:', error);
-			}
-		}
-	}
-
-	// Function to apply updates to the active document
-	async function applyUpdatesToDocs(updateCids: string[]) {
-		if (!docState) return;
-
-		for (const updateCid of updateCids) {
-			try {
-				// Fetch the update
-				const updateResp = await hominio.api.content[updateCid].binary.get();
-
-				if (updateResp && updateResp.data && updateResp.data.binaryData) {
-					// Apply the update to our document state
-					docState.import(updateResp.data.binaryData, 'remote');
-					console.log(`Applied update: ${updateCid}`);
-				} else {
-					console.warn(`Update ${updateCid} missing binary data`);
-				}
-			} catch (error) {
-				console.warn(`Error applying update ${updateCid}:`, error);
-			}
-		}
-	}
-
-	// Add a random todo
-	async function addRandomTodo() {
-		if (addingTodo || !docState || !selectedDoc) return;
-
-		addingTodo = true;
-
-		try {
-			// Generate a random todo
-			const todoText = `Task ${Math.floor(Math.random() * 1000)}: ${
-				[
-					'Buy groceries',
-					'Call mom',
-					'Fix the bug',
-					'Write documentation',
-					'Go for a run',
-					'Read a book',
-					'Learn a new language',
-					'Cook dinner'
-				][Math.floor(Math.random() * 8)]
-			}`;
-
-			// Add the todo to the document
-			docState.update((doc) => {
-				TodoHelper.addTodo(doc, todoText);
-			});
-
-			// Export the update
-			const updateBinary = docState.export('update');
-
-			// Send to server
-			const updateResponse = await hominio.api.docs[selectedDoc.pubKey].update.post({
-				binaryUpdate: Array.from(updateBinary)
-			});
-
-			if (updateResponse && updateResponse.data && updateResponse.data.success) {
-				console.log('Server update response:', updateResponse.data);
-				updateMessage = 'Todo added successfully!';
-
-				// Refresh doc metadata
-				await refreshDocMetadata(selectedDoc.pubKey);
 			} else {
-				throw new Error(`Server error: ${updateResponse?.data?.error || 'Unknown server error'}`);
+				documentService.setError('Failed to create todo list document');
 			}
-		} catch (e) {
-			const err = e as Error;
-			updateMessage = 'Error: ' + (err.message || 'Failed to add todo');
-			console.error('Error adding todo:', e);
+		} catch (error) {
+			console.error('Error creating todo list:', error);
+			documentService.setError(
+				error instanceof Error ? error.message : 'Failed to create todo list'
+			);
 		} finally {
-			addingTodo = false;
+			documentService.setStatus({ creatingDoc: false });
 		}
 	}
 
-	// Process data to display metadata nicely
-	function processContentData(content: ContentItem): Record<string, unknown> {
+	// Handle updating document title
+	function handleUpdateDocument() {
+		documentService.updateDocument();
+	}
+
+	// Handle creating a snapshot
+	function handleCreateSnapshot() {
+		documentService.createSnapshot();
+	}
+
+	// Handle adding a random todo
+	function handleAddRandomTodo() {
+		if ($docState) {
+			const randomTodoUpdate = TodoHelper.createRandomTodoUpdate($docState);
+			documentService.addRandomTodo(randomTodoUpdate);
+		}
+	}
+
+	// Process the document state on demand
+	function handleProcessDocumentState() {
+		documentService.processDocumentState();
+	}
+
+	// Process content data for display
+	function processContentData(content: any) {
 		if (!content || !content.metadata) return {};
-		// Return a copy of the metadata for display
 		return { ...content.metadata };
 	}
 
-	onMount(() => {
-		fetchDocs();
-	});
-
-	// Clean up resources when component is destroyed
 	onDestroy(() => {
-		if (docState) {
-			docState.destroy();
-		}
+		documentService.destroy();
 	});
 </script>
 
@@ -429,10 +101,10 @@
 				<div class="flex flex-col space-y-2">
 					<button
 						class="flex w-full items-center justify-center rounded-md bg-blue-600 py-2 text-white transition-colors hover:bg-blue-700"
-						on:click={createNewDocument}
-						disabled={creatingDoc}
+						on:click={handleCreateNewDocument}
+						disabled={$status.creatingDoc}
 					>
-						{#if creatingDoc}
+						{#if $status.creatingDoc}
 							<div
 								class="mr-2 h-5 w-5 animate-spin rounded-full border-t-2 border-b-2 border-white"
 							></div>
@@ -452,10 +124,10 @@
 
 					<button
 						class="flex w-full items-center justify-center rounded-md bg-emerald-600 py-2 text-white transition-colors hover:bg-emerald-700"
-						on:click={createTodoListDocument}
-						disabled={creatingDoc}
+						on:click={handleCreateTodoListDocument}
+						disabled={$status.creatingDoc}
 					>
-						{#if creatingDoc}
+						{#if $status.creatingDoc}
 							<div
 								class="mr-2 h-5 w-5 animate-spin rounded-full border-t-2 border-b-2 border-white"
 							></div>
@@ -475,25 +147,25 @@
 				</div>
 			</div>
 
-			{#if loading && docs.length === 0}
+			{#if $status.loading && $docs.length === 0}
 				<div class="flex h-32 items-center justify-center">
 					<div
 						class="h-8 w-8 animate-spin rounded-full border-t-2 border-b-2 border-blue-500"
 					></div>
 				</div>
-			{:else if error && docs.length === 0}
+			{:else if $error && $docs.length === 0}
 				<div class="p-4">
 					<div class="rounded-lg bg-red-900/50 p-3 text-sm">
-						<p class="text-red-300">{error}</p>
+						<p class="text-red-300">{$error}</p>
 						<button
 							class="mt-2 rounded-md bg-slate-700 px-3 py-1 text-sm text-white hover:bg-slate-600"
-							on:click={fetchDocs}
+							on:click={() => documentService.fetchDocs()}
 						>
 							Retry
 						</button>
 					</div>
 				</div>
-			{:else if docs.length === 0}
+			{:else if $docs.length === 0}
 				<div class="flex flex-grow flex-col items-center justify-center p-4 text-center">
 					<svg
 						class="mb-3 h-12 w-12 text-slate-500"
@@ -515,13 +187,13 @@
 				</div>
 			{:else}
 				<div class="flex-grow overflow-y-auto">
-					{#each docs as doc}
+					{#each $docs as doc}
 						<div
-							class="cursor-pointer border-b border-slate-700 p-4 hover:bg-slate-800 {selectedDoc?.pubKey ===
+							class="cursor-pointer border-b border-slate-700 p-4 hover:bg-slate-800 {$selectedDoc?.pubKey ===
 							doc.pubKey
 								? 'bg-slate-800'
 								: ''}"
-							on:click={() => selectDoc(doc)}
+							on:click={() => handleSelectDoc(doc)}
 						>
 							<h2 class="font-medium text-blue-400">{doc.title}</h2>
 							<p class="mt-1 truncate text-xs text-slate-400">
@@ -538,12 +210,12 @@
 
 		<!-- Main Content Area -->
 		<main class="flex-grow">
-			{#if selectedDoc}
+			{#if $selectedDoc}
 				<!-- Document title at the top -->
 				<div class="p-6 pb-0">
-					<h1 class="text-3xl font-bold text-blue-400">{selectedDoc.title}</h1>
+					<h1 class="text-3xl font-bold text-blue-400">{$selectedDoc.title}</h1>
 					<p class="mb-6 text-slate-300">
-						{selectedDoc.description || 'A document using Loro CRDT'}
+						{$selectedDoc.description || 'A document using Loro CRDT'}
 					</p>
 
 					<!-- Action Buttons Row -->
@@ -551,10 +223,10 @@
 						<!-- Update Document Button -->
 						<button
 							class="flex items-center rounded-md bg-green-600 px-4 py-2 text-white transition-colors hover:bg-green-700"
-							on:click={() => updateDocument()}
-							disabled={updatingDoc}
+							on:click={handleUpdateDocument}
+							disabled={$status.updatingDoc}
 						>
-							{#if updatingDoc}
+							{#if $status.updatingDoc}
 								<div
 									class="mr-2 h-4 w-4 animate-spin rounded-full border-t-2 border-b-2 border-white"
 								></div>
@@ -575,10 +247,10 @@
 						<!-- Create Snapshot Button -->
 						<button
 							class="flex items-center rounded-md bg-blue-600 px-4 py-2 text-white transition-colors hover:bg-blue-700"
-							on:click={createSnapshot}
-							disabled={creatingSnapshot}
+							on:click={handleCreateSnapshot}
+							disabled={$status.creatingSnapshot}
 						>
-							{#if creatingSnapshot}
+							{#if $status.creatingSnapshot}
 								<div
 									class="mr-2 h-4 w-4 animate-spin rounded-full border-t-2 border-b-2 border-white"
 								></div>
@@ -597,23 +269,23 @@
 						</button>
 					</div>
 
-					{#if updateMessage}
+					{#if $updateMessage}
 						<div
-							class="mt-2 text-sm {updateMessage.startsWith('Error')
+							class="mt-2 text-sm {$updateMessage.startsWith('Error')
 								? 'text-red-400'
 								: 'text-green-400'}"
 						>
-							{updateMessage}
+							{$updateMessage}
 						</div>
 					{/if}
 
-					{#if snapshotMessage}
+					{#if $snapshotMessage}
 						<div
-							class="mt-2 text-sm {snapshotMessage.startsWith('Error')
+							class="mt-2 text-sm {$snapshotMessage.startsWith('Error')
 								? 'text-red-400'
 								: 'text-green-400'}"
 						>
-							{snapshotMessage}
+							{$snapshotMessage}
 						</div>
 					{/if}
 				</div>
@@ -627,35 +299,35 @@
 						<div class="space-y-2">
 							<div>
 								<span class="font-medium">Public Key:</span>
-								<span class="ml-2 font-mono">{selectedDoc.pubKey}</span>
+								<span class="ml-2 font-mono">{$selectedDoc.pubKey}</span>
 							</div>
 							<div>
 								<span class="font-medium">Owner ID:</span>
-								<span class="ml-2 font-mono">{selectedDoc.ownerId}</span>
+								<span class="ml-2 font-mono">{$selectedDoc.ownerId}</span>
 							</div>
 							<div>
 								<span class="font-medium">Created:</span>
 								<span class="ml-2">
-									{new Date(selectedDoc.createdAt).toLocaleString()}
+									{new Date($selectedDoc.createdAt).toLocaleString()}
 								</span>
 							</div>
 							<div>
 								<span class="font-medium">Updated:</span>
 								<span class="ml-2">
-									{new Date(selectedDoc.updatedAt).toLocaleString()}
+									{new Date($selectedDoc.updatedAt).toLocaleString()}
 								</span>
 							</div>
 							<div>
 								<span class="font-medium">Snapshot CID:</span>
-								<div class="ml-2 font-mono break-all">{selectedDoc.snapshotCid}</div>
+								<div class="ml-2 font-mono break-all">{$selectedDoc.snapshotCid}</div>
 							</div>
 
 							<!-- Display Update CIDs -->
 							<div>
 								<span class="font-medium">Updates:</span>
-								{#if selectedDoc.updateCids && selectedDoc.updateCids.length > 0}
+								{#if $selectedDoc.updateCids && $selectedDoc.updateCids.length > 0}
 									<div class="ml-2 font-mono">
-										{#each selectedDoc.updateCids as cid}
+										{#each $selectedDoc.updateCids as cid}
 											<div class="mt-1 text-xs break-all">{cid}</div>
 										{/each}
 									</div>
@@ -670,13 +342,13 @@
 					<div class="overflow-y-auto border-l border-slate-700 p-6 pt-0">
 						<h2 class="mb-4 text-xl font-bold">Content Snapshot</h2>
 
-						{#if !selectedDoc.snapshotCid}
+						{#if !$selectedDoc.snapshotCid}
 							<div>
 								<p class="text-slate-400">No content snapshot associated with this document</p>
 							</div>
-						{:else if contentMap.has(selectedDoc.pubKey)}
+						{:else if $contentMap.has($selectedDoc.pubKey)}
 							<div>
-								{#if contentMap.get(selectedDoc.pubKey)?.verified}
+								{#if $contentMap.get($selectedDoc.pubKey)?.verified}
 									<div class="mb-4 text-green-400">✓ Content verified</div>
 								{:else}
 									<div class="mb-4 text-red-400">✗ Content not verified</div>
@@ -685,23 +357,23 @@
 								<div class="mb-4">
 									<span class="font-medium">Binary size:</span>
 									<span class="ml-2"
-										>{contentMap.get(selectedDoc.pubKey)?.contentLength || 0} bytes</span
+										>{$contentMap.get($selectedDoc.pubKey)?.contentLength || 0} bytes</span
 									>
 								</div>
 
 								<div class="mb-4">
 									<span class="font-medium">Updates:</span>
-									<span class="ml-2">{selectedDoc.updateCids?.length || 0}</span>
+									<span class="ml-2">{$selectedDoc.updateCids?.length || 0}</span>
 								</div>
 
 								<!-- Add Todo Button for Todo List docs - always visible -->
 								<div class="mb-4">
 									<button
 										class="flex items-center rounded-md bg-purple-600 px-4 py-2 text-white transition-colors hover:bg-purple-700"
-										on:click={addRandomTodo}
-										disabled={addingTodo || updatingDoc}
+										on:click={handleAddRandomTodo}
+										disabled={$status.addingTodo || $status.updatingDoc}
 									>
-										{#if addingTodo}
+										{#if $status.addingTodo}
 											<div
 												class="mr-2 h-4 w-4 animate-spin rounded-full border-t-2 border-b-2 border-white"
 											></div>
@@ -733,7 +405,7 @@
 								</div>
 
 								<!-- Display the reactive document state -->
-								{#if docState}
+								{#if $docState}
 									<div class="mb-4 rounded-md bg-slate-800 p-4">
 										<div class="mb-2 flex items-center justify-between">
 											<h3 class="text-lg font-semibold text-green-400">Live Document State</h3>
@@ -749,7 +421,7 @@
 								<div class="mb-4">
 									<h3 class="mb-2 text-lg font-semibold text-slate-300">Content Metadata</h3>
 									<pre class="font-mono whitespace-pre-wrap text-slate-200">
-{JSON.stringify(processContentData(contentMap.get(selectedDoc.pubKey) as ContentItem), null, 2)}
+{JSON.stringify(processContentData($contentMap.get($selectedDoc.pubKey)), null, 2)}
 									</pre>
 								</div>
 							</div>
@@ -766,7 +438,7 @@
 			{:else}
 				<!-- Empty state when no document is selected -->
 				<div class="flex h-full items-center justify-center">
-					{#if loading}
+					{#if $status.loading}
 						<div
 							class="h-12 w-12 animate-spin rounded-full border-t-2 border-b-2 border-blue-500"
 						></div>
