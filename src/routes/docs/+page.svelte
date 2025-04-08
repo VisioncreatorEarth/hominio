@@ -22,18 +22,25 @@
 		createdAt: string;
 	};
 
+	// New combined response type
+	type DocWithContent = {
+		document: Doc;
+		content?: ContentItem;
+	};
+
 	let docs: Doc[] = [];
 	let contentMap = new Map<string, ContentItem>();
 	let loading = true;
 	let error: string | null = null;
 	let selectedDoc: Doc | null = null;
+	let autoSelectFirstDoc = false; // Set to false to prevent auto-selection
 
 	async function fetchDocs() {
 		try {
 			loading = true;
 			error = null;
 
-			// Fetch all docs
+			// Use the correct Eden Treaty syntax
 			const docsResponse = await hominio.api.docs.get();
 
 			if (!docsResponse.data) {
@@ -42,10 +49,9 @@
 
 			docs = docsResponse.data as Doc[];
 
-			// Select first doc by default if available
-			if (docs.length > 0 && !selectedDoc) {
+			// Only select first doc if auto-select is enabled
+			if (docs.length > 0 && autoSelectFirstDoc && !selectedDoc) {
 				selectedDoc = docs[0];
-				await fetchDocContent(selectedDoc);
 			}
 		} catch (e) {
 			const err = e as Error;
@@ -56,23 +62,28 @@
 		}
 	}
 
-	async function fetchDocContent(doc: Doc) {
-		if (!doc.snapshotCid) return;
-
+	async function selectDoc(doc: Doc) {
 		try {
-			const contentResponse = await hominio.api.content[doc.snapshotCid].get();
-			if (contentResponse.data) {
-				contentMap.set(doc.pubKey, contentResponse.data as ContentItem);
+			selectedDoc = doc;
+
+			// Use the correct Eden Treaty syntax
+			const response = await hominio.api.docs[doc.pubKey].get();
+
+			console.log('Document response:', response);
+
+			if (response && response.data) {
+				if (response.data.content) {
+					// Store content in the contentMap
+					contentMap.set(doc.pubKey, response.data.content as ContentItem);
+				}
+
+				// If we're using a full response with document included, update the selected doc
+				if (response.data.document) {
+					selectedDoc = response.data.document as Doc;
+				}
 			}
 		} catch (e) {
-			console.error(`Error fetching content for doc ${doc.pubKey}:`, e);
-		}
-	}
-
-	function selectDoc(doc: Doc) {
-		selectedDoc = doc;
-		if (!contentMap.has(doc.pubKey) && doc.snapshotCid) {
-			fetchDocContent(doc);
+			console.error(`Error fetching doc with content for ${doc.pubKey}:`, e);
 		}
 	}
 
@@ -92,11 +103,11 @@
 	});
 </script>
 
-<div class="min-h-screen bg-slate-900 text-slate-200">
+<div class="min-h-screen bg-[#0F1525] text-slate-200">
 	<!-- Sidebar and Main Content Layout -->
 	<div class="grid min-h-screen grid-cols-[250px_1fr]">
 		<!-- Sidebar - Doc List -->
-		<aside class="overflow-y-auto border-r border-slate-700 bg-slate-800">
+		<aside class="overflow-y-auto border-r border-slate-700 bg-[#0F1525]">
 			<div class="border-b border-slate-700 p-4">
 				<h1 class="text-xl font-bold text-white">Documents</h1>
 			</div>
@@ -127,9 +138,9 @@
 				<div>
 					{#each docs as doc}
 						<div
-							class="cursor-pointer border-b border-slate-700 p-4 hover:bg-slate-700 {selectedDoc?.pubKey ===
+							class="cursor-pointer border-b border-slate-700 p-4 hover:bg-slate-800 {selectedDoc?.pubKey ===
 							doc.pubKey
-								? 'bg-slate-700'
+								? 'bg-slate-800'
 								: ''}"
 							on:click={() => selectDoc(doc)}
 						>
@@ -144,19 +155,19 @@
 		<!-- Main Content Area -->
 		<main class="flex-grow">
 			{#if selectedDoc}
-				<!-- Document title shared across both columns -->
-				<div class="border-b border-slate-700 p-6">
+				<!-- Document title at the top -->
+				<div class="p-6 pb-0">
 					<h1 class="text-3xl font-bold text-blue-400">Example Loro Document</h1>
-					<p class="text-slate-300">A test document using Loro CRDT</p>
+					<p class="mb-6 text-slate-300">A test document using Loro CRDT</p>
 				</div>
 
 				<!-- 50/50 split content area -->
-				<div class="grid h-[calc(100vh-124px)] grid-cols-2">
+				<div class="grid grid-cols-2">
 					<!-- Left side: Document Metadata -->
-					<div class="overflow-y-auto border-r border-slate-700 p-6">
+					<div class="overflow-y-auto p-6 pt-0">
 						<h2 class="mb-4 text-xl font-bold">Document Metadata</h2>
 
-						<div class="space-y-1">
+						<div class="space-y-2">
 							<div>
 								<span class="font-medium">Public Key:</span>
 								<span class="ml-2 font-mono">{selectedDoc.pubKey}</span>
@@ -179,26 +190,13 @@
 							</div>
 							<div>
 								<span class="font-medium">Snapshot CID:</span>
-								<span class="ml-2 font-mono">{selectedDoc.snapshotCid}</span>
+								<div class="ml-2 font-mono break-all">{selectedDoc.snapshotCid}</div>
 							</div>
 						</div>
-
-						{#if selectedDoc.updateCids && selectedDoc.updateCids.length > 0}
-							<div class="mt-6">
-								<h3 class="mb-2 text-lg font-bold">Updates ({selectedDoc.updateCids.length})</h3>
-								<div>
-									<ul class="space-y-1">
-										{#each selectedDoc.updateCids as cid}
-											<li class="font-mono text-xs">{cid}</li>
-										{/each}
-									</ul>
-								</div>
-							</div>
-						{/if}
 					</div>
 
 					<!-- Right side: Content Snapshot -->
-					<div class="overflow-y-auto p-6">
+					<div class="overflow-y-auto border-l border-slate-700 p-6 pt-0">
 						<h2 class="mb-4 text-xl font-bold">Content Snapshot</h2>
 
 						{#if !selectedDoc.snapshotCid}

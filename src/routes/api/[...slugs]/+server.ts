@@ -29,6 +29,12 @@ type ContentResponse = {
     createdAt: string;
 };
 
+// Combined document and content response
+type DocWithContentResponse = {
+    document: any;
+    content?: ContentResponse;
+};
+
 const betterAuthView = (context: Context) => {
     const BETTER_AUTH_ACCEPT_METHODS = ["POST", "GET"]
     // validate request method
@@ -53,6 +59,51 @@ const requireAuth = async ({ request, set }: Context) => {
     return {
         session
     };
+}
+
+// Function to fetch and verify content by CID
+async function getContentByCid(cid: string): Promise<ContentResponse | null> {
+    try {
+        // Get content by CID
+        const contentItem = await db.select().from(content).where(eq(content.cid, cid));
+
+        if (!contentItem.length) {
+            return null;
+        }
+
+        const item = contentItem[0];
+
+        // Get binary data from content
+        const itemData = item.data as Record<string, unknown>;
+        const binaryData = itemData.binary;
+
+        // Verify content integrity
+        let verified = false;
+
+        if (Array.isArray(binaryData)) {
+            try {
+                // Convert array back to Uint8Array
+                const contentBytes = arrayToUint8Array(binaryData);
+
+                // Verify hash matches CID
+                verified = await hashService.verifySnapshot(contentBytes, cid);
+            } catch (err) {
+                console.error('Error verifying content hash:', err);
+            }
+        }
+
+        // Return content with verification status
+        return {
+            cid: item.cid,
+            type: item.type,
+            data: item.data,
+            verified: verified,
+            createdAt: item.createdAt.toISOString()
+        };
+    } catch (error) {
+        console.error('Error retrieving content:', error);
+        return null;
+    }
 }
 
 const app = new Elysia({ prefix: '/api' })
@@ -176,15 +227,39 @@ const app = new Elysia({ prefix: '/api' })
             return await db.select().from(docs).orderBy(docs.updatedAt);
         })
         .get('/:pubKey', async ({ params: { pubKey }, set }) => {
-            // Get doc by pubKey
-            const doc = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
-            if (!doc.length) {
-                set.status = 404;
-                return { error: 'Document not found' };
-            }
+            try {
+                // Get doc by pubKey
+                const doc = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
+                if (!doc.length) {
+                    set.status = 404;
+                    return { error: 'Document not found' };
+                }
 
-            // Return the document
-            return doc[0];
+                const document = doc[0];
+
+                // Create the response including document data
+                const response: DocWithContentResponse = {
+                    document
+                };
+
+                // If document has a snapshot CID, fetch and include the content
+                if (document.snapshotCid) {
+                    const contentData = await getContentByCid(document.snapshotCid);
+                    if (contentData) {
+                        response.content = contentData;
+                    }
+                }
+
+                // Return the combined document and content data
+                return response;
+            } catch (error) {
+                console.error('Error retrieving document:', error);
+                set.status = 500;
+                return {
+                    error: 'Failed to retrieve document',
+                    details: error instanceof Error ? error.message : 'Unknown error'
+                };
+            }
         })
     )
     // Content routes
@@ -196,45 +271,14 @@ const app = new Elysia({ prefix: '/api' })
         })
         .get('/:cid', async ({ params: { cid }, set }) => {
             try {
-                // Get content by CID
-                const contentItem = await db.select().from(content).where(eq(content.cid, cid));
+                const contentData = await getContentByCid(cid);
 
-                if (!contentItem.length) {
+                if (!contentData) {
                     set.status = 404;
                     return { error: 'Content not found' };
                 }
 
-                const item = contentItem[0];
-
-                // Get binary data from content
-                const itemData = item.data as Record<string, unknown>;
-                const binaryData = itemData.binary;
-
-                // Verify content integrity
-                let verified = false;
-
-                if (Array.isArray(binaryData)) {
-                    try {
-                        // Convert array back to Uint8Array
-                        const contentBytes = arrayToUint8Array(binaryData);
-
-                        // Verify hash matches CID
-                        verified = await hashService.verifySnapshot(contentBytes, cid);
-                    } catch (err) {
-                        console.error('Error verifying content hash:', err);
-                    }
-                }
-
-                // Return content with verification status
-                const response: ContentResponse = {
-                    cid: item.cid,
-                    type: item.type,
-                    data: item.data,
-                    verified: verified,
-                    createdAt: item.createdAt.toISOString()
-                };
-
-                return response;
+                return contentData;
             } catch (error) {
                 console.error('Error retrieving content:', error);
                 set.status = 500;
