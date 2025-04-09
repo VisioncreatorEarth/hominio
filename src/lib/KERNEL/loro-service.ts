@@ -25,10 +25,7 @@ export class LoroService {
      */
     createEmptyDoc(): LoroDoc {
         const doc = new LoroDoc();
-        // Initialize with empty data structure
-        const root = doc.getMap('data');
-        // Add metadata
-        root.set('createdAt', new Date().toISOString());
+        // No longer adding any initial data or metadata
         return doc;
     }
 
@@ -171,7 +168,7 @@ export class LoroService {
         // Add metadata
         const meta = doc.getMap('metadata');
         meta.set('author', 'LoroService');
-        meta.set('createdAt', new Date().toISOString());
+        // Removed createdAt field to keep document clean
 
         // Generate public key
         const pubKey = this.generatePublicKey();

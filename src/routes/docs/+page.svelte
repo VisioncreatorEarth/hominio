@@ -2,7 +2,6 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { documentService, type DocMetadata } from '$lib/KERNEL/doc-state';
 	import { syncService } from '$lib/KERNEL/sync-service';
-	import { hominio } from '$lib/client/hominio';
 
 	// Subscribe to document service stores
 	const docs = documentService.docs;
