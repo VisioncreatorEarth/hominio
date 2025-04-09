@@ -4,6 +4,18 @@ import { LoroDoc } from 'loro-crdt';
 import { openDB, type IDBPDatabase } from 'idb';
 import { hashService } from './hash-service';
 import { loroService } from './loro-service';
+import { hominio } from '$lib/client/hominio';
+
+// Define interfaces for API responses
+interface SnapshotResponse {
+    success: boolean;
+    document?: DocMetadata;
+    newSnapshotCid?: string;
+    appliedUpdates?: number;
+    clearedUpdates?: number;
+    error?: string;
+    details?: string;
+}
 
 // Types
 export interface DocMetadata {
@@ -203,9 +215,54 @@ class DocumentService {
         try {
             const db = await this.ensureDB();
             const content = await db.get(CONTENT_STORE, cid) as ContentItem | undefined;
-            return content?.data || null;
+
+            if (!content || !content.data) {
+                console.warn(`Content with CID ${cid} not found or has no data in IndexedDB`);
+                return null;
+            }
+
+            const data = content.data;
+            console.log(`Loaded content ${cid}, data type: ${typeof data}`);
+
+            // Handle the data based on its type
+            if (data instanceof Uint8Array) {
+                console.log(`Content ${cid} loaded as Uint8Array directly, size: ${data.byteLength} bytes`);
+                return data;
+            } else if (data instanceof ArrayBuffer) {
+                const uint8Array = new Uint8Array(data);
+                console.log(`Content ${cid} converted from ArrayBuffer to Uint8Array, size: ${uint8Array.byteLength} bytes`);
+                return uint8Array;
+            } else if (typeof data === 'object' && data !== null && 'buffer' in data) {
+                // Handle Node.js Buffer-like objects without direct dependency
+                try {
+                    // Try to convert Buffer-like object to Uint8Array
+                    // @ts-ignore - We've already checked 'buffer' property exists
+                    const uint8Array = new Uint8Array(data.buffer);
+                    console.log(`Content ${cid} converted from Buffer-like to Uint8Array, size: ${uint8Array.byteLength} bytes`);
+                    return uint8Array;
+                } catch (err) {
+                    console.error(`Failed to convert Buffer-like to Uint8Array:`, err);
+                }
+            } else if (Array.isArray(data)) {
+                // Handle array representation
+                const uint8Array = new Uint8Array(data);
+                console.log(`Content ${cid} converted from Array to Uint8Array, size: ${uint8Array.byteLength} bytes`);
+                return uint8Array;
+            }
+
+            // Last resort: try to convert whatever we have to Uint8Array
+            console.warn(`Content ${cid} has format that needs manual conversion: ${typeof data}`);
+            try {
+                // Use generic conversion, relies on types being convertible to TypedArray
+                const uint8Array = new Uint8Array(data as unknown as ArrayBufferLike);
+                console.log(`Content ${cid} converted using fallback method, size: ${uint8Array.byteLength} bytes`);
+                return uint8Array;
+            } catch (err) {
+                console.error(`Failed to convert content data to Uint8Array using fallback:`, err);
+                return null;
+            }
         } catch (err) {
-            console.error('Error loading content from IndexedDB:', err);
+            console.error(`Error loading content from IndexedDB:`, err);
             throw new Error('Failed to load content data from local storage');
         }
     }
@@ -230,6 +287,8 @@ class DocumentService {
                 return;
             }
 
+            console.log(`Loading snapshot with CID: ${snapshotCid}, isLocal: ${isLocalSnapshot}`);
+
             // Load snapshot binary data from IndexedDB
             const snapshotData = await this.loadContentFromIndexDB(snapshotCid);
 
@@ -244,12 +303,27 @@ class DocumentService {
                 return;
             }
 
+            console.log(`Loaded snapshot data, size: ${snapshotData.byteLength} bytes`);
+
             // Create a temporary LoroDoc to import the data
             const tempDoc = new LoroDoc();
 
-            // Import the snapshot
-            tempDoc.import(snapshotData);
-            console.log(`Loaded base snapshot from CID: ${snapshotCid}`);
+            try {
+                // Import the snapshot with proper error handling
+                tempDoc.import(snapshotData);
+                console.log(`Loaded base snapshot from CID: ${snapshotCid}`);
+            } catch (importErr) {
+                console.error(`Error importing snapshot data:`, importErr);
+                console.log(`First 16 bytes of snapshot data:`, Array.from(snapshotData.slice(0, 16)));
+                docContent.set({
+                    content: null,
+                    loading: false,
+                    error: `Failed to import snapshot: ${importErr instanceof Error ? importErr.message : 'Unknown error'}`,
+                    sourceCid: snapshotCid,
+                    isLocalSnapshot
+                });
+                return;
+            }
 
             // Track number of updates applied
             let appliedUpdates = 0;
@@ -270,6 +344,7 @@ class DocumentService {
                         console.log(`Applied update from CID: ${updateCid}`);
                     } catch (err) {
                         console.error(`Error applying update ${updateCid}:`, err);
+                        console.log(`First 16 bytes of update data:`, Array.from(updateData.slice(0, 16)));
                     }
                 } else {
                     console.warn(`Could not load update data for CID: ${updateCid}`);
@@ -277,7 +352,21 @@ class DocumentService {
             }
 
             // Get JSON representation of the fully updated document
-            const content = tempDoc.toJSON();
+            let content;
+            try {
+                content = tempDoc.toJSON();
+                console.log(`Successfully converted Loro doc to JSON:`, content);
+            } catch (jsonErr) {
+                console.error(`Error converting Loro doc to JSON:`, jsonErr);
+                docContent.set({
+                    content: null,
+                    loading: false,
+                    error: `Failed to convert document to JSON: ${jsonErr instanceof Error ? jsonErr.message : 'Unknown error'}`,
+                    sourceCid: snapshotCid,
+                    isLocalSnapshot
+                });
+                return;
+            }
 
             docContent.set({
                 content,
@@ -485,6 +574,78 @@ class DocumentService {
             return null;
         } finally {
             this.setStatus({ creatingDoc: false });
+        }
+    }
+
+    // Create a consolidated snapshot by applying all updates
+    async createConsolidatedSnapshot(): Promise<boolean> {
+        // Get the current selected document directly from the store
+        const doc = get(selectedDoc);
+
+        if (!doc) {
+            this.setError('No document selected');
+            return false;
+        }
+
+        // Check if document has updates to consolidate
+        if (!doc.updateCids || doc.updateCids.length === 0) {
+            this.setError('No updates available to create a snapshot');
+            return false;
+        }
+
+        try {
+            this.setStatus({ loading: true });
+
+            // Call the server endpoint to create a consolidated snapshot
+            console.log(`Creating consolidated snapshot for document ${doc.pubKey} with ${doc.updateCids.length} updates`);
+
+            const result = await (hominio.api.docs({ pubKey: doc.pubKey }).snapshot.create as any).post({}) as {
+                data: SnapshotResponse;
+                error: null | { message: string }
+            };
+
+            // Handle errors in the response
+            if (result.error) {
+                this.setError(`Failed to create snapshot: ${result.error.message}`);
+                return false;
+            }
+
+            // Type assertion for the response data
+            const response = result.data;
+
+            if (response && response.success) {
+                // Reload document list to get the updated metadata
+                await this.loadDocsFromIndexDB();
+
+                // Display success message
+                this.setError(null);
+                console.log(`Created snapshot successfully with ${response.appliedUpdates} updates`);
+
+                // If the document has been returned in the response and the current document is still selected
+                if (response.document) {
+                    const currentDoc = get(selectedDoc);
+                    if (currentDoc && currentDoc.pubKey === response.document.pubKey) {
+                        await this.selectDoc(response.document);
+                    }
+                } else {
+                    // Otherwise trigger a refresh manually
+                    const currentDoc = get(selectedDoc);
+                    if (currentDoc) {
+                        await this.loadDocumentContent(currentDoc);
+                    }
+                }
+
+                return true;
+            } else {
+                this.setError(`Failed to create snapshot: ${response.error || 'Unknown error'}`);
+                return false;
+            }
+        } catch (err) {
+            console.error('Error creating consolidated snapshot:', err);
+            this.setError('Failed to create snapshot: ' + (err instanceof Error ? err.message : 'Unknown error'));
+            return false;
+        } finally {
+            this.setStatus({ loading: false });
         }
     }
 

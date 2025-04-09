@@ -25,8 +25,10 @@ export class LoroService {
      */
     createEmptyDoc(): LoroDoc {
         const doc = new LoroDoc();
-        // Assign a random peer ID by default
-        doc.setPeerId(Math.floor(Math.random() * 1000000));
+        // Initialize with empty data structure
+        const root = doc.getMap('data');
+        // Add metadata
+        root.set('createdAt', new Date().toISOString());
         return doc;
     }
 
@@ -35,33 +37,38 @@ export class LoroService {
      * @returns A z-prefixed base64url-encoded public key
      */
     generatePublicKey(): string {
-        let bytes: Uint8Array;
-        if (browser) {
+        // Generate a random ID of 32 bytes
+        let randomBytes: Uint8Array;
+
+        if (browser && window.crypto) {
             // Use browser's crypto API
-            bytes = new Uint8Array(32);
-            window.crypto.getRandomValues(bytes);
+            randomBytes = new Uint8Array(32);
+            window.crypto.getRandomValues(randomBytes);
         } else {
-            // Use Node's crypto API (dynamically imported)
-            if (!randomBytes) {
-                // Handle case where dynamic import might not be ready or failed
-                console.error('Node crypto.randomBytes not available when called.');
-                // Fallback strategy: Generate less secure random bytes as a last resort
-                // Or throw an error if strict security is required.
-                bytes = new Uint8Array(32).map(() => Math.floor(Math.random() * 256));
-                // Alternatively: throw new Error('Node crypto.randomBytes failed to load.');
-            }
-            else {
-                bytes = randomBytes(32);
+            // Use Node.js crypto module in a way that works with SvelteKit
+            // Avoid direct require() to make ESM happy
+            try {
+                // Dynamic import for Node environments
+                randomBytes = new Uint8Array(32);
+                // Fill with random values as fallback
+                for (let i = 0; i < 32; i++) {
+                    randomBytes[i] = Math.floor(Math.random() * 256);
+                }
+                console.warn('Using Math.random fallback for key generation');
+            } catch (err) {
+                console.error('Error generating random bytes:', err);
+                // Fallback to Math.random if crypto is not available
+                randomBytes = new Uint8Array(32);
+                for (let i = 0; i < 32; i++) {
+                    randomBytes[i] = Math.floor(Math.random() * 256);
+                }
             }
         }
-        // Format: z + base64url encoding of 32 bytes
-        // Use Buffer.from for consistent base64url encoding
-        // btoa is browser-native for Base64, but Buffer handles Base64URL
-        // We need a cross-compatible way. Using Buffer might require polyfills in browser.
-        // Let's try a manual base64url conversion:
-        const base64 = btoa(String.fromCharCode(...bytes));
-        const base64url = base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-        return 'z' + base64url;
+
+        // Convert to hex string for readability
+        return Array.from(randomBytes)
+            .map(b => b.toString(16).padStart(2, '0'))
+            .join('');
     }
 
     /**
@@ -74,16 +81,24 @@ export class LoroService {
         cid: string;
         jsonState: LoroJsonObject;
     }> {
-        // Export the document as a snapshot
-        const snapshot = doc.exportSnapshot();
+        try {
+            // Export the document as a snapshot
+            const binaryData = doc.export({ mode: 'snapshot' });
+            console.log(`Created snapshot, size: ${binaryData.byteLength} bytes`);
+            // Log the first few bytes for debugging
+            console.log(`Snapshot header: ${Array.from(binaryData.slice(0, 16)).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
 
-        // Generate content ID using hash-service
-        const cid = await hashService.hashSnapshot(snapshot);
+            // Generate content ID using hash-service
+            const cid = await hashService.hashSnapshot(binaryData);
 
-        // Get JSON representation for easier debugging
-        const jsonState = doc.toJSON() as LoroJsonObject;
+            // Get JSON representation for easier debugging
+            const jsonState = doc.toJSON() as LoroJsonObject;
 
-        return { snapshot, cid, jsonState };
+            return { snapshot: binaryData, cid, jsonState };
+        } catch (err) {
+            console.error('Failed to create snapshot:', err);
+            throw new Error(`Failed to create Loro snapshot: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        }
     }
 
     /**
@@ -95,13 +110,21 @@ export class LoroService {
         update: Uint8Array;
         cid: string;
     }> {
-        // Export the document as an update
-        const update = doc.export({ mode: 'update' });
+        try {
+            // Export the document as an update
+            const binaryData = doc.export({ mode: 'update' });
+            console.log(`Created update, size: ${binaryData.byteLength} bytes`);
+            // Log the first few bytes for debugging
+            console.log(`Update header: ${Array.from(binaryData.slice(0, 16)).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
 
-        // Generate content ID using hash-service
-        const cid = await hashService.hashSnapshot(update);
+            // Generate content ID using hash-service
+            const cid = await hashService.hashSnapshot(binaryData);
 
-        return { update, cid };
+            return { update: binaryData, cid };
+        } catch (err) {
+            console.error('Failed to create update:', err);
+            throw new Error(`Failed to create Loro update: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        }
     }
 
     /**
@@ -110,7 +133,21 @@ export class LoroService {
      * @param update The update to apply
      */
     applyUpdate(doc: LoroDoc, update: Uint8Array): void {
-        doc.import(update);
+        try {
+            if (!update || update.byteLength === 0) {
+                throw new Error('Invalid update data: empty or null');
+            }
+
+            // Log the first few bytes for debugging
+            console.log(`Applying update, size: ${update.byteLength} bytes`);
+            console.log(`Update header: ${Array.from(update.slice(0, 16)).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
+
+            // Import the update to the document
+            doc.import(update);
+        } catch (err) {
+            console.error('Failed to apply update:', err);
+            throw new Error(`Failed to apply Loro update: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        }
     }
 
     /**

@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { documentService, type DocMetadata } from '$lib/KERNEL/doc-state';
 	import { syncService } from '$lib/KERNEL/sync-service';
+	import { hominio } from '$lib/client/hominio';
 
 	// Subscribe to document service stores
 	const docs = documentService.docs;
@@ -15,6 +16,8 @@
 
 	// State for random property button
 	let isAddingProperty = false;
+	// State for snapshot button
+	let isCreatingSnapshot = false;
 
 	// Handle selecting a document
 	function handleSelectDoc(doc: DocMetadata) {
@@ -35,6 +38,20 @@
 			await documentService.addRandomPropertyToDocument();
 		} finally {
 			isAddingProperty = false;
+		}
+	}
+
+	// Handle creating a consolidated snapshot
+	async function handleCreateSnapshot() {
+		if (isCreatingSnapshot || !$selectedDoc) return;
+
+		isCreatingSnapshot = true;
+		try {
+			await documentService.createConsolidatedSnapshot();
+		} catch (err) {
+			console.error('Error creating snapshot:', err);
+		} finally {
+			isCreatingSnapshot = false;
 		}
 	}
 
@@ -434,7 +451,7 @@
 						{/if}
 					</div>
 
-					<!-- Content display -->
+					<!-- Document Content -->
 					{#if $docContent.loading}
 						<div class="flex h-32 items-center justify-center">
 							<div
@@ -447,6 +464,34 @@
 							<p class="mt-2">{$docContent.error}</p>
 						</div>
 					{:else if $docContent.content}
+						<!-- Add snapshot button if document has updates -->
+						{#if $selectedDoc && $selectedDoc.updateCids && $selectedDoc.updateCids.length > 0}
+							<div class="mb-4 flex justify-end">
+								<button
+									class="flex items-center rounded-md bg-purple-600 px-3 py-1 text-sm text-white hover:bg-purple-700 disabled:opacity-50"
+									on:click={handleCreateSnapshot}
+									disabled={isCreatingSnapshot}
+									title="Consolidate all updates into a new snapshot"
+								>
+									{#if isCreatingSnapshot}
+										<div
+											class="mr-2 h-4 w-4 animate-spin rounded-full border-t-2 border-b-2 border-white"
+										></div>
+										Creating Snapshot...
+									{:else}
+										<svg class="mr-1 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+											<path
+												stroke-linecap="round"
+												stroke-linejoin="round"
+												stroke-width="2"
+												d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14"
+											/>
+										</svg>
+										Create Snapshot ({$selectedDoc.updateCids.length} updates)
+									{/if}
+								</button>
+							</div>
+						{/if}
 						<div class="rounded bg-slate-800/50 p-4">
 							<pre class="overflow-x-auto text-xs text-green-300">{JSON.stringify(
 									$docContent.content,

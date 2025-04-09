@@ -8,11 +8,12 @@ import { getAuthClient } from '$lib/auth/auth';
 import { db } from '$db';
 import { docs, content } from '$db/schema';
 import * as schema from '$db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, inArray, ne, and, sql, count } from 'drizzle-orm';
 import type { Context } from 'elysia';
 import { ULTRAVOX_API_KEY } from '$env/static/private';
 import { hashService } from '$lib/KERNEL/hash-service';
 import { loroService } from '$lib/KERNEL/loro-service';
+
 
 // Get the auth instance immediately as this is server-side code
 const auth = getAuthClient();
@@ -39,6 +40,18 @@ type DocWithContentResponse = {
     document: typeof docs.$inferSelect;
     content?: ContentResponse;
 };
+
+// Define interfaces for the API
+interface SnapshotResponse {
+    success: boolean;
+    document?: any;
+    newSnapshotCid?: string;
+    appliedUpdates?: number;
+    clearedUpdates?: number;
+    deletedUpdates?: number;
+    error?: string;
+    details?: string;
+}
 
 const betterAuthView = (context: Context) => {
     const BETTER_AUTH_ACCEPT_METHODS = ["POST", "GET"]
@@ -241,15 +254,17 @@ const app = new Elysia({ prefix: '/api' })
             }
         })
     )
-    // Docs routes
+    // Docs routes - restructured for better Eden Treaty compatibility
     .group('/docs', app => app
         .derive(requireAuth)
-        .get('/', async ({ session }) => {
+        // List all docs (root endpoint with dedicated path)
+        .get('/list', async ({ session }) => {
             // Get only docs owned by the current user
             return await db.select().from(docs)
                 .where(eq(docs.ownerId, session.user.id))
                 .orderBy(docs.updatedAt);
         })
+        // Create new document
         .post('/', async ({ body, session, set }) => {
             try {
                 // Parse request body to extract optional snapshot
@@ -354,6 +369,7 @@ const app = new Elysia({ prefix: '/api' })
                 };
             }
         })
+        // Get a specific document by pubKey
         .get('/:pubKey', async ({ params: { pubKey }, query, session, set }) => {
             try {
                 // Get doc by pubKey
@@ -406,226 +422,542 @@ const app = new Elysia({ prefix: '/api' })
                 };
             }
         })
-        .post('/:pubKey/update', async ({ params: { pubKey }, body, session, set }) => {
-            try {
-                // Verify document exists and user owns it
-                const docResult = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
-                if (!docResult.length) {
-                    set.status = 404;
-                    return { error: 'Document not found' };
-                }
-
-                const document = docResult[0];
-
-                // Verify the user owns this document
-                if (document.ownerId !== session.user.id) {
-                    set.status = 403;
-                    return { error: 'Not authorized to update this document' };
-                }
-
-                // Parse the update data from request body, handling both direct and wrapped formats
-                const updateBody = body as { data?: { binaryUpdate: number[] }; binaryUpdate?: number[] };
-
-                // Extract binaryUpdate from either format
-                const binaryUpdate = updateBody.data?.binaryUpdate || updateBody.binaryUpdate;
-
-                if (!binaryUpdate || !Array.isArray(binaryUpdate)) {
-                    set.status = 400;
-                    return { error: 'Invalid update data. Binary update required.' };
-                }
-
-                // Convert the array to Uint8Array
-                const binaryUpdateArray = arrayToUint8Array(binaryUpdate);
-
-                // Get current document content
-                const contentItem = await db.select().from(content).where(eq(content.cid, document.snapshotCid));
-                if (!contentItem.length) {
-                    set.status = 500;
-                    return { error: 'Document content not found' };
-                }
-
-                // Load the document from snapshot
-                const loroDoc = loroService.createEmptyDoc();
-                const snapshotData = contentItem[0].data as Buffer;
-
-                // Import the snapshot to the document directly from buffer
-                loroDoc.import(new Uint8Array(snapshotData));
-
-                // Apply the update
-                loroService.applyUpdate(loroDoc, binaryUpdateArray);
-
-                // Get update CID
-                const { update, cid } = await loroService.createUpdate(loroDoc);
-
-                // Store the update content with metadata
-                const updateContentEntry: schema.InsertContent = {
-                    cid,
-                    type: 'update',
-                    // Store binary data directly
-                    data: Buffer.from(update),
-                    // Store metadata separately
-                    metadata: {
-                        appliedTo: document.snapshotCid
-                    }
-                };
-
-                const updateResult = await db.insert(schema.content)
-                    .values(updateContentEntry)
-                    .returning();
-
-                console.log('Created update content entry:', updateResult[0].cid);
-
-                // Update the document's updateCids array to include this update
-                // Handle the case where updateCids might be null
-                const currentCids = document.updateCids || [];
-                const updatedCids = [...currentCids, cid];
-
-                await db.update(schema.docs)
-                    .set({
-                        updateCids: updatedCids,
-                        updatedAt: new Date()
-                    })
-                    .where(eq(schema.docs.pubKey, pubKey))
-                    .returning();
-
-                // Return success response
-                return {
-                    success: true,
-                    updateCid: cid,
-                    updatedCids
-                };
-            } catch (error) {
-                console.error('Error updating document:', error);
-                set.status = 500;
-                return {
-                    error: 'Failed to update document',
-                    details: error instanceof Error ? error.message : 'Unknown error'
-                };
-            }
-        })
-        // New endpoint for updating a document's snapshot
-        .post('/:pubKey/snapshot', async ({ params: { pubKey }, body, session, set }) => {
-            try {
-                // Verify document exists and user owns it
-                const docResult = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
-                if (!docResult.length) {
-                    set.status = 404;
-                    return { error: 'Document not found' };
-                }
-
-                const document = docResult[0];
-
-                // Verify the user owns this document
-                if (document.ownerId !== session.user.id) {
-                    set.status = 403;
-                    return { error: 'Not authorized to update this document' };
-                }
-
-                // Parse the snapshot data from request body
-                const snapshotBody = body as {
-                    data?: { binarySnapshot: number[] };
-                    binarySnapshot?: number[]
-                };
-
-                // Extract binarySnapshot from either format
-                const binarySnapshot = snapshotBody.data?.binarySnapshot || snapshotBody.binarySnapshot;
-
-                if (!binarySnapshot || !Array.isArray(binarySnapshot)) {
-                    set.status = 400;
-                    return { error: 'Invalid snapshot data. Binary snapshot required.' };
-                }
-
-                // Convert the array to Uint8Array for processing
-                const snapshotData = arrayToUint8Array(binarySnapshot);
-
-                // Verify this is a valid Loro snapshot
-                const loroDoc = loroService.createEmptyDoc();
+        // Document update routes - grouped for clean Eden Treaty paths
+        .group('/:pubKey/update', app => app
+            .post('/', async ({ params: { pubKey }, body, session, set }) => {
                 try {
-                    // Import to verify it's valid
-                    loroDoc.import(snapshotData);
-                } catch (error) {
-                    set.status = 400;
-                    return {
-                        error: 'Invalid Loro snapshot',
-                        details: error instanceof Error ? error.message : 'Unknown error'
-                    };
-                }
+                    // Verify document exists and user owns it
+                    const docResult = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
+                    if (!docResult.length) {
+                        set.status = 404;
+                        return { error: 'Document not found' };
+                    }
 
-                // Generate a CID for the snapshot
-                const snapshotCid = await hashService.hashSnapshot(snapshotData);
+                    const document = docResult[0];
 
-                // Check if this exact snapshot already exists (same CID)
-                if (snapshotCid === document.snapshotCid) {
-                    return {
-                        success: true,
-                        document,
-                        snapshotCid,
-                        message: 'Document unchanged, snapshot is already up to date'
-                    };
-                }
+                    // Verify the user owns this document
+                    if (document.ownerId !== session.user.id) {
+                        set.status = 403;
+                        return { error: 'Not authorized to update this document' };
+                    }
 
-                // Check if content with this CID already exists
-                const existingContent = await db.select()
-                    .from(content)
-                    .where(eq(content.cid, snapshotCid));
+                    // Parse the update data from request body, handling both direct and wrapped formats
+                    const updateBody = body as { data?: { binaryUpdate: number[] }; binaryUpdate?: number[] };
 
-                // If the content already exists, we can just update the document to point to it
-                if (existingContent.length === 0) {
-                    // Create a content entry for the snapshot
-                    const contentEntry: schema.InsertContent = {
-                        cid: snapshotCid,
-                        type: 'snapshot',
-                        // Store binary data directly
-                        data: Buffer.from(snapshotData),
-                        // Store metadata with docState if available
+                    // Extract binaryUpdate from either format
+                    const binaryUpdate = updateBody.data?.binaryUpdate || updateBody.binaryUpdate;
+
+                    if (!binaryUpdate || !Array.isArray(binaryUpdate)) {
+                        set.status = 400;
+                        return { error: 'Invalid update data. Binary update required.' };
+                    }
+
+                    // Convert the array to Uint8Array
+                    const binaryUpdateArray = arrayToUint8Array(binaryUpdate);
+
+                    // IMPORTANT: Calculate CID directly from the client's provided update
+                    // without modifying it or recreating it
+                    const cid = await hashService.hashSnapshot(binaryUpdateArray);
+
+                    // Store the update content exactly as received from client
+                    const updateContentEntry: schema.InsertContent = {
+                        cid,
+                        type: 'update',
+                        // Store binary data directly without any modification
+                        data: Buffer.from(binaryUpdateArray),
+                        // Only store minimal metadata
                         metadata: {
-                            updatedAt: new Date().toISOString(),
-                            previousSnapshotCid: document.snapshotCid
+                            documentPubKey: pubKey
                         }
                     };
 
-                    // Store the snapshot content
-                    const contentResult = await db.insert(schema.content)
-                        .values(contentEntry)
+                    // Check if this update already exists before inserting
+                    const existingUpdate = await db.select().from(content).where(eq(content.cid, cid));
+                    let updateResult;
+
+                    if (existingUpdate.length === 0) {
+                        // Insert only if it doesn't exist
+                        updateResult = await db.insert(schema.content)
+                            .values(updateContentEntry)
+                            .returning();
+                        console.log('Created update content entry:', updateResult[0].cid);
+                    } else {
+                        console.log('Update already exists with CID:', cid);
+                        updateResult = existingUpdate;
+                    }
+
+                    // Update the document to append this CID to the updateCids array
+                    // Use SQL array append operation for atomic update without needing to fetch first
+                    const updateResult2 = await db.update(schema.docs)
+                        .set({
+                            // Use SQL to append CID only if it doesn't already exist in the array
+                            updateCids: sql`(
+                                CASE 
+                                    WHEN ${cid} = ANY(${docs.updateCids}) THEN ${docs.updateCids}
+                                    ELSE array_append(COALESCE(${docs.updateCids}, ARRAY[]::text[]), ${cid})
+                                END
+                            )`,
+                            updatedAt: new Date()
+                        })
+                        .where(eq(schema.docs.pubKey, pubKey))
                         .returning();
 
-                    console.log('Created snapshot content entry:', contentResult[0].cid);
-                } else {
-                    console.log('Content already exists with CID:', snapshotCid);
+                    // Log the result
+                    const wasAdded = !document.updateCids?.includes(cid);
+                    if (wasAdded) {
+                        console.log(`Added update ${cid} to document's updateCids array`);
+                    } else {
+                        console.log(`Update ${cid} already in document's updateCids array, skipping`);
+                    }
+
+                    // Return success response with updated CIDs
+                    return {
+                        success: true,
+                        updateCid: cid,
+                        updatedCids: updateResult2[0].updateCids || []
+                    };
+                } catch (error) {
+                    console.error('Error updating document:', error);
+                    set.status = 500;
+                    return {
+                        error: 'Failed to update document',
+                        details: error instanceof Error ? error.message : 'Unknown error'
+                    };
                 }
+            })
+        )
+        // Document snapshot routes - grouped for clean Eden Treaty paths
+        .group('/:pubKey/snapshot', app => app
+            .post('/', async ({ params: { pubKey }, body, session, set }) => {
+                try {
+                    // Verify document exists and user owns it
+                    const docResult = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
+                    if (!docResult.length) {
+                        set.status = 404;
+                        return { error: 'Document not found' };
+                    }
 
-                // Update the document's snapshotCid to point to the new snapshot
-                const updatedDoc = await db.update(schema.docs)
-                    .set({
-                        snapshotCid: snapshotCid,
-                        updatedAt: new Date()
-                    })
-                    .where(eq(schema.docs.pubKey, pubKey))
-                    .returning();
+                    const document = docResult[0];
 
-                // Return success response
-                return {
-                    success: true,
-                    document: updatedDoc[0],
-                    snapshotCid
-                };
-            } catch (error) {
-                console.error('Error updating document snapshot:', error);
-                set.status = 500;
-                return {
-                    error: 'Failed to update document snapshot',
-                    details: error instanceof Error ? error.message : 'Unknown error'
-                };
-            }
-        })
+                    // Verify the user owns this document
+                    if (document.ownerId !== session.user.id) {
+                        set.status = 403;
+                        return { error: 'Not authorized to update this document' };
+                    }
+
+                    // Parse the snapshot data from request body
+                    const snapshotBody = body as {
+                        data?: { binarySnapshot: number[] };
+                        binarySnapshot?: number[]
+                    };
+
+                    // Extract binarySnapshot from either format
+                    const binarySnapshot = snapshotBody.data?.binarySnapshot || snapshotBody.binarySnapshot;
+
+                    if (!binarySnapshot || !Array.isArray(binarySnapshot)) {
+                        set.status = 400;
+                        return { error: 'Invalid snapshot data. Binary snapshot required.' };
+                    }
+
+                    // Convert the array to Uint8Array for processing
+                    const snapshotData = arrayToUint8Array(binarySnapshot);
+
+                    // Verify this is a valid Loro snapshot
+                    const loroDoc = loroService.createEmptyDoc();
+                    try {
+                        // Import to verify it's valid
+                        loroDoc.import(snapshotData);
+                    } catch (error) {
+                        set.status = 400;
+                        return {
+                            error: 'Invalid Loro snapshot',
+                            details: error instanceof Error ? error.message : 'Unknown error'
+                        };
+                    }
+
+                    // Generate a CID for the snapshot
+                    const snapshotCid = await hashService.hashSnapshot(snapshotData);
+
+                    // Check if this exact snapshot already exists (same CID)
+                    if (snapshotCid === document.snapshotCid) {
+                        return {
+                            success: true,
+                            document,
+                            snapshotCid,
+                            message: 'Document unchanged, snapshot is already up to date'
+                        };
+                    }
+
+                    // Check if content with this CID already exists
+                    const existingContent = await db.select()
+                        .from(content)
+                        .where(eq(content.cid, snapshotCid));
+
+                    // If the content already exists, we can just update the document to point to it
+                    if (existingContent.length === 0) {
+                        // Create a content entry for the snapshot
+                        const contentEntry: schema.InsertContent = {
+                            cid: snapshotCid,
+                            type: 'snapshot',
+                            // Store binary data directly
+                            data: Buffer.from(snapshotData),
+                            // Store metadata with docState if available
+                            metadata: {
+                                updatedAt: new Date().toISOString(),
+                                previousSnapshotCid: document.snapshotCid
+                            }
+                        };
+
+                        // Store the snapshot content
+                        const contentResult = await db.insert(schema.content)
+                            .values(contentEntry)
+                            .returning();
+
+                        console.log('Created snapshot content entry:', contentResult[0].cid);
+                    } else {
+                        console.log('Content already exists with CID:', snapshotCid);
+                    }
+
+                    // Update the document's snapshotCid to point to the new snapshot
+                    const updatedDoc = await db.update(schema.docs)
+                        .set({
+                            snapshotCid: snapshotCid,
+                            updatedAt: new Date()
+                        })
+                        .where(eq(schema.docs.pubKey, pubKey))
+                        .returning();
+
+                    // Return success response
+                    return {
+                        success: true,
+                        document: updatedDoc[0],
+                        snapshotCid
+                    };
+                } catch (error) {
+                    console.error('Error updating document snapshot:', error);
+                    set.status = 500;
+                    return {
+                        error: 'Failed to update document snapshot',
+                        details: error instanceof Error ? error.message : 'Unknown error'
+                    };
+                }
+            })
+            // Consolidate snapshot route
+            .post('/create', async ({ params: { pubKey }, session, set }) => {
+                try {
+                    // Verify document exists and user owns it
+                    const docResult = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
+                    if (!docResult.length) {
+                        set.status = 404;
+                        return { error: 'Document not found' };
+                    }
+
+                    const document = docResult[0];
+
+                    // Verify the user owns this document
+                    if (document.ownerId !== session.user.id) {
+                        set.status = 403;
+                        return { error: 'Not authorized to snapshot this document' };
+                    }
+
+                    // Check if the document has a snapshot and updates
+                    if (!document.snapshotCid) {
+                        set.status = 400;
+                        return { error: 'Document has no snapshot to consolidate' };
+                    }
+
+                    if (!document.updateCids || document.updateCids.length === 0) {
+                        set.status = 400;
+                        return { error: 'No updates to consolidate into a new snapshot' };
+                    }
+
+                    console.log(`Creating consolidated snapshot for document ${pubKey} with ${document.updateCids.length} updates`);
+
+                    // 1. Load the base snapshot
+                    const snapshotData = await getBinaryContentByCid(document.snapshotCid);
+                    if (!snapshotData) {
+                        set.status = 500;
+                        return { error: 'Failed to load document snapshot' };
+                    }
+
+                    // Create a Loro document from the snapshot
+                    const loroDoc = loroService.createEmptyDoc();
+                    loroDoc.import(new Uint8Array(snapshotData));
+                    console.log(`Loaded base snapshot from CID: ${document.snapshotCid}`);
+
+                    // 2. Load all updates in memory first
+                    const appliedUpdateCids: string[] = [];
+                    const updatesData: Uint8Array[] = [];
+
+                    for (const updateCid of document.updateCids) {
+                        const updateData = await getBinaryContentByCid(updateCid);
+                        if (updateData) {
+                            updatesData.push(new Uint8Array(updateData));
+                            appliedUpdateCids.push(updateCid);
+                        } else {
+                            console.warn(`Could not load update data for CID: ${updateCid}`);
+                        }
+                    }
+
+                    // 3. Apply all updates in one batch operation (much faster than individual imports)
+                    if (updatesData.length > 0) {
+                        try {
+                            console.log(`Applying ${updatesData.length} updates in batch`);
+                            loroDoc.importBatch(updatesData);
+                            console.log(`Successfully applied ${updatesData.length} updates in batch`);
+                        } catch (err) {
+                            console.error('Error applying updates in batch:', err);
+                            set.status = 500;
+                            return { error: 'Failed to apply updates in batch' };
+                        }
+                    }
+
+                    // 4. Export a new snapshot
+                    const newSnapshotData = loroDoc.export({ mode: 'snapshot' });
+                    const newSnapshotCid = await hashService.hashSnapshot(newSnapshotData);
+
+                    // 5. Save the new snapshot to content store
+                    await db.insert(content).values({
+                        cid: newSnapshotCid,
+                        type: 'snapshot',
+                        data: Buffer.from(newSnapshotData),
+                        metadata: { documentPubKey: pubKey },
+                        createdAt: new Date()
+                    });
+
+                    console.log(`Created new consolidated snapshot with CID: ${newSnapshotCid}`);
+
+                    // 6. Update the document to use the new snapshot and clear the update list
+                    const updatedDoc = await db.update(schema.docs)
+                        .set({
+                            snapshotCid: newSnapshotCid,
+                            updateCids: [], // Clear all updates as they're now in the snapshot
+                            updatedAt: new Date()
+                        })
+                        .where(eq(schema.docs.pubKey, pubKey))
+                        .returning();
+
+                    // Clean up any consolidated updates if needed
+                    let deletedUpdates = 0;
+                    if (appliedUpdateCids.length > 0) {
+                        try {
+                            console.log(`Cleaning up ${appliedUpdateCids.length} consolidated updates`);
+
+                            // Get all documents except this one
+                            const allOtherDocs = await db.select().from(docs).where(ne(docs.pubKey, pubKey));
+
+                            // Keep track of which update CIDs are referenced by other documents
+                            const updateCidsReferencedByOtherDocs = new Set<string>();
+
+                            // Check each document for references to our consolidated updates
+                            for (const doc of allOtherDocs) {
+                                if (doc.updateCids) {
+                                    for (const cid of doc.updateCids) {
+                                        if (appliedUpdateCids.includes(cid)) {
+                                            updateCidsReferencedByOtherDocs.add(cid);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // localState is client-side only and won't exist in server database
+                            // Skip checking for it here
+
+                            // Filter out update CIDs that are still referenced by other documents
+                            const updateCidsToDelete = appliedUpdateCids.filter(
+                                cid => !updateCidsReferencedByOtherDocs.has(cid)
+                            );
+
+                            if (updateCidsToDelete.length > 0) {
+                                console.log(`${updateCidsToDelete.length} update CIDs can be safely deleted`);
+
+                                // Double-check content metadata for any other references before deleting
+                                // Some content items might have references in their metadata
+                                const safeCidsToDelete = [];
+                                for (const cid of updateCidsToDelete) {
+                                    // Check if any other content refers to this CID in metadata
+                                    const refCount = await db
+                                        .select({ count: count() })
+                                        .from(content)
+                                        .where(
+                                            and(
+                                                ne(content.cid, cid),
+                                                sql`${content.metadata}::text LIKE ${'%' + cid + '%'}`
+                                            )
+                                        );
+
+                                    // If no references found, safe to delete
+                                    if (refCount[0].count === 0) {
+                                        safeCidsToDelete.push(cid);
+                                    } else {
+                                        console.log(`Update ${cid} is referenced in content metadata, skipping deletion`);
+                                    }
+                                }
+
+                                if (safeCidsToDelete.length > 0) {
+                                    // Delete the update CIDs that are not referenced by any other document or content
+                                    const deleteResult = await db.delete(content)
+                                        .where(inArray(content.cid, safeCidsToDelete));
+
+                                    console.log(`Deleted ${deleteResult.rowCount} consolidated updates`);
+
+                                    // Store the count for the response
+                                    deletedUpdates = deleteResult.rowCount;
+                                } else {
+                                    console.log(`No updates can be safely deleted after metadata check`);
+                                    deletedUpdates = 0;
+                                }
+                            } else {
+                                console.log(`All consolidated updates are still referenced by other documents, none deleted`);
+                                deletedUpdates = 0;
+                            }
+                        } catch (cleanupErr) {
+                            console.error(`Error cleaning up consolidated updates:`, cleanupErr);
+                            deletedUpdates = 0;
+                        }
+                    } else {
+                        deletedUpdates = 0;
+                    }
+
+                    // 8. Return success with stats
+                    const response: SnapshotResponse = {
+                        success: true,
+                        document: updatedDoc[0],
+                        newSnapshotCid,
+                        appliedUpdates: appliedUpdateCids.length,
+                        clearedUpdates: document.updateCids.length,
+                        deletedUpdates
+                    };
+
+                    return response;
+                } catch (error) {
+                    console.error('Error creating consolidated snapshot:', error);
+                    set.status = 500;
+                    return {
+                        error: 'Failed to create consolidated snapshot',
+                        details: error instanceof Error ? error.message : 'Unknown error'
+                    };
+                }
+            })
+        )
     )
-    // Content routes
+    // Content routes - restructured for better Eden Treaty compatibility
     .group('/content', app => app
         .derive(requireAuth)
-        .get('/', async () => {
+        // List all content (root endpoint with dedicated path)
+        .get('/list', async () => {
             // Get all content items
             return await db.select().from(content);
         })
+        // Batch operations for efficient sync
+        .group('/batch', app => app
+            // Check existence of multiple CIDs at once
+            .post('/exists', async ({ body, set }) => {
+                try {
+                    const { cids } = body as { cids: string[] };
+
+                    if (!Array.isArray(cids) || cids.length === 0) {
+                        set.status = 400;
+                        return { error: 'Invalid request. Array of CIDs required.' };
+                    }
+
+                    // Get unique cids only
+                    const uniqueCids = [...new Set(cids)];
+
+                    // Find which content items exist
+                    const existingItems = await db
+                        .select({ cid: content.cid })
+                        .from(content)
+                        .where(inArray(content.cid, uniqueCids));
+
+                    // Create a map of which CIDs exist
+                    const existingCids = new Set(existingItems.map(item => item.cid));
+                    const results = uniqueCids.map(cid => ({
+                        cid,
+                        exists: existingCids.has(cid)
+                    }));
+
+                    return { results };
+                } catch (error) {
+                    console.error('Error checking batch existence:', error);
+                    set.status = 500;
+                    return {
+                        error: 'Failed to check content existence',
+                        details: error instanceof Error ? error.message : 'Unknown error'
+                    };
+                }
+            })
+            // Upload multiple content items at once
+            .post('/upload', async ({ body, set }) => {
+                try {
+                    const { items } = body as {
+                        items: Array<{
+                            cid: string,
+                            type: 'snapshot' | 'update',
+                            binaryData: number[],
+                            metadata?: Record<string, unknown>
+                        }>
+                    };
+
+                    if (!Array.isArray(items) || items.length === 0) {
+                        set.status = 400;
+                        return { error: 'Invalid request. Array of content items required.' };
+                    }
+
+                    // Get unique items by CID
+                    const uniqueItems = items.filter((item, index, self) =>
+                        index === self.findIndex(t => t.cid === item.cid)
+                    );
+
+                    // Check which items already exist
+                    const cids = uniqueItems.map(item => item.cid);
+                    const existingItems = await db
+                        .select({ cid: content.cid })
+                        .from(content)
+                        .where(inArray(content.cid, cids));
+
+                    const existingCids = new Set(existingItems.map(item => item.cid));
+
+                    // Filter to only new items that don't exist yet
+                    const newItems = uniqueItems.filter(item => !existingCids.has(item.cid));
+
+                    if (newItems.length === 0) {
+                        return {
+                            success: true,
+                            message: 'All items already exist',
+                            uploaded: 0,
+                            total: uniqueItems.length
+                        };
+                    }
+
+                    // Insert new content items
+                    const contentEntries = newItems.map(item => ({
+                        cid: item.cid,
+                        type: item.type,
+                        data: Buffer.from(new Uint8Array(item.binaryData)),
+                        metadata: item.metadata || {},
+                        createdAt: new Date()
+                    }));
+
+                    await db.insert(content).values(contentEntries);
+
+                    return {
+                        success: true,
+                        message: `Uploaded ${newItems.length} new content items`,
+                        uploaded: newItems.length,
+                        total: uniqueItems.length
+                    };
+                } catch (error) {
+                    console.error('Error uploading batch content:', error);
+                    set.status = 500;
+                    return {
+                        error: 'Failed to upload content batch',
+                        details: error instanceof Error ? error.message : 'Unknown error'
+                    };
+                }
+            })
+        )
+        // Get specific content by CID
         .get('/:cid', async ({ params: { cid }, set }) => {
             try {
                 const contentData = await getContentByCid(cid);
@@ -645,30 +977,32 @@ const app = new Elysia({ prefix: '/api' })
                 };
             }
         })
-        // New route for getting binary data
-        .get('/:cid/binary', async ({ params: { cid }, set }) => {
-            try {
-                const binaryData = await getBinaryContentByCid(cid);
+        // Binary data endpoint - clean Eden Treaty path
+        .group('/:cid/binary', app => app
+            .get('/', async ({ params: { cid }, set }) => {
+                try {
+                    const binaryData = await getBinaryContentByCid(cid);
 
-                if (!binaryData) {
-                    set.status = 404;
-                    return { error: 'Binary content not found' };
+                    if (!binaryData) {
+                        set.status = 404;
+                        return { error: 'Binary content not found' };
+                    }
+
+                    // Return in a format that can be transported over JSON
+                    return {
+                        cid,
+                        binaryData: Array.from(binaryData) // Convert to array for transport
+                    };
+                } catch (error) {
+                    console.error('Error retrieving binary content:', error);
+                    set.status = 500;
+                    return {
+                        error: 'Failed to retrieve binary content',
+                        details: error instanceof Error ? error.message : 'Unknown error'
+                    };
                 }
-
-                // Return in a format that can be transported over JSON
-                return {
-                    cid,
-                    binaryData: Array.from(binaryData) // Convert to array for transport
-                };
-            } catch (error) {
-                console.error('Error retrieving binary content:', error);
-                set.status = 500;
-                return {
-                    error: 'Failed to retrieve binary content',
-                    details: error instanceof Error ? error.message : 'Unknown error'
-                };
-            }
-        })
+            })
+        )
     )
     .onError(({ code, error }) => {
         console.error(`API Error [${code}]:`, error);
@@ -685,11 +1019,10 @@ const app = new Elysia({ prefix: '/api' })
         });
     });
 
-type RequestHandler = (v: { request: Request }) => Response | Promise<Response>
-
-export type App = typeof app
-export const GET: RequestHandler = async ({ request }) => app.handle(request)
-export const POST: RequestHandler = async ({ request }) => app.handle(request)
-export const OPTIONS: RequestHandler = async ({ request }) => app.handle(request)
-export const PUT: RequestHandler = async ({ request }) => app.handle(request)
-export const DELETE: RequestHandler = async ({ request }) => app.handle(request)
+// Use exported RequestHandler instead of local type
+export type App = typeof app;
+export const GET = async ({ request }: { request: Request }) => app.handle(request);
+export const POST = async ({ request }: { request: Request }) => app.handle(request);
+export const OPTIONS = async ({ request }: { request: Request }) => app.handle(request);
+export const PUT = async ({ request }: { request: Request }) => app.handle(request);
+export const DELETE = async ({ request }: { request: Request }) => app.handle(request);
