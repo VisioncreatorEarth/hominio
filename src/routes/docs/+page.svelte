@@ -8,9 +8,13 @@
 	const selectedDoc = documentService.selectedDoc;
 	const status = documentService.status;
 	const error = documentService.error;
+	const docContent = documentService.docContent;
 
 	// Subscribe to sync service store
 	const syncStatus = syncService.status;
+
+	// State for random property button
+	let isAddingProperty = false;
 
 	// Handle selecting a document
 	function handleSelectDoc(doc: DocMetadata) {
@@ -22,14 +26,30 @@
 		documentService.createNewDocument();
 	}
 
-	// Handle manual sync
-	function handleSync() {
-		syncService.pullAllDocsFromServer();
+	// Handle adding random property
+	async function handleAddRandomProperty() {
+		if (isAddingProperty) return;
+
+		isAddingProperty = true;
+		try {
+			await documentService.addRandomPropertyToDocument();
+		} finally {
+			isAddingProperty = false;
+		}
+	}
+
+	// Handle manual pull from server
+	function handlePull() {
+		syncService.pullFromServer();
+	}
+
+	// Handle manual push to server
+	function handlePush() {
+		syncService.pushToServer();
 	}
 
 	// On mount, ensure we have properly initialized
 	onMount(() => {
-		// The services automatically initialize and sync
 		console.log('Document component mounted');
 	});
 
@@ -40,8 +60,8 @@
 </script>
 
 <div class="min-h-screen bg-[#0F1525] text-slate-200">
-	<!-- Sidebar and Main Content Layout -->
-	<div class="grid min-h-screen grid-cols-[250px_1fr]">
+	<!-- Three-column layout: Sidebar, Main Content, and Right Aside -->
+	<div class="grid min-h-screen grid-cols-[250px_1fr_400px]">
 		<!-- Sidebar - Doc List -->
 		<aside class="flex flex-col overflow-y-auto border-r border-slate-700 bg-[#0F1525]">
 			<div class="border-b border-slate-700 p-4">
@@ -55,29 +75,48 @@
 					{#if $syncStatus.isSyncing}
 						<span class="flex items-center text-blue-300">
 							<div class="mr-1 h-2 w-2 animate-pulse rounded-full bg-blue-400"></div>
-							Syncing... {$syncStatus.progress.current}/{$syncStatus.progress.total}
+							Syncing...
 						</span>
-					{:else if $syncStatus.lastSyncTime}
+					{:else if $syncStatus.lastSynced}
 						<span class="text-green-300">
-							Synced {new Date($syncStatus.lastSyncTime).toLocaleTimeString()}
+							Synced {new Date($syncStatus.lastSynced).toLocaleTimeString()}
 						</span>
 					{:else}
 						<span class="text-yellow-400">Not synced</span>
 					{/if}
 
 					{#if !$syncStatus.isSyncing}
-						<button
-							class="ml-2 rounded bg-blue-600 px-2 py-0.5 text-xs text-white hover:bg-blue-700"
-							on:click={handleSync}
-						>
-							Sync Now
-						</button>
+						<div class="ml-2 flex gap-2">
+							<button
+								class="rounded bg-green-600 px-2 py-0.5 text-xs text-white hover:bg-green-700"
+								on:click={handlePush}
+								title="Push local changes to server"
+							>
+								Push
+							</button>
+							<button
+								class="rounded bg-blue-600 px-2 py-0.5 text-xs text-white hover:bg-blue-700"
+								on:click={handlePull}
+								title="Pull changes from server"
+							>
+								Pull
+							</button>
+						</div>
 					{/if}
 				</div>
 
-				{#if $syncStatus.error}
+				{#if $syncStatus.syncError}
 					<div class="mt-1 text-xs text-red-400">
-						Error: {$syncStatus.error}
+						Error: {$syncStatus.syncError}
+					</div>
+				{/if}
+
+				<!-- Display pending changes count -->
+				{#if $syncStatus.pendingLocalChanges > 0}
+					<div class="mt-1 text-xs text-amber-400">
+						{$syncStatus.pendingLocalChanges} document{$syncStatus.pendingLocalChanges !== 1
+							? 's'
+							: ''} with local changes
 					</div>
 				{/if}
 			</div>
@@ -160,7 +199,7 @@
 								<span class="font-mono text-slate-300">
 									{doc.pubKey.substring(0, 10)}...
 								</span>
-								{#if doc.ownerId === 'local-user'}
+								{#if doc.localState}
 									<span class="ml-2 rounded bg-amber-800 px-1 text-xs text-amber-200"
 										>Local Only</span
 									>
@@ -173,7 +212,7 @@
 		</aside>
 
 		<!-- Main Content Area -->
-		<main class="flex-grow">
+		<main class="flex-grow overflow-y-auto border-r border-slate-700">
 			{#if $selectedDoc}
 				<!-- Document title at the top -->
 				<div class="p-6">
@@ -195,7 +234,7 @@
 								<span class="font-medium">Owner ID:</span>
 								<span class="ml-2 font-mono">
 									{$selectedDoc.ownerId}
-									{#if $selectedDoc.ownerId === 'local-user'}
+									{#if $selectedDoc.localState}
 										<span class="ml-2 rounded bg-amber-800 px-1 text-xs text-amber-200"
 											>Not yet synced to server</span
 										>
@@ -214,9 +253,11 @@
 									{new Date($selectedDoc.updatedAt).toLocaleString()}
 								</span>
 							</div>
-							{#if $selectedDoc.snapshotCid}
-								<div>
-									<span class="font-medium">Snapshot CID:</span>
+
+							<!-- Always show Snapshot CID field -->
+							<div>
+								<span class="font-medium">Snapshot CID:</span>
+								{#if $selectedDoc.snapshotCid}
 									<div class="ml-2 font-mono break-all">
 										{$selectedDoc.snapshotCid}
 										{#if $selectedDoc.snapshotCid.startsWith('local-')}
@@ -225,13 +266,15 @@
 											>
 										{/if}
 									</div>
-								</div>
-							{/if}
+								{:else}
+									<div class="ml-2 text-slate-500 italic">No server snapshot</div>
+								{/if}
+							</div>
 
-							<!-- Display Update CIDs -->
-							{#if $selectedDoc.updateCids && $selectedDoc.updateCids.length > 0}
-								<div>
-									<span class="font-medium">Updates ({$selectedDoc.updateCids.length}):</span>
+							<!-- Always show Update CIDs field -->
+							<div>
+								<span class="font-medium">Updates ({$selectedDoc.updateCids?.length || 0}):</span>
+								{#if $selectedDoc.updateCids && $selectedDoc.updateCids.length > 0}
 									<div class="ml-2 font-mono">
 										{#each $selectedDoc.updateCids as cid}
 											<div class="mt-1 text-xs break-all">
@@ -244,8 +287,45 @@
 											</div>
 										{/each}
 									</div>
+								{:else}
+									<div class="ml-2 text-slate-500 italic">No updates</div>
+								{/if}
+							</div>
+
+							<!-- Always show Local State section -->
+							<div class="mt-4 border-t border-slate-700 pt-4">
+								<h3 class="mb-2 text-lg font-semibold">Local State (Pending Sync)</h3>
+
+								<!-- Always show Local Snapshot CID field -->
+								<div>
+									<span class="font-medium">Local Snapshot CID:</span>
+									{#if $selectedDoc.localState?.snapshotCid}
+										<div class="ml-2 font-mono break-all text-amber-300">
+											{$selectedDoc.localState.snapshotCid}
+										</div>
+									{:else}
+										<div class="ml-2 text-slate-500 italic">No local snapshot</div>
+									{/if}
 								</div>
-							{/if}
+
+								<!-- Always show Local Update CIDs field -->
+								<div class="mt-2">
+									<span class="font-medium">
+										Local Updates ({$selectedDoc.localState?.updateCids?.length || 0}):
+									</span>
+									{#if $selectedDoc.localState?.updateCids && $selectedDoc.localState.updateCids.length > 0}
+										<div class="ml-2 font-mono">
+											{#each $selectedDoc.localState.updateCids as cid}
+												<div class="mt-1 text-xs break-all text-amber-300">
+													{cid}
+												</div>
+											{/each}
+										</div>
+									{:else}
+										<div class="ml-2 text-slate-500 italic">No local updates</div>
+									{/if}
+								</div>
+							</div>
 						</div>
 					</div>
 				</div>
@@ -281,5 +361,110 @@
 				</div>
 			{/if}
 		</main>
+
+		<!-- Right Aside - Document Content -->
+		<aside class="overflow-y-auto bg-[#0F1525]">
+			{#if $selectedDoc}
+				<div class="p-6">
+					<div class="mb-4 flex items-center justify-between">
+						<h2 class="text-xl font-bold">Document Content</h2>
+
+						<!-- Add Random Property Button -->
+						<button
+							class="flex items-center rounded-md bg-green-600 px-3 py-1 text-sm text-white hover:bg-green-700 disabled:opacity-50"
+							on:click={handleAddRandomProperty}
+							disabled={isAddingProperty || $docContent.loading}
+						>
+							{#if isAddingProperty}
+								<div
+									class="mr-2 h-4 w-4 animate-spin rounded-full border-t-2 border-b-2 border-white"
+								></div>
+								Adding...
+							{:else}
+								<svg class="mr-1 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="2"
+										d="M12 6v6m0 0v6m0-6h6m-6 0H6"
+									/>
+								</svg>
+								Add Random Property
+							{/if}
+						</button>
+					</div>
+
+					<!-- Source info -->
+					<div class="mb-4 rounded bg-slate-800/50 p-3 text-sm">
+						<p class="font-medium">
+							{#if $docContent.isLocalSnapshot && $docContent.sourceCid}
+								<span class="text-amber-300">
+									Showing content from local snapshot:
+									<span class="font-mono">{$docContent.sourceCid.substring(0, 12)}...</span>
+								</span>
+							{:else if $docContent.sourceCid}
+								<span class="text-blue-300">
+									Showing content from server snapshot:
+									<span class="font-mono">{$docContent.sourceCid.substring(0, 12)}...</span>
+								</span>
+							{:else}
+								<span class="text-red-300">No snapshot available</span>
+							{/if}
+						</p>
+
+						<!-- Show applied updates info -->
+						{#if $docContent.appliedUpdates !== undefined && $docContent.appliedUpdates > 0}
+							<p class="mt-1">
+								<span class="text-green-300">
+									{$docContent.appliedUpdates} update{$docContent.appliedUpdates !== 1 ? 's' : ''} applied
+								</span>
+							</p>
+						{:else if $docContent.sourceCid}
+							<p class="mt-1 text-slate-400">No updates applied (base snapshot only)</p>
+						{/if}
+
+						<!-- Show pending updates count -->
+						{#if $selectedDoc.localState?.updateCids && $selectedDoc.localState.updateCids.length > 0}
+							<p class="mt-2 text-amber-300">
+								{$selectedDoc.localState.updateCids.length} pending update{$selectedDoc.localState
+									.updateCids.length !== 1
+									? 's'
+									: ''} (already reflected in content)
+							</p>
+						{/if}
+					</div>
+
+					<!-- Content display -->
+					{#if $docContent.loading}
+						<div class="flex h-32 items-center justify-center">
+							<div
+								class="h-8 w-8 animate-spin rounded-full border-t-2 border-b-2 border-blue-500"
+							></div>
+						</div>
+					{:else if $docContent.error}
+						<div class="rounded bg-red-900/30 p-4 text-red-200">
+							<p class="font-medium">Error loading content:</p>
+							<p class="mt-2">{$docContent.error}</p>
+						</div>
+					{:else if $docContent.content}
+						<div class="rounded bg-slate-800/50 p-4">
+							<pre class="overflow-x-auto text-xs text-green-300">{JSON.stringify(
+									$docContent.content,
+									null,
+									2
+								)}</pre>
+						</div>
+					{:else}
+						<div class="rounded bg-slate-800/50 p-4 text-slate-400">
+							<p>No content available</p>
+						</div>
+					{/if}
+				</div>
+			{:else}
+				<div class="flex h-full items-center justify-center p-6 text-center text-slate-400">
+					<p>Select a document to view its content</p>
+				</div>
+			{/if}
+		</aside>
 	</div>
 </div>

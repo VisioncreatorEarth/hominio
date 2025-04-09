@@ -255,6 +255,7 @@ const app = new Elysia({ prefix: '/api' })
                 // Parse request body to extract optional snapshot
                 const createDocBody = body as {
                     binarySnapshot?: number[];
+                    pubKey?: string; // Accept pubKey from client
                     title?: string;
                     description?: string;
                 };
@@ -275,7 +276,8 @@ const app = new Elysia({ prefix: '/api' })
                         // Generate state information from the imported doc
                         snapshot = snapshotData;
                         cid = await hashService.hashSnapshot(snapshotData);
-                        pubKey = loroService.generatePublicKey();
+                        // Use client's pubKey if provided, otherwise generate one
+                        pubKey = createDocBody.pubKey || loroService.generatePublicKey();
                         jsonState = loroDoc.toJSON();
                     } catch (error) {
                         set.status = 400;
@@ -287,27 +289,38 @@ const app = new Elysia({ prefix: '/api' })
                     }
                 } else {
                     // Create a default document if no snapshot provided
-                    ({ snapshot, cid, pubKey, jsonState } = await loroService.createDemoDoc());
+                    ({ snapshot, cid, jsonState } = await loroService.createDemoDoc());
+                    // Use client's pubKey if provided, otherwise use the one from createDemoDoc
+                    pubKey = createDocBody.pubKey || loroService.generatePublicKey();
                 }
 
-                // First, store the content
-                const contentEntry: schema.InsertContent = {
-                    cid,
-                    type: 'snapshot',
-                    // Store binary data directly
-                    data: Buffer.from(snapshot),
-                    // Store metadata separately
-                    metadata: {
-                        docState: jsonState
-                    }
-                };
+                // First, store the content - *only if it doesn't exist*
+                let contentResult: (typeof schema.content.$inferSelect)[] | null = null;
+                const existingContent = await db.select().from(schema.content).where(eq(schema.content.cid, cid));
 
-                // Save the content
-                const contentResult = await db.insert(schema.content)
-                    .values(contentEntry)
-                    .returning();
+                if (existingContent.length === 0) {
+                    // Content doesn't exist, insert it
+                    const contentEntry: schema.InsertContent = {
+                        cid,
+                        type: 'snapshot',
+                        data: Buffer.from(snapshot), // Store binary data directly
+                        metadata: { docState: jsonState } // Store metadata separately
+                    };
+                    contentResult = await db.insert(schema.content)
+                        .values(contentEntry)
+                        .returning();
+                    console.log('Created content entry:', contentResult[0].cid);
+                } else {
+                    // Content already exists, use the existing one
+                    console.log('Content already exists with CID:', cid);
+                    contentResult = existingContent; // Use existing content data if needed later
+                }
 
-                console.log('Created content entry:', contentResult[0].cid);
+                // Check if content operation was successful (either insert or found existing)
+                if (!contentResult || contentResult.length === 0) {
+                    set.status = 500;
+                    return { success: false, error: 'Failed to ensure content entry exists' };
+                }
 
                 // Create document entry with the current user as owner
                 const docEntry: schema.InsertDoc = {

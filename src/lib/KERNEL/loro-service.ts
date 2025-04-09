@@ -1,6 +1,14 @@
-import { randomBytes } from 'crypto';
+import { browser } from '$app/environment'; // Import browser check
 import { LoroDoc } from 'loro-crdt';
 import { hashService } from './hash-service';
+
+// Re-add dynamic import for randomBytes on server-side
+let randomBytes: ((size: number) => Buffer) | undefined;
+if (!browser) {
+    import('crypto').then(crypto => {
+        randomBytes = crypto.randomBytes;
+    }).catch(err => console.error('Failed to load crypto module on server:', err));
+}
 
 // Define proper types for Loro document JSON state
 type LoroJsonValue = string | number | boolean | null | LoroJsonObject | LoroJsonArray;
@@ -27,8 +35,33 @@ export class LoroService {
      * @returns A z-prefixed base64url-encoded public key
      */
     generatePublicKey(): string {
+        let bytes: Uint8Array;
+        if (browser) {
+            // Use browser's crypto API
+            bytes = new Uint8Array(32);
+            window.crypto.getRandomValues(bytes);
+        } else {
+            // Use Node's crypto API (dynamically imported)
+            if (!randomBytes) {
+                // Handle case where dynamic import might not be ready or failed
+                console.error('Node crypto.randomBytes not available when called.');
+                // Fallback strategy: Generate less secure random bytes as a last resort
+                // Or throw an error if strict security is required.
+                bytes = new Uint8Array(32).map(() => Math.floor(Math.random() * 256));
+                // Alternatively: throw new Error('Node crypto.randomBytes failed to load.');
+            }
+            else {
+                bytes = randomBytes(32);
+            }
+        }
         // Format: z + base64url encoding of 32 bytes
-        return 'z' + randomBytes(32).toString('base64url');
+        // Use Buffer.from for consistent base64url encoding
+        // btoa is browser-native for Base64, but Buffer handles Base64URL
+        // We need a cross-compatible way. Using Buffer might require polyfills in browser.
+        // Let's try a manual base64url conversion:
+        const base64 = btoa(String.fromCharCode(...bytes));
+        const base64url = base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+        return 'z' + base64url;
     }
 
     /**

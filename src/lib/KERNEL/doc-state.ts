@@ -1,7 +1,9 @@
-import { writable } from 'svelte/store';
+import { writable, get } from 'svelte/store';
 import { browser } from '$app/environment';
 import { LoroDoc } from 'loro-crdt';
 import { openDB, type IDBPDatabase } from 'idb';
+import { hashService } from './hash-service';
+import { loroService } from './loro-service';
 
 // Types
 export interface DocMetadata {
@@ -13,14 +15,30 @@ export interface DocMetadata {
     updatedAt: string;
     snapshotCid?: string;
     updateCids?: string[];
+    // Local state tracking for sync queue
+    localState?: {
+        snapshotCid?: string;  // Local snapshot that needs syncing
+        updateCids?: string[]; // Local updates that need syncing
+    };
 }
 
-interface ContentItem {
+// Export ContentItem interface
+export interface ContentItem {
     cid: string;
     type: string;
     data: Uint8Array;
     metadata?: Record<string, unknown>;
     createdAt: string;
+}
+
+// Document content interface
+export interface DocContentState {
+    content: unknown;
+    loading: boolean;
+    error: string | null;
+    sourceCid: string | null;
+    isLocalSnapshot: boolean;
+    appliedUpdates?: number; // Number of updates applied to the content
 }
 
 // Constants
@@ -39,6 +57,13 @@ const status = writable({
     syncingDocs: false
 });
 const error = writable<string | null>(null);
+const docContent = writable<DocContentState>({
+    content: null,
+    loading: false,
+    error: null,
+    sourceCid: null,
+    isLocalSnapshot: false
+});
 
 // Map to hold active Loro document instances
 const activeLoroDocuments = new Map<string, LoroDoc>();
@@ -52,6 +77,7 @@ class DocumentService {
     selectedDoc = selectedDoc;
     status = status;
     error = error;
+    docContent = docContent;
 
     constructor() {
         if (browser) {
@@ -60,6 +86,21 @@ class DocumentService {
             }).catch(err => {
                 console.error('Failed to initialize IndexedDB:', err);
                 this.setError('Failed to initialize local database');
+            });
+
+            // Subscribe to selectedDoc changes to load content
+            selectedDoc.subscribe(doc => {
+                if (doc) {
+                    this.loadDocumentContent(doc);
+                } else {
+                    docContent.set({
+                        content: null,
+                        loading: false,
+                        error: null,
+                        sourceCid: null,
+                        isLocalSnapshot: false
+                    });
+                }
             });
         }
     }
@@ -106,7 +147,7 @@ class DocumentService {
     }
 
     // Load documents from IndexedDB
-    private async loadDocsFromIndexDB(): Promise<void> {
+    async loadDocsFromIndexDB(): Promise<void> {
         this.setStatus({ loading: true });
 
         try {
@@ -137,14 +178,14 @@ class DocumentService {
     }
 
     // Save content to IndexedDB
-    private async saveContentToIndexDB(cid: string, data: Uint8Array, docPubKey: string): Promise<void> {
+    private async saveContentToIndexDB(cid: string, data: Uint8Array, docPubKey: string, type: 'snapshot' | 'update' = 'snapshot'): Promise<void> {
         try {
             const db = await this.ensureDB();
             const now = new Date().toISOString();
 
             const contentItem: ContentItem = {
                 cid,
-                type: 'snapshot',
+                type,
                 data,
                 metadata: { documentPubKey: docPubKey },
                 createdAt: now
@@ -167,6 +208,178 @@ class DocumentService {
             console.error('Error loading content from IndexedDB:', err);
             throw new Error('Failed to load content data from local storage');
         }
+    }
+
+    // Load document content
+    async loadDocumentContent(doc: DocMetadata): Promise<void> {
+        docContent.update(state => ({ ...state, loading: true, error: null }));
+
+        try {
+            // Determine which snapshot CID to use - prioritize local snapshot
+            const snapshotCid = doc.localState?.snapshotCid || doc.snapshotCid;
+            const isLocalSnapshot = !!doc.localState?.snapshotCid;
+
+            if (!snapshotCid) {
+                docContent.set({
+                    content: { note: "No snapshot available for this document" },
+                    loading: false,
+                    error: null,
+                    sourceCid: null,
+                    isLocalSnapshot: false
+                });
+                return;
+            }
+
+            // Load snapshot binary data from IndexedDB
+            const snapshotData = await this.loadContentFromIndexDB(snapshotCid);
+
+            if (!snapshotData) {
+                docContent.set({
+                    content: null,
+                    loading: false,
+                    error: `Could not load snapshot content for CID: ${snapshotCid}`,
+                    sourceCid: snapshotCid,
+                    isLocalSnapshot
+                });
+                return;
+            }
+
+            // Create a temporary LoroDoc to import the data
+            const tempDoc = new LoroDoc();
+
+            // Import the snapshot
+            tempDoc.import(snapshotData);
+            console.log(`Loaded base snapshot from CID: ${snapshotCid}`);
+
+            // Track number of updates applied
+            let appliedUpdates = 0;
+
+            // Gather all update CIDs (both from server and local)
+            const allUpdateCids = [
+                ...(doc.updateCids || []),
+                ...(doc.localState?.updateCids || [])
+            ];
+
+            // Apply all updates in order
+            for (const updateCid of allUpdateCids) {
+                const updateData = await this.loadContentFromIndexDB(updateCid);
+                if (updateData) {
+                    try {
+                        tempDoc.import(updateData);
+                        appliedUpdates++;
+                        console.log(`Applied update from CID: ${updateCid}`);
+                    } catch (err) {
+                        console.error(`Error applying update ${updateCid}:`, err);
+                    }
+                } else {
+                    console.warn(`Could not load update data for CID: ${updateCid}`);
+                }
+            }
+
+            // Get JSON representation of the fully updated document
+            const content = tempDoc.toJSON();
+
+            docContent.set({
+                content,
+                loading: false,
+                error: null,
+                sourceCid: snapshotCid,
+                isLocalSnapshot,
+                appliedUpdates // Add number of updates applied
+            });
+
+            console.log(`Document content loaded with ${appliedUpdates} updates applied`);
+
+        } catch (err) {
+            console.error('Error loading document content:', err);
+            const errorMessage = err instanceof Error ? err.message : 'Failed to load document content';
+            docContent.set({
+                content: null,
+                loading: false,
+                error: errorMessage,
+                sourceCid: null,
+                isLocalSnapshot: false
+            });
+        }
+    }
+
+    // Add random property to document and create update
+    async addRandomPropertyToDocument(): Promise<boolean> {
+        // Get the current selected document directly from the store
+        const doc = get(selectedDoc);
+
+        if (!doc) {
+            this.setError('No document selected');
+            return false;
+        }
+
+        try {
+            const docPubKey = doc.pubKey;
+            const loroDoc = activeLoroDocuments.get(docPubKey);
+
+            if (!loroDoc) {
+                this.setError('Document instance not found');
+                return false;
+            }
+
+            // Generate random property key and value
+            const randomKey = `prop_${Math.floor(Math.random() * 10000)}`;
+            const randomValue = `value_${Math.floor(Math.random() * 10000)}`;
+
+            // Add to Loro document using a Map
+            const dataMap = loroDoc.getMap("data");
+            dataMap.set(randomKey, randomValue);
+
+            console.log(`Added random property to document: ${randomKey}=${randomValue}`);
+
+            // Create update binary
+            const updateData = loroDoc.export({ mode: 'update' });
+
+            // Generate content hash for the update
+            const updateCid = await this.generateContentHash(updateData);
+
+            // Save update to IndexedDB
+            await this.saveContentToIndexDB(updateCid, updateData, docPubKey, 'update');
+
+            // Create updated doc
+            const updatedDoc: DocMetadata = {
+                ...doc,
+                updatedAt: new Date().toISOString(),
+                localState: {
+                    ...(doc.localState || {}),
+                    updateCids: [...(doc.localState?.updateCids || []), updateCid]
+                }
+            };
+
+            // Save updated document metadata
+            await this.saveDocToIndexDB(updatedDoc);
+
+            // Update the docs store
+            docs.update(docList => {
+                const index = docList.findIndex(d => d.pubKey === docPubKey);
+                if (index !== -1) {
+                    docList[index] = updatedDoc;
+                }
+                return docList;
+            });
+
+            // Update selected doc
+            selectedDoc.set(updatedDoc);
+
+            // Reload document content
+            this.loadDocumentContent(updatedDoc);
+
+            return true;
+        } catch (err) {
+            console.error('Error adding random property to document:', err);
+            this.setError(err instanceof Error ? err.message : 'Failed to update document');
+            return false;
+        }
+    }
+
+    // Generate a content hash
+    private async generateContentHash(data: Uint8Array): Promise<string> {
+        return hashService.hashSnapshot(data);
     }
 
     // Get or create a Loro document instance
@@ -205,8 +418,11 @@ class DocumentService {
 
         if (doc) {
             try {
+                // Determine which snapshot CID to use
+                const snapshotCid = doc.localState?.snapshotCid || doc.snapshotCid;
+
                 // Get or create a Loro doc instance for this document
-                await this.getOrCreateLoroDoc(doc.pubKey, doc.snapshotCid);
+                await this.getOrCreateLoroDoc(doc.pubKey, snapshotCid);
             } catch (err) {
                 console.error(`Error selecting doc ${doc.pubKey}:`, err);
                 this.setError('Failed to load document data');
@@ -220,8 +436,8 @@ class DocumentService {
         this.setError(null);
 
         try {
-            // Generate a unique pubKey
-            const pubKey = crypto.randomUUID();
+            // Generate a unique pubKey using loroService
+            const pubKey = loroService.generatePublicKey();
 
             // Create a new Loro document
             const loroDoc = new LoroDoc();
@@ -229,12 +445,11 @@ class DocumentService {
             // Get the binary representation
             const binaryData = loroDoc.export({ mode: 'snapshot' });
 
-            // Generate a CID using current timestamp as placeholder
-            // In a real implementation, this would use proper content-based hash
-            const cid = `local-${Date.now()}-${Math.random().toString(36).substring(2)}`;
+            // Generate a real content hash
+            const snapshotCid = await this.generateContentHash(binaryData);
 
             // Save content to IndexedDB
-            await this.saveContentToIndexDB(cid, binaryData, pubKey);
+            await this.saveContentToIndexDB(snapshotCid, binaryData, pubKey);
 
             // Create metadata for the new document
             const newDoc: DocMetadata = {
@@ -244,8 +459,11 @@ class DocumentService {
                 description: 'A new empty document',
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
-                snapshotCid: cid,
-                updateCids: []
+                // Set the localState to track this as needing sync
+                localState: {
+                    snapshotCid,
+                    updateCids: []
+                }
             };
 
             // Save document metadata to IndexedDB
