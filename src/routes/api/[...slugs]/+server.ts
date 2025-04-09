@@ -525,6 +525,97 @@ const app = new Elysia({ prefix: '/api' })
                     };
                 }
             })
+            // Add batch update endpoint
+            .post('/batch', async ({ params: { pubKey }, body, session, set }) => {
+                try {
+                    // Verify document exists and user owns it
+                    const docResult = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
+                    if (!docResult.length) {
+                        set.status = 404;
+                        return { error: 'Document not found' };
+                    }
+
+                    const document = docResult[0];
+
+                    // Verify the user owns this document
+                    if (document.ownerId !== session.user.id) {
+                        set.status = 403;
+                        return { error: 'Not authorized to update this document' };
+                    }
+
+                    // Parse the update data from request body, expecting an array of CIDs
+                    const updateBody = body as { updateCids?: string[] };
+                    const updateCids = updateBody.updateCids;
+
+                    if (!updateCids || !Array.isArray(updateCids) || updateCids.length === 0) {
+                        set.status = 400;
+                        return { error: 'Invalid request. Array of update CIDs required.' };
+                    }
+
+                    console.log(`Processing batch update request with ${updateCids.length} CIDs for document ${pubKey}`);
+
+                    // Verify all the updates exist in the content store
+                    const existingContentItems = await db
+                        .select({ cid: content.cid })
+                        .from(content)
+                        .where(inArray(content.cid, updateCids));
+
+                    const existingCids = new Set(existingContentItems.map(item => item.cid));
+                    const missingCids = updateCids.filter(cid => !existingCids.has(cid));
+
+                    if (missingCids.length > 0) {
+                        set.status = 400;
+                        return {
+                            error: 'Some update CIDs are missing in the content store',
+                            missing: missingCids
+                        };
+                    }
+
+                    // Get current updateCids from document
+                    const currentUpdateCids = document.updateCids || [];
+
+                    // Filter to only CIDs that aren't already registered
+                    const newUpdateCids = updateCids.filter(cid => !currentUpdateCids.includes(cid));
+
+                    if (newUpdateCids.length === 0) {
+                        // All updates are already registered
+                        return {
+                            success: true,
+                            message: 'All updates are already registered with this document',
+                            registeredCount: 0,
+                            updatedCids: currentUpdateCids
+                        };
+                    }
+
+                    // Add new CIDs to the document's updateCids array
+                    const updatedCids = [...currentUpdateCids, ...newUpdateCids];
+
+                    // Update the document
+                    const updateResult = await db.update(schema.docs)
+                        .set({
+                            updateCids: updatedCids,
+                            updatedAt: new Date()
+                        })
+                        .where(eq(schema.docs.pubKey, pubKey))
+                        .returning();
+
+                    console.log(`Registered ${newUpdateCids.length} updates with document ${pubKey}`);
+
+                    // Return success
+                    return {
+                        success: true,
+                        registeredCount: newUpdateCids.length,
+                        updatedCids: updateResult[0].updateCids || []
+                    };
+                } catch (error) {
+                    console.error('Error batch updating document:', error);
+                    set.status = 500;
+                    return {
+                        error: 'Failed to batch update document',
+                        details: error instanceof Error ? error.message : 'Unknown error'
+                    };
+                }
+            })
         )
         // Document snapshot routes - grouped for clean Eden Treaty paths
         .group('/:pubKey/snapshot', app => app

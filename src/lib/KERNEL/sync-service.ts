@@ -821,10 +821,10 @@ class SyncService {
                         }
                     }
 
-                    // Handle updates - simplified to avoid ghost updates
+                    // Handle updates - using true batch updating instead of individual calls
                     if ((success || !doc.localState?.snapshotCid) && doc.localState?.updateCids && doc.localState.updateCids.length > 0) {
                         const updateCids = [...doc.localState.updateCids];
-                        console.log(`  - Pushing ${updateCids.length} individual updates for ${doc.pubKey}...`);
+                        console.log(`  - Pushing ${updateCids.length} updates for ${doc.pubKey} in batches...`);
 
                         if (updateCids.length > 0) {
                             // 1. Load all update data in one batch
@@ -835,86 +835,89 @@ class SyncService {
                             } else {
                                 console.log(`  - Loaded ${updateDataMap.size}/${updateCids.length} updates`);
 
-                                // IMPORTANT: Skip the batch content check/upload which might create ghost entries
-                                // Register updates with the document on the server directly
-                                if (updateDataMap.size > 0) {
+                                // Process updates in efficient batches
+                                // Use a smaller batch size to prevent timeouts/payload size issues
+                                const BATCH_SIZE = 20;
+                                const successfulUpdateCids: string[] = [];
+
+                                // Get array of CIDs that have data
+                                const availableCids = Array.from(updateDataMap.keys());
+
+                                // Process in batches
+                                for (let i = 0; i < availableCids.length; i += BATCH_SIZE) {
+                                    const batchCids = availableCids.slice(i, i + BATCH_SIZE);
+                                    console.log(`  - Processing batch ${i / BATCH_SIZE + 1}/${Math.ceil(availableCids.length / BATCH_SIZE)} (${batchCids.length} updates)`);
+
                                     try {
-                                        console.log(`  - Registering ${updateDataMap.size} updates with server`);
+                                        // Use the batch upload endpoint for more efficient processing
+                                        // First register all content in a batch
+                                        const batchItems = batchCids.map(cid => ({
+                                            cid,
+                                            type: 'update',
+                                            binaryData: Array.from(updateDataMap.get(cid)!),
+                                            metadata: { documentPubKey: doc.pubKey }
+                                        }));
 
-                                        // For each update, send it to the server with the document's pubKey
-                                        const updatePromises = [];
-                                        for (const [updateCid, updateData] of updateDataMap.entries()) {
-                                            // IMPORTANT: Skip if update is already registered with the document on the server
-                                            const alreadyRegisteredWithDoc = doc.updateCids && doc.updateCids.includes(updateCid);
+                                        // Use Eden Treaty batch content upload
+                                        const contentBatchResult = await (hominio.api.content.batch.upload as any).post({
+                                            items: batchItems
+                                        }) as ApiResponse<{ success: boolean, uploaded: number }>;
 
-                                            if (alreadyRegisteredWithDoc) {
-                                                console.log(`  - Update ${updateCid} already registered with document on server, skipping`);
-                                                continue;
-                                            }
-
-                                            // We need to explicitly send each update to the server for this document
-                                            // IMPORTANT: Send directly to the document update endpoint without separate content upload
-                                            updatePromises.push(
-                                                (hominio.api.docs({ pubKey: doc.pubKey }).update as any).post({
-                                                    binaryUpdate: Array.from(updateData)
-                                                }).then((result: ApiResponse<any>) => {
-                                                    if (result.error) {
-                                                        throw new Error(`Failed to register update ${updateCid}: ${result.error.message}`);
-                                                    }
-                                                    // Check if the result contains the registered updateCid 
-                                                    if (result.data && result.data.updateCid) {
-                                                        console.log(`  - Successfully registered update ${result.data.updateCid} with document ${doc.pubKey}`);
-                                                    }
-                                                    return updateCid;
-                                                }).catch(error => {
-                                                    // If error is duplicate, we consider this successful
-                                                    if (error instanceof Error && error.message.includes('duplicate key')) {
-                                                        console.log(`  - Update ${updateCid} already exists for document ${doc.pubKey}`);
-                                                        return updateCid;
-                                                    }
-                                                    throw error;
-                                                })
-                                            );
+                                        if (contentBatchResult.error) {
+                                            console.error(`  - Error uploading batch content: ${contentBatchResult.error.message}`);
+                                            continue;
                                         }
 
-                                        if (updatePromises.length > 0) {
-                                            const results = await Promise.allSettled(updatePromises);
-                                            const successCount = results.filter(r => r.status === 'fulfilled').length;
-                                            console.log(`  - Successfully registered ${successCount}/${updatePromises.length} updates with document ${doc.pubKey}`);
-                                        } else {
-                                            console.log(`  - No updates to register with document ${doc.pubKey}`);
+                                        console.log(`  - Uploaded ${contentBatchResult.data.uploaded}/${batchItems.length} content items`);
+
+                                        // Now register these updates with the document in a single call
+                                        const updateRegistrationResult = await (hominio.api.docs[doc.pubKey].update.batch as any).post({
+                                            updateCids: batchCids
+                                        }) as ApiResponse<{ success: boolean, registeredCount: number, updatedCids: string[] }>;
+
+                                        if (updateRegistrationResult.error) {
+                                            console.error(`  - Error registering updates with document: ${updateRegistrationResult.error.message}`);
+                                            continue;
                                         }
-                                    } catch (error) {
-                                        console.error(`Error registering updates with document ${doc.pubKey}:`, error);
-                                        // Continue with local update even if server update fails
+
+                                        console.log(`  - Registered ${updateRegistrationResult.data.registeredCount}/${batchCids.length} updates with document`);
+
+                                        // Add successful CIDs to our tracking
+                                        successfulUpdateCids.push(...batchCids);
+                                    } catch (batchError) {
+                                        console.error(`  - Error processing batch: ${batchError instanceof Error ? batchError.message : 'Unknown error'}`);
+                                        // Continue with next batch even if this one fails
                                     }
                                 }
 
-                                // 5. Register successful updates with document
-                                for (const updateCid of updateDataMap.keys()) {
-                                    // Add update to document's updateCids if not already there
-                                    if (!doc.updateCids) {
-                                        doc.updateCids = [];
-                                    }
-                                    if (!doc.updateCids.includes(updateCid)) {
-                                        doc.updateCids.push(updateCid);
-                                    }
-                                }
-
-                                // 6. Remove successful updates from localState
-                                if (doc.localState) {
-                                    doc.localState.updateCids = doc.localState.updateCids.filter(
-                                        cid => !updateDataMap.has(cid)
-                                    );
-
-                                    // Clean up empty localState
-                                    if ((!doc.localState.snapshotCid || !doc.localState.snapshotCid.length) &&
-                                        (!doc.localState.updateCids || doc.localState.updateCids.length === 0)) {
-                                        delete doc.localState;
+                                // If we have successful updates, update the document
+                                if (successfulUpdateCids.length > 0) {
+                                    // 5. Register successful updates with document
+                                    for (const updateCid of successfulUpdateCids) {
+                                        // Add update to document's updateCids if not already there
+                                        if (!doc.updateCids) {
+                                            doc.updateCids = [];
+                                        }
+                                        if (!doc.updateCids.includes(updateCid)) {
+                                            doc.updateCids.push(updateCid);
+                                        }
                                     }
 
-                                    needsSave = true;
-                                    success = true;
+                                    // 6. Remove successful updates from localState
+                                    if (doc.localState) {
+                                        doc.localState.updateCids = doc.localState.updateCids.filter(
+                                            cid => !successfulUpdateCids.includes(cid)
+                                        );
+
+                                        // Clean up empty localState
+                                        if ((!doc.localState.snapshotCid || !doc.localState.snapshotCid.length) &&
+                                            (!doc.localState.updateCids || doc.localState.updateCids.length === 0)) {
+                                            delete doc.localState;
+                                        }
+
+                                        needsSave = true;
+                                        success = true;
+                                    }
                                 }
                             }
                         }
