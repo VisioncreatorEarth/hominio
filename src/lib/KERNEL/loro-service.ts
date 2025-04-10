@@ -2,14 +2,6 @@ import { browser } from '$app/environment'; // Import browser check
 import { LoroDoc } from 'loro-crdt';
 import { hashService } from './hash-service';
 
-// Re-add dynamic import for randomBytes on server-side
-let randomBytes: ((size: number) => Buffer) | undefined;
-if (!browser) {
-    import('crypto').then(crypto => {
-        randomBytes = crypto.randomBytes;
-    }).catch(err => console.error('Failed to load crypto module on server:', err));
-}
-
 // Define proper types for Loro document JSON state
 type LoroJsonValue = string | number | boolean | null | LoroJsonObject | LoroJsonArray;
 interface LoroJsonObject { [key: string]: LoroJsonValue }

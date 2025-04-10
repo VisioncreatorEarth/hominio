@@ -11,7 +11,7 @@ const todoSchema = {
     collectionName: 'todoItems',
     containerType: 'map', // Use a LoroMap
     schema: z.object({
-        id: z.string().uuid(),
+        id: z.string().regex(/^[0-9a-f]{64}$/i, { message: "ID must be a valid pubKey format" }),
         text: z.string().min(1),
         completed: z.boolean().default(false),
         createdAt: z.number(),

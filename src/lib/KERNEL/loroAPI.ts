@@ -1,5 +1,6 @@
 import { writable, get, type Writable } from 'svelte/store';
 import type { ZodType } from 'zod';
+import { docIdService } from './docid-service';
 // Import types directly, but not the implementation yet
 import type {
     LoroDoc as LoroDocType,
@@ -385,7 +386,7 @@ export class LoroAPI {
             const mapCollection = collection as LoroMapType<Record<string, unknown>>;
             return {
                 create: async (data: Record<string, unknown>) => {
-                    const id = (data.id as string) || crypto.randomUUID();
+                    const id = (data.id as string) || docIdService.generateDocId();
                     const fullData = { ...data, id };
                     mapCollection.set(id, fullData as unknown as Value);
                     this.scheduleStoreUpdate(schemaName);
@@ -611,7 +612,7 @@ export class LoroAPI {
             return null;
         }
 
-        const id = item.id || crypto.randomUUID();
+        const id = item.id || docIdService.generateDocId();
         const itemWithId = { ...item, id };
         map.set(id, itemWithId as unknown as Value);
         this.scheduleStoreUpdate(schemaName);

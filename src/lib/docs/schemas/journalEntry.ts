@@ -11,7 +11,7 @@ const journalEntrySchema = {
     collectionName: 'entries',
     containerType: 'map', // Use a LoroMap
     schema: z.object({
-        id: z.string().uuid(),
+        id: z.string().regex(/^[0-9a-f]{64}$/i, { message: "ID must be a valid pubKey format" }),
         title: z.string().min(1),
         content: z.string().min(1),
         mood: z.string().optional(),
