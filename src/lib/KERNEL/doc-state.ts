@@ -599,10 +599,8 @@ class DocumentService {
             // Call the server endpoint to create a consolidated snapshot
             console.log(`Creating consolidated snapshot for document ${doc.pubKey} with ${doc.updateCids.length} updates`);
 
-            const result = await (hominio.api.docs({ pubKey: doc.pubKey }).snapshot.create as any).post({}) as {
-                data: SnapshotResponse;
-                error: null | { message: string }
-            };
+            // Fix: Use correct Eden Treaty client path with proper syntax
+            const result = await hominio.api.docs[doc.pubKey].snapshot.create.post({});
 
             // Handle errors in the response
             if (result.error) {
@@ -611,7 +609,7 @@ class DocumentService {
             }
 
             // Type assertion for the response data
-            const response = result.data;
+            const response = result.data as SnapshotResponse;
 
             if (response && response.success) {
                 // Reload document list to get the updated metadata
