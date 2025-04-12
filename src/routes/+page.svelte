@@ -154,5 +154,19 @@
 				{loading ? 'Processing...' : 'Continue with Google'}
 			</button>
 		</div>
+
+		<div class="flex-col items-center">
+			<h1 class="text-center text-4xl font-bold">Welcome to Hominio</h1>
+			<p class="mt-2 text-center text-gray-600">Decentralized Education for All</p>
+
+			<div class="mt-8 flex flex-col items-center gap-4">
+				<a
+					href="/hql"
+					class="rounded-md bg-indigo-600 px-6 py-3 text-white transition-colors hover:bg-indigo-700"
+				>
+					Explore HQL Interface
+				</a>
+			</div>
+		</div>
 	</div>
 </div>
