@@ -10,174 +10,236 @@ import { LoroDoc } from 'loro-crdt';
 import { blake3 } from '@noble/hashes/blake3';
 import b4a from 'b4a';
 import * as schema from './schema';
-import { sql } from 'drizzle-orm'; // Import sql for querying
+import { eq } from 'drizzle-orm'; // Removed unused sql import
+import { validateSchemaDocumentStructure } from '../lib/KERNEL/hominio-validate';
+import { GENESIS_PUBKEY, GENESIS_HOMINIO } from './constants'; // Import from new constants file
 
-const GENESIS_HOMINIO = "00000000000000000000000000000000";
-const GENESIS_PUBKEY = "0000000000000000000000000000000000000000000000000000000000000000";
-
-// Basic placeholder type for SchemaDefinition matching the structure used
-interface SchemaDefinition {
-    pubkey: string | null;
-    schema: string | null;
-    name: string;
-    places: Record<string, {
-        description: string;
-        type: string | string[];
-        required: boolean;
-        validation?: Record<string, unknown>;
-        entitySchemas?: string[];
-    }>;
-    translations: Array<{
-        lang: string;
-        name: string;
-        description: string;
-        places: Record<string, string>;
-    }>;
+// Basic placeholder types matching the structure used
+interface PlaceDefinition {
+    description: string;
+    required: boolean;
+    validation?: { // Optional validation object
+        schema?: (string | null)[]; // Allow null in schema array
+        value?: string | { options?: unknown[]; min?: number; max?: number; minLength?: number; maxLength?: number; regex?: string; custom?: string }; // Allowed literal type or rule object
+        rule?: Record<string, unknown>; // Added for consistency with rule object inside value
+    };
 }
 
-const gismuSchema: SchemaDefinition = {
-    pubkey: GENESIS_PUBKEY,
-    schema: null, // Self-referential as the fundamental meta-schema
-    name: "gismu",
-    places: {
-        x1: {
-            description: "lo lojbo ke krasi valsi",
-            type: "string",
-            required: true
-        },
-        x2: {
-            description: "lo bridi be lo ka ce'u skicu zo'e",
-            type: "string",
-            required: true
-        },
-        x3: {
-            description: "lo sumti javni",
-            type: "any", // Consider defining a structure for places later
-            required: true
-        },
-        x4: {
-            description: "lo rafsi",
-            type: "string", // Should likely be array of strings
-            required: false
-        }
-    },
-    translations: [
-        {
-            lang: "en",
-            name: "Root Word",
-            description: "A Lojban root word (gismu) defining a fundamental concept",
-            places: {
-                x1: "A Lojban root word",
-                x2: "Relation/concept expressed by the word",
-                x3: "Argument roles for the relation",
-                x4: "Associated affix(es)"
-            }
-        },
-        {
-            lang: "de",
-            name: "Stammwort",
-            description: "Ein Lojban-Stammwort (Gismu), das einen grundlegenden Begriff definiert",
-            places: {
-                x1: "Das Stammwort",
-                x2: "Ausgedrückte Relation/Konzept",
-                x3: "Argumentrollen der Relation",
-                x4: "Zugehörige Affixe"
-            }
-        }
-    ]
-};
+interface TranslationDefinition {
+    lang: string;
+    name: string;
+    description: string;
+    places: Record<string, string>;
+}
 
+interface BaseDefinition {
+    name: string;
+    places: Record<string, PlaceDefinition>; // Use the correct interface
+    translations?: TranslationDefinition[];
+}
+
+interface SchemaDefinition extends BaseDefinition {
+    pubkey?: string; // Optional original pubkey, will be generated unless 'gismu'
+    schema?: string | null; // Original schema key, will be replaced by generated ref
+}
+
+interface EntityDefinition extends BaseDefinition {
+    pubkey?: string; // Optional original pubkey, will be generated
+    schema: string; // Original schema key, will be replaced by generated ref
+}
+
+// Schemas to seed (adapted from data.ts, using the new validation structure)
+const schemasToSeed: Record<string, SchemaDefinition> = {
+    "gismu": {
+        schema: null,
+        name: "gismu",
+        places: {
+            x1: { description: "lo lojbo ke krasi valsi", required: true, validation: { value: "string" } },
+            x2: { description: "lo bridi be lo ka ce'u skicu zo'e", required: true, validation: { value: "string" } },
+            x3: { description: "lo sumti javni", required: true, validation: {} }, // any
+            x4: { description: "lo rafsi", required: false, validation: { value: "string" } }
+        },
+        translations: [
+            { lang: "en", name: "Root Word", description: "A Lojban root word (gismu) defining a fundamental concept", places: { x1: "A Lojban root word", x2: "Relation/concept expressed by the word", x3: "Argument roles for the relation", x4: "Associated affix(es)" } },
+            { lang: "de", name: "Stammwort", description: "Ein Lojban-Stammwort (Gismu), das einen grundlegenden Begriff definiert", places: { x1: "Das Stammwort", x2: "Ausgedrückte Relation/Konzept", x3: "Argumentrollen der Relation", x4: "Zugehörige Affixe" } }
+        ]
+    },
+    "prenu": {
+        schema: "gismu", // References gismu by name
+        name: "prenu",
+        places: {
+            x1: { description: "lo prenu", required: true, validation: { value: "string" } }
+        },
+        translations: [
+            { lang: "en", name: "Person", description: "A person entity", places: { x1: "Person/entity with personhood" } },
+            { lang: "de", name: "Person", description: "Eine Person", places: { x1: "Person/Wesen mit Persönlichkeit" } }
+        ]
+    },
+    "gunka": {
+        schema: "gismu", // References gismu by name
+        name: "gunka",
+        places: {
+            // Reference to 'prenu' schema by name - will be resolved to @prenuPubKey by seedDocument
+            x1: { description: "lo gunka", required: true, validation: { schema: ["prenu"] } },
+            x2: { description: "lo se gunka", required: true, validation: { value: "string" } },
+            x3: { description: "lo te gunka", required: false, validation: { value: "string" } }
+        },
+        translations: [
+            { lang: "en", name: "Work", description: "To work/labor on something with a purpose", places: { x1: "Worker/laborer", x2: "Task/activity worked on", x3: "Purpose/goal of the work" } },
+            { lang: "de", name: "Arbeit", description: "An etwas mit einem Zweck arbeiten", places: { x1: "Arbeiter", x2: "Aufgabe/Tätigkeit, an der gearbeitet wird", x3: "Zweck/Ziel der Arbeit" } }
+        ]
+    },
+    // <<< Add other schemas here later >>>
+};
 
 // Helper functions
 // --------------------------------------------------------
 
-// Helper function to hash the snapshot data
+// Deterministically generate pubkey from seed string (e.g., schema name or entity name)
+async function generateDeterministicPubKey(seed: string): Promise<string> {
+    const hashBytes = blake3(b4a.from(seed, 'utf8'));
+    const hexString = b4a.toString(hashBytes, 'hex'); // Ensure 64 char hex
+    return `0x${hexString}`;
+}
+
+// Hash snapshot data
 async function hashSnapshot(snapshot: Uint8Array): Promise<string> {
     const hashBytes = blake3(snapshot);
     return b4a.toString(hashBytes, 'hex');
 }
 
-// Removed generatePublicKey helper
-
-
-// Seed function to create the Gismu schema document
+// Seed function to create the Gismu schema document - REMOVED (Handled by seedDocument)
 // --------------------------------------------------------
-async function seedGismuSchemaDoc(db: ReturnType<typeof drizzle>) {
-    try {
-        console.log(`Checking for existing Gismu schema with pubKey: ${GENESIS_PUBKEY}...`);
+// async function seedGismuSchemaDoc(db: ReturnType<typeof drizzle>) { ... } // REMOVED
 
-        // Check if the document already exists
-        const existingDoc = await db.select()
-            .from(schema.docs)
-            .where(sql`${schema.docs.pubKey} = ${GENESIS_PUBKEY}`)
-            .limit(1);
+// Function to seed a single document (schema or entity)
+async function seedDocument(
+    db: ReturnType<typeof drizzle>,
+    docKey: string,
+    docDefinition: SchemaDefinition | EntityDefinition,
+    docType: 'schema' | 'entity',
+    generatedKeys: Map<string, string>
+) {
+    let pubKey: string;
+    let schemaRef: string | null = null;
+    const isGismu = docKey === 'gismu' && docType === 'schema';
 
-        if (existingDoc.length > 0) {
-            console.log(`✅ Gismu schema document already exists (pubKey: ${existingDoc[0].pubKey}). Skipping creation.`);
-            return;
+    // 1. Determine PubKey
+    if (isGismu) {
+        pubKey = GENESIS_PUBKEY;
+        // Explicitly set gismu key in map if not present (important for self-reference resolution)
+        if (!generatedKeys.has(docKey)) {
+            generatedKeys.set(docKey, pubKey);
         }
+    } else {
+        pubKey = await generateDeterministicPubKey(docKey);
+    }
+    // Store generated key if not already present (handles cases where gismu was pre-set)
+    if (!generatedKeys.has(docKey)) {
+        generatedKeys.set(docKey, pubKey);
+    }
 
-        console.log("Gismu schema document not found. Creating...");
+    // 2. Determine Schema Reference (Format: @pubKey)
+    if ('schema' in docDefinition && docDefinition.schema) { // Check if schema field exists and is not null
+        const schemaName = docDefinition.schema;
+        const schemaPubKey = generatedKeys.get(schemaName);
+        if (!schemaPubKey) {
+            console.warn(`Schema PubKey for "${schemaName}" not found for "${docKey}", attempting generation...`);
+            const generatedSchemaKey = await generateDeterministicPubKey(schemaName);
+            if (!generatedKeys.has(schemaName)) generatedKeys.set(schemaName, generatedSchemaKey);
+            schemaRef = `@${generatedSchemaKey}`;
+        } else {
+            schemaRef = `@${schemaPubKey}`;
+        }
+    } else if (!isGismu && docType === 'schema') {
+        // All non-gismu schemas should reference gismu
+        const gismuPubKey = generatedKeys.get("gismu");
+        if (!gismuPubKey) {
+            throw new Error(`Root schema "gismu" PubKey not found. Ensure 'gismu' is processed first in schemasToSeed.`);
+        }
+        schemaRef = `@${gismuPubKey}`;
+    }
+    // For gismu itself, schemaRef remains null.
 
-        // Create a new LoroDoc to store the schema definition
-        const loroDoc = new LoroDoc();
-        loroDoc.setPeerId(1); // Static peer ID for seeding
+    console.log(`Processing ${docType}: ${docKey} -> PubKey: ${pubKey}, SchemaRef: ${schemaRef}`);
 
-        // Populate the LoroDoc using the standard meta/data structure
-        const meta = loroDoc.getMap('meta');
-        meta.set('name', gismuSchema.name); // Store name in meta
-        // The schema reference is null for the self-referential gismu schema
-        meta.set('schema', gismuSchema.schema); // Should be null
+    // 3. Check for existing document
+    const existingDoc = await db.select({ pubKey: schema.docs.pubKey })
+        .from(schema.docs)
+        .where(eq(schema.docs.pubKey, pubKey))
+        .limit(1);
+    if (existingDoc.length > 0) {
+        console.log(`  - Document already exists. Skipping.`);
+        return;
+    }
 
-        const data = loroDoc.getMap('data');
-        data.set('places', gismuSchema.places); // Store places in data
-        data.set('translations', gismuSchema.translations); // Store translations in data
+    // 4. Prepare LoroDoc content
+    const loroDoc = new LoroDoc();
+    loroDoc.setPeerId(1);
 
-        // Export snapshot and generate hash
-        const snapshot = loroDoc.exportSnapshot();
-        const cid = await hashSnapshot(snapshot);
-        const now = new Date().toISOString();
+    const dataMapContent: Record<string, unknown> = {
+        places: docDefinition.places,
+        translations: docDefinition.translations || []
+    };
 
-        // 1. Store the content
-        const contentEntry: schema.InsertContent = {
-            cid,
+    const meta = loroDoc.getMap('meta');
+    meta.set('name', docDefinition.name);
+    meta.set('schema', schemaRef); // Set resolved @pubkey or null
+
+    const data = loroDoc.getMap('data');
+    data.set('places', dataMapContent.places);
+    if (dataMapContent.translations && Array.isArray(dataMapContent.translations) && dataMapContent.translations.length > 0) {
+        data.set('translations', dataMapContent.translations);
+    }
+
+    // --- NEW: 4.5 Validate the LoroDoc structure ---
+    if (docType === 'schema') { // Only validate schema docs for now
+        console.log(`  - Validating structure for schema: ${docKey}...`);
+        const { isValid, errors } = validateSchemaDocumentStructure(loroDoc);
+        if (!isValid) {
+            console.error(`  - ❌ Validation Failed for ${docKey}:`);
+            errors.forEach(err => console.error(`    - ${err}`));
+            console.warn(`  - Skipping database insertion for invalid schema: ${docKey}`);
+            return; // Do not proceed if validation fails
+        }
+        console.log(`  - ✅ Structure validation passed for schema: ${docKey}`);
+    }
+
+    // 5. Export snapshot and hash
+    const snapshot = loroDoc.exportSnapshot();
+    const cid = await hashSnapshot(snapshot);
+    const now = new Date();
+
+    // 6. Upsert Content Entry
+    await db.insert(schema.content)
+        .values({
+            cid: cid,
             type: 'snapshot',
             raw: Buffer.from(snapshot),
-            // Update metadata stored alongside content - keep it minimal
             metadata: {
-                name: gismuSchema.name,
-                schema: gismuSchema.schema, // null (indicates it's the root schema)
-                created: now
-            }
-        };
+                name: docDefinition.name,
+                schema: schemaRef
+            },
+            createdAt: now
+        })
+        .onConflictDoNothing({ target: schema.content.cid });
 
-        const contentResult = await db.insert(schema.content)
-            .values(contentEntry)
-            .returning();
-        console.log('  - Created content entry:', contentResult[0].cid);
+    console.log(`  - Ensured content entry exists: ${cid}`);
 
-        // 2. Create the document entry
-        const docEntry: schema.InsertDoc = {
-            pubKey: GENESIS_PUBKEY,
-            snapshotCid: cid,
-            updateCids: [],
-            owner: GENESIS_HOMINIO,
-            updatedAt: new Date()
-        };
+    // 7. Insert Document Entry
+    const docEntry: schema.InsertDoc = {
+        pubKey: pubKey,
+        snapshotCid: cid,
+        updateCids: [],
+        owner: GENESIS_HOMINIO,
+        updatedAt: now,
+        createdAt: now
+    };
 
-        const docResult = await db.insert(schema.docs)
-            .values(docEntry)
-            .returning();
-        console.log('  - Created document entry:', docResult[0].pubKey);
-
-        console.log('✅ Successfully created Gismu schema document.');
-
-    } catch (error) {
-        console.error('Error seeding Gismu schema document:', error);
-        throw error;
-    }
+    await db.insert(schema.docs).values(docEntry);
+    console.log(`  - Created document entry: ${pubKey}`);
+    console.log(`✅ Successfully seeded ${docType}: ${docKey}`);
 }
-
 
 // Main function
 // --------------------------------------------------------
@@ -191,20 +253,28 @@ async function main() {
         process.exit(1);
     }
 
-    console.log('🌱 Seeding database with Gismu schema...');
+    console.log('🌱 Seeding database with core schemas...');
 
     try {
         // Create direct database connection
         const sql = neon(dbUrl);
         const db = drizzle(sql, { schema }); // Pass schema correctly
 
-        // Seed the Gismu schema document
-        await seedGismuSchemaDoc(db);
+        const generatedKeys = new Map<string, string>(); // name -> pubkey
 
-        console.log('✅ Database seeding completed successfully.');
+        // --- Phase 1: Seed all Schemas ---
+        console.log("\n--- Seeding Schemas ---");
+        // Ensure gismu is first to establish GENESIS_PUBKEY association
+        for (const schemaKey in schemasToSeed) {
+            await seedDocument(db, schemaKey, schemasToSeed[schemaKey], 'schema', generatedKeys);
+        }
+
+        console.log('\n✅ Database schema seeding completed successfully.');
+        console.log('\nGenerated Keys Map:');
+        console.log(generatedKeys);
 
     } catch (error) {
-        console.error('❌ Error seeding database:', error);
+        console.error('\n❌ Error during database seeding:', error);
         process.exit(1);
     }
 }
@@ -213,4 +283,4 @@ async function main() {
 main().catch(error => {
     console.error('❌ Unhandled error:', error);
     process.exit(1);
-});
+}); 

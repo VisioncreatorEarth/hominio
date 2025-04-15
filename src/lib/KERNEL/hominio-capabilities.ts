@@ -1,9 +1,10 @@
 import type { Docs } from './hominio-db'; // Assuming Docs type is exported
+import { GENESIS_HOMINIO } from '../../db/constants'; // Import from centralized constants
 
 // --- Constants ---
 
 // MUST match the value used in src/db/seed.ts and src/lib/server/routes/docs.ts
-export const GENESIS_HOMINIO = "00000000000000000000000000000000";
+// export const GENESIS_HOMINIO = "00000000000000000000000000000000";
 
 // --- Types ---
 

@@ -6,10 +6,9 @@ import { eq, inArray, ne, and, sql, count, or } from 'drizzle-orm';
 import { hashService } from '$lib/KERNEL/hash-service';
 import { loroService } from '$lib/KERNEL/loro-service';
 // Import capability functions and types
-import { canRead, canWrite, canDelete, GENESIS_HOMINIO as CAP_GENESIS_HOMINIO, type CapabilityUser } from '$lib/KERNEL/hominio-capabilities';
-
-// Use the imported genesis ID, rename slightly to avoid local scope collision if needed
-const GENESIS_HOMINIO = CAP_GENESIS_HOMINIO;
+import { canRead, canWrite, canDelete, type CapabilityUser } from '$lib/KERNEL/hominio-capabilities';
+// Import the constant directly from its source
+import { GENESIS_HOMINIO } from '$db/constants';
 
 // Helper function for binary data conversion
 function arrayToUint8Array(arr: number[]): Uint8Array {
