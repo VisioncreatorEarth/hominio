@@ -4,6 +4,8 @@ import { LoroDoc } from 'loro-crdt';
 import { hashService } from './hash-service';
 import { docIdService } from './docid-service';
 import { getContentStorage, getDocsStorage, initStorage } from './hominio-storage';
+import { authClient } from '$lib/client/auth-hominio'; // Assumed path for auth client
+import { canRead, canWrite, type CapabilityUser, canDelete } from './hominio-capabilities'; // Import capabilities
 
 // Constants
 const CONTENT_TYPE_SNAPSHOT = 'snapshot';
@@ -163,15 +165,19 @@ class HominioDB {
         this.setStatus({ creatingDoc: true });
 
         try {
-            // Generate a new pubKey
-            const pubKey = await docIdService.generateDocId();
-            const owner = 'local'; // Default owner for local documents
+            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
+            if (!currentUser) {
+                throw new Error("Permission denied: User must be logged in to create documents.");
+            }
 
-            // Create the initial document metadata
+            const pubKey = await docIdService.generateDocId();
+            // Use the actual logged-in user ID as the owner
+            const owner = currentUser.id;
+
             const now = new Date().toISOString();
             const newDoc: Docs = {
                 pubKey,
-                owner,
+                owner, // Set owner to current user
                 updatedAt: now
             };
 
@@ -237,11 +243,16 @@ class HominioDB {
                 // Get or create a Loro doc instance for this document
                 await this.getOrCreateLoroDoc(doc.pubKey, snapshotCid);
 
-                // Immediately load the document content
+                // Load content (capability check is inside this method)
                 await this.loadDocumentContent(doc);
             } catch (err) {
                 console.error(`Error selecting doc ${doc.pubKey}:`, err);
                 this.setError('Failed to load document data');
+                // Error might be due to permissions from loadDocumentContent
+                const currentContent = get(docContent);
+                if (currentContent.error?.includes('Permission denied')) {
+                    this.setError(currentContent.error);
+                }
             }
         }
     }
@@ -287,6 +298,21 @@ class HominioDB {
      * @param doc Document to load content for
      */
     async loadDocumentContent(doc: Docs): Promise<void> {
+        // *** Capability Check ***
+        const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
+        if (!canRead(currentUser, doc)) {
+            console.warn(`Permission denied: User ${currentUser?.id ?? 'anonymous'} cannot read doc ${doc.pubKey} owned by ${doc.owner}`);
+            docContent.set({
+                content: null,
+                loading: false,
+                error: `Permission denied: Cannot read this document.`,
+                sourceCid: null,
+                isLocalSnapshot: false
+            });
+            return; // Don't proceed if read permission denied
+        }
+        // *** End Capability Check ***
+
         docContent.update(state => ({ ...state, loading: true, error: null }));
 
         try {
@@ -416,15 +442,20 @@ class HominioDB {
      */
     async updateDocument(pubKey: string, mutationFn: (doc: LoroDoc) => void): Promise<string> {
         try {
-            // Get the document metadata
             const allDocs = get(docs);
             const docIndex = allDocs.findIndex(d => d.pubKey === pubKey);
 
             if (docIndex === -1) {
                 throw new Error(`Document ${pubKey} not found`);
             }
-
             const doc = allDocs[docIndex];
+
+            // *** Capability Check ***
+            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
+            if (!canWrite(currentUser, doc)) {
+                throw new Error('Permission denied: Cannot write to this document');
+            }
+            // *** End Capability Check ***
 
             // Get the Loro document
             const loroDoc = await this.getOrCreateLoroDoc(pubKey, doc.snapshotCid);
@@ -483,12 +514,13 @@ class HominioDB {
      */
     async addRandomPropertyToDocument(pubKey?: string): Promise<boolean> {
         try {
-            // Use the provided pubKey or get it from the selected doc
             const targetPubKey = pubKey || get(selectedDoc)?.pubKey;
             if (!targetPubKey) {
                 this.setError('No document selected');
                 return false;
             }
+
+            // Capability check happens inside updateDocument call below
 
             await this.updateDocument(targetPubKey, (loroDoc) => {
                 // Generate random property key and value
@@ -523,7 +555,6 @@ class HominioDB {
      */
     async createConsolidatedSnapshot(pubKey?: string): Promise<string | null> {
         try {
-            // Use the provided pubKey or get it from the selected doc
             const targetPubKey = pubKey || get(selectedDoc)?.pubKey;
             if (!targetPubKey) {
                 this.setError('No document selected');
@@ -535,6 +566,14 @@ class HominioDB {
                 this.setError('Document not found');
                 return null;
             }
+
+            // *** Capability Check ***
+            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
+            if (!canWrite(currentUser, doc)) {
+                this.setError('Permission denied: Cannot create snapshot for this document');
+                return null;
+            }
+            // *** End Capability Check ***
 
             // Check if document has updates to consolidate
             if (!doc.updateCids || doc.updateCids.length === 0) {
@@ -784,6 +823,11 @@ class HominioDB {
         owner?: string
     } = {}): Promise<{ pubKey: string, snapshotCid: string }> {
         try {
+            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
+            if (!currentUser) {
+                throw new Error("Permission denied: User must be logged in to import content.");
+            }
+
             // Create a new LoroDoc to analyze the content
             const tempDoc = new LoroDoc();
             tempDoc.import(binaryData);
@@ -828,7 +872,7 @@ class HominioDB {
             const now = new Date().toISOString();
             const newDoc: Docs = {
                 pubKey,
-                owner: options.owner || 'local-user',
+                owner: options.owner || currentUser.id, // Use current user ID as owner
                 updatedAt: now,
                 snapshotCid,
                 updateCids: []
@@ -862,6 +906,13 @@ class HominioDB {
                 throw new Error('Document not found');
             }
 
+            // *** Capability Check ***
+            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
+            if (!canRead(currentUser, doc)) {
+                throw new Error('Permission denied: Cannot read this document to export');
+            }
+            // *** End Capability Check ***
+
             // Get the LoroDoc instance
             const loroDoc = await this.getOrCreateLoroDoc(pubKey);
 
@@ -888,6 +939,65 @@ class HominioDB {
      */
     private setError(message: string | null): void {
         error.set(message);
+    }
+
+    /**
+     * Delete a document
+     * @param pubKey Document public key
+     * @returns True if successful, otherwise throws an error
+     */
+    async deleteDocument(pubKey: string): Promise<boolean> {
+        try {
+            const allDocs = get(docs);
+            const docIndex = allDocs.findIndex(d => d.pubKey === pubKey);
+
+            if (docIndex === -1) {
+                throw new Error(`Document ${pubKey} not found`);
+            }
+            const doc = allDocs[docIndex];
+
+            // *** Capability Check ***
+            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
+            if (!canDelete(currentUser, doc)) {
+                throw new Error('Permission denied: Cannot delete this document');
+            }
+            // *** End Capability Check ***
+
+            // Remove from the docs store
+            allDocs.splice(docIndex, 1);
+            docs.set([...allDocs]);
+
+            // Clear selected doc if it's the one being deleted
+            const currentSelected = get(selectedDoc);
+            if (currentSelected && currentSelected.pubKey === pubKey) {
+                selectedDoc.set(null);
+                docContent.set({
+                    content: null,
+                    loading: false,
+                    error: null,
+                    sourceCid: null,
+                    isLocalSnapshot: false
+                });
+            }
+
+            // Close and cleanup any active LoroDoc instance
+            if (activeLoroDocuments.has(pubKey)) {
+                activeLoroDocuments.delete(pubKey);
+            }
+
+            // Delete from local storage
+            const docsStorage = getDocsStorage();
+            await docsStorage.delete(pubKey);
+
+            // Note: We don't delete content CIDs here as they might be reused
+            // The server handles content cleanup based on reference checks
+
+            return true;
+        } catch (err) {
+            console.error('Error deleting document:', err);
+            this.setError(`Failed to delete document: ${err instanceof Error ? err.message : String(err)}`);
+            throw err;
+        }
     }
 
     /**

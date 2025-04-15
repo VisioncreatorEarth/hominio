@@ -3,12 +3,23 @@ import { hominio } from '$lib/client/hominio';
 import { hominioDB, type Docs } from '$lib/KERNEL/hominio-db';
 import { getContentStorage, getDocsStorage } from '$lib/KERNEL/hominio-storage';
 import { browser } from '$app/environment';
+import { authClient } from '$lib/client/auth-hominio'; // Assumed path for auth client
+import { canWrite, type CapabilityUser } from './hominio-capabilities'; // Import capabilities
 
 // Helper type for API response structure
 type ApiResponse<T> = {
     data: T;
-    error: null | { message: string; status?: number;[key: string]: unknown };
+    error: null | { status: number; value?: { message?: string;[key: string]: unknown }; };
 };
+
+// Expected raw structure from API before mapping
+interface ServerDocData {
+    pubKey: string;
+    owner: string;
+    updatedAt: Date | string;
+    snapshotCid?: string | null;
+    updateCids?: string[] | null;
+}
 
 // --- SyncStatus Interface --- 
 interface SyncStatus {
@@ -70,13 +81,21 @@ export class HominioSync {
 
             console.log(`Found ${localDocsToSync.length} documents with local changes to push.`);
             const contentStorage = getContentStorage();
+            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
 
             for (const doc of localDocsToSync) {
+                // *** Capability Check ***
+                if (!canWrite(currentUser, doc)) {
+                    console.warn(`Permission denied: Cannot push changes for doc ${doc.pubKey} owned by ${doc.owner}. Skipping.`);
+                    continue; // Skip this document
+                }
+                // *** End Capability Check ***
+
                 let docExistsOnServer = false;
                 try {
                     // Check server existence
                     const checkResult = await hominio.api.docs({ pubKey: doc.pubKey }).get();
-                    // Cast to check error property safely
+                    // Use optional chaining and check value for error message
                     docExistsOnServer = !(checkResult as ApiResponse<unknown>).error;
                 } catch (err) {
                     // Assuming error means it doesn't exist, but log it
@@ -97,24 +116,25 @@ export class HominioSync {
                     if (snapshotData) {
                         try {
                             if (!docExistsOnServer) {
-                                // Create doc on server - Cast base route to any
-                                const createResult = await (hominio.api.docs as any).post({
+                                // Create doc on server
+                                // @ts-expect-error // Eden Treaty typing issue with base route POST
+                                const createResult = await hominio.api.docs.post({
                                     pubKey: doc.pubKey,
                                     binarySnapshot: Array.from(snapshotData)
                                 });
-                                if ((createResult as ApiResponse<unknown>).error) {
-                                    throw new Error(`Server error creating doc: ${(createResult as ApiResponse<unknown>).error?.message}`);
+                                if (createResult.error) {
+                                    throw new Error(`Server error creating doc: ${createResult.error.value?.message ?? 'Unknown error'}`);
                                 }
                                 docExistsOnServer = true; // Now it exists
                                 console.log(`  - Created doc ${doc.pubKey} on server with snapshot.`);
                             } else {
-                                // Update snapshot on existing doc - Cast base call to any
-                                const snapshotResult = await (hominio.api.docs({ pubKey: doc.pubKey }) as any).snapshot.post({
+                                // Update snapshot on existing doc
+                                // @ts-expect-error // Eden Treaty typing issue with nested routes
+                                const snapshotResult = await hominio.api.docs({ pubKey: doc.pubKey }).snapshot.post({
                                     binarySnapshot: Array.from(snapshotData)
                                 });
-                                // Allow duplicate key errors for snapshots (idempotent)
-                                if ((snapshotResult as ApiResponse<unknown>).error && !(snapshotResult as ApiResponse<unknown>).error?.message.includes('duplicate key')) {
-                                    throw new Error(`Server error updating snapshot: ${(snapshotResult as ApiResponse<unknown>).error?.message}`);
+                                if (snapshotResult.error && !(snapshotResult.error.value?.message?.includes('duplicate key'))) {
+                                    throw new Error(`Server error updating snapshot: ${snapshotResult.error.value?.message ?? 'Unknown error'}`);
                                 }
                                 console.log(`  - Updated snapshot for ${doc.pubKey} on server.`);
                             }
@@ -153,19 +173,21 @@ export class HominioSync {
 
                     if (updatesToUpload.length > 0) {
                         try {
-                            // Batch upload content first - Cast base route to any
-                            const contentResult = await (hominio.api.content as any).batch.upload.post({ items: updatesToUpload });
-                            if ((contentResult as ApiResponse<unknown>).error) {
-                                throw new Error(`Server error uploading update content: ${(contentResult as ApiResponse<unknown>).error?.message}`);
+                            // Batch upload content first
+                            // @ts-expect-error // Eden Treaty typing issue with nested batch routes
+                            const contentResult = await hominio.api.content.batch.upload.post({ items: updatesToUpload });
+                            if (contentResult.error) {
+                                throw new Error(`Server error uploading update content: ${contentResult.error.value?.message ?? 'Unknown error'}`);
                             }
                             console.log(`  - Uploaded ${updatesToUpload.length} update content items.`);
 
-                            // Batch register updates with document - Cast base call to any
-                            const registerResult = await (hominio.api.docs({ pubKey: doc.pubKey }) as any).update.batch.post({
+                            // Batch register updates with document
+                            // @ts-expect-error // Eden Treaty typing issue with nested batch routes
+                            const registerResult = await hominio.api.docs({ pubKey: doc.pubKey }).update.batch.post({
                                 updateCids: updatesToUpload.map(u => u.cid)
                             });
-                            if ((registerResult as ApiResponse<unknown>).error) {
-                                throw new Error(`Server error registering updates: ${(registerResult as ApiResponse<unknown>).error?.message}`);
+                            if (registerResult.error) {
+                                throw new Error(`Server error registering updates: ${registerResult.error.value?.message ?? 'Unknown error'}`);
                             }
                             console.log(`  - Registered ${updatesToUpload.length} updates with doc ${doc.pubKey}.`);
 
@@ -216,10 +238,10 @@ export class HominioSync {
     private async checkContentExistenceBatch(cids: string[]): Promise<Set<string>> {
         if (!cids.length) return new Set();
         try {
-            // Cast before accessing batch
-            const response = await (hominio.api.content as any).batch.exists.post({ cids });
-            if ((response as ApiResponse<unknown>).error) {
-                throw new Error(`Failed to check content existence: ${(response as ApiResponse<unknown>).error?.message}`);
+            // @ts-expect-error // Eden Treaty typing issue with nested batch routes
+            const response = await hominio.api.content.batch.exists.post({ cids });
+            if (response.error) {
+                throw new Error(`Failed to check content existence: ${response.error.value?.message ?? 'Unknown error'}`);
             }
             const data = (response as ApiResponse<{ results: Array<{ cid: string, exists: boolean }> }>).data;
             const existingCids = new Set<string>();
@@ -264,12 +286,17 @@ export class HominioSync {
             const existingServerCids = await this.checkContentExistenceBatch(cidsToFetch);
 
             // 4. Fetch binary content for each existing CID
-            const contentToSave: Array<{ key: string, value: Uint8Array, meta: Record<string, any> }> = [];
+            const contentToSave: Array<{ key: string, value: Uint8Array, meta: Record<string, unknown> }> = [];
             for (const cid of existingServerCids) {
                 try {
                     const contentItemMeta = contentItems.find(item => item.cid === cid)!;
-                    // Use Eden client to get binary data - Cast before accessing binary
-                    const binaryResponse = await (hominio.api.content({ cid }) as any).binary.get();
+                    // Use Eden client to get binary data
+                    // @ts-expect-error // Eden Treaty typing issue with nested routes
+                    const binaryResponse = await hominio.api.content({ cid }).binary.get();
+                    if (binaryResponse.error) {
+                        console.warn(`Error fetching binary data for ${cid}: ${binaryResponse.error.value?.message ?? 'Unknown error'}`);
+                        continue;
+                    }
                     const data = (binaryResponse as ApiResponse<{ binaryData: number[] }>).data;
                     if (data?.binaryData) {
                         const binaryData = new Uint8Array(data.binaryData);
@@ -282,7 +309,7 @@ export class HominioSync {
                         console.warn(`No binary data returned for CID ${cid}`);
                     }
                 } catch (err) {
-                    console.error(`Error fetching content ${cid}:`, err);
+                    console.error(`Error processing content ${cid}:`, err);
                 }
             }
 
@@ -304,38 +331,50 @@ export class HominioSync {
      */
     private async syncDocFromServer(serverDoc: Docs, localDocs: Docs[]): Promise<boolean> {
         const docsStorage = getDocsStorage();
-        console.log(`Syncing document ${serverDoc.pubKey} from server to local storage`);
+        console.log(`Syncing document ${serverDoc.pubKey} from server.`);
 
         const localDoc = localDocs.find(doc => doc.pubKey === serverDoc.pubKey);
 
-        // Determine if an update is needed
-        // Basic check: Update if server has a snapshot/updates, or if local doc doesn't exist
-        // More robust check would involve comparing snapshotCids and updateCids lengths/contents
+        // Determine if an update is *actually* needed by comparing critical fields
         const needsUpdate = !localDoc ||
             serverDoc.snapshotCid !== localDoc.snapshotCid ||
-            (serverDoc.updateCids?.length || 0) !== (localDoc.updateCids?.length || 0) ||
-            // Quick check if update arrays differ (doesn't check order or exact content)
-            JSON.stringify(serverDoc.updateCids?.sort()) !== JSON.stringify(localDoc.updateCids?.sort());
+            JSON.stringify(serverDoc.updateCids?.sort()) !== JSON.stringify(localDoc.updateCids?.sort()) ||
+            serverDoc.owner !== localDoc.owner; // Ensure owner changes are reflected
+        // updatedAt check might be too noisy, omitted for now
 
         if (!needsUpdate) {
-            console.log(`Document ${serverDoc.pubKey} is already up-to-date.`);
-            return false;
+            console.log(`Document ${serverDoc.pubKey} is already up-to-date locally.`);
+            return false; // No changes made
         }
 
-        // Prepare merged doc - start with server doc
+        // Prepare merged doc - start with server doc data
         const mergedDoc: Docs = { ...serverDoc };
 
-        // Preserve local-only state if local doc exists
-        if (localDoc?.localState) {
-            mergedDoc.localState = { ...localDoc.localState };
-            console.log(`Preserved local state for ${serverDoc.pubKey}`);
+        // If local doc exists, *only preserve local updates* (not local snapshot)
+        if (localDoc?.localState?.updateCids && localDoc.localState.updateCids.length > 0) {
+            // Initialize localState if it doesn't exist on mergedDoc yet
+            if (!mergedDoc.localState) {
+                mergedDoc.localState = {};
+            }
+            // Only copy updateCids. Discard localState.snapshotCid.
+            mergedDoc.localState.updateCids = [...localDoc.localState.updateCids];
+            console.log(`Preserved ${mergedDoc.localState.updateCids.length} local updates for ${serverDoc.pubKey}. Local snapshot was discarded.`);
+        } else {
+            // If no local updates to preserve, ensure localState is removed
+            delete mergedDoc.localState;
         }
 
         // Save merged doc to local storage
-        await docsStorage.put(serverDoc.pubKey, new TextEncoder().encode(JSON.stringify(mergedDoc)));
-        console.log(`Saved merged doc ${serverDoc.pubKey} to local storage.`);
+        try {
+            await docsStorage.put(serverDoc.pubKey, new TextEncoder().encode(JSON.stringify(mergedDoc)));
+            console.log(`Saved merged state for doc ${serverDoc.pubKey} to local storage.`);
+        } catch (saveErr) {
+            console.error(`Failed to save merged doc ${serverDoc.pubKey} locally:`, saveErr);
+            // If saving fails, we didn't truly update, return false
+            return false;
+        }
 
-        // Collect all content CIDs that need to be synced (snapshot + updates)
+        // Collect content CIDs that need to be synced (snapshot + updates)
         const contentCidsToSync: Array<{ cid: string, type: 'snapshot' | 'update', docPubKey: string }> = [];
         if (serverDoc.snapshotCid) {
             contentCidsToSync.push({ cid: serverDoc.snapshotCid, type: 'snapshot', docPubKey: serverDoc.pubKey });
@@ -349,7 +388,7 @@ export class HominioSync {
             await this.syncContentBatchFromServer(contentCidsToSync);
         }
 
-        return true; // Document was updated
+        return true; // Document was updated locally
     }
 
     /**
@@ -363,35 +402,67 @@ export class HominioSync {
         console.log('Starting pull from server...');
 
         try {
-            // 1. Fetch all document metadata from server
-            console.log('Fetching documents metadata from server...');
-            // Use `as any` for the result type due to potential mismatch
-            const serverResult = await hominio.api.docs.list.get() as any;
-            // Check for error structure before accessing data
-            if (serverResult?.error) {
-                throw new Error(`Failed to fetch documents: ${serverResult.error.message || 'Unknown error'}`);
+            const serverResult = await hominio.api.docs.list.get();
+            if (serverResult.error) {
+                let errorMessage = 'Unknown error fetching documents';
+                const errorValue = serverResult.error.value;
+                if (typeof errorValue === 'object' && errorValue !== null && 'message' in errorValue && typeof errorValue.message === 'string') {
+                    errorMessage = errorValue.message;
+                }
+                throw new Error(`Failed to fetch documents: ${errorMessage}`);
             }
-            const serverDocs = serverResult?.data as Docs[]; // Assert data type
-            if (!serverDocs) {
-                throw new Error(`Failed to fetch documents: No data received`);
-            }
-            console.log(`Retrieved ${serverDocs.length} documents metadata from server`);
 
-            // 2. Get local docs for comparison
+            const serverData = serverResult.data as unknown;
+            if (!Array.isArray(serverData)) {
+                throw new Error(`Failed to fetch documents: Invalid data format received (expected array)`);
+            }
+
+            // Map server data, potentially returning null for invalid entries
+            const mappedData: (Docs | null)[] = serverData.map((element: unknown): Docs | null => {
+                const dbDoc = element as ServerDocData;
+                if (typeof dbDoc !== 'object' || dbDoc === null || typeof dbDoc.pubKey !== 'string' || typeof dbDoc.owner !== 'string') {
+                    console.warn('Skipping invalid document data from server:', element);
+                    return null;
+                }
+
+                let updatedAtString: string;
+                if (dbDoc.updatedAt instanceof Date) {
+                    updatedAtString = dbDoc.updatedAt.toISOString();
+                } else if (typeof dbDoc.updatedAt === 'string') {
+                    updatedAtString = dbDoc.updatedAt;
+                } else {
+                    console.warn(`Unexpected updatedAt type for doc ${dbDoc.pubKey}:`, typeof dbDoc.updatedAt);
+                    updatedAtString = new Date().toISOString();
+                }
+
+                // Construct the Docs object
+                const docResult: Docs = {
+                    pubKey: dbDoc.pubKey,
+                    owner: dbDoc.owner,
+                    updatedAt: updatedAtString,
+                    snapshotCid: dbDoc.snapshotCid ?? undefined,
+                    updateCids: Array.isArray(dbDoc.updateCids) ? dbDoc.updateCids : [],
+                    // localState is client-side only, ensure it's not added here
+                };
+                return docResult;
+            });
+
+            // Filter out nulls and assert the final type
+            const serverDocs: Docs[] = mappedData.filter((doc): doc is Docs => doc !== null);
+
+            console.log(`Retrieved and mapped ${serverDocs.length} documents from server`);
+
             const localDocs = get(hominioDB.docs);
             const updatedDocPubKeys: string[] = [];
-
-            // --- Cleanup Logic Start ---
-            // 1. Collect all existing update CIDs before sync
             const oldUpdateCids = new Set<string>();
             localDocs.forEach(doc => {
                 doc.updateCids?.forEach(cid => oldUpdateCids.add(cid));
                 doc.localState?.updateCids?.forEach(cid => oldUpdateCids.add(cid));
             });
-            // --- Cleanup Logic End ---
 
             // 3. Sync each server document to local storage
             for (const serverDoc of serverDocs) {
+                // Pass localDocs array for comparison within syncDocFromServer
                 const wasUpdated = await this.syncDocFromServer(serverDoc, localDocs);
                 if (wasUpdated) {
                     updatedDocPubKeys.push(serverDoc.pubKey);
@@ -442,7 +513,7 @@ export class HominioSync {
             this.status.update(s => ({ ...s, lastSynced: new Date() }));
             console.log('Pull from server completed successfully.');
 
-        } catch (err) {
+        } catch (err: unknown) { // Type the error
             console.error('Error during pull from server:', err);
             this.setSyncError(err instanceof Error ? err.message : 'Pull from server failed');
         } finally {
@@ -450,7 +521,89 @@ export class HominioSync {
             this.updatePendingChangesCount();
         }
     }
-    // --- End Pull Implementation ---
+
+    /**
+     * Delete a document both locally and on the server
+     * @param pubKey Document public key to delete
+     * @returns True if successful
+     */
+    async deleteDocument(pubKey: string): Promise<boolean> {
+        if (!browser) return false;
+
+        this.setSyncStatus(true);
+        this.setSyncError(null);
+        console.log(`Deleting document ${pubKey} locally and on server...`);
+
+        let serverDeleteSuccessful = false;
+        let localDeleteSuccessful = false;
+
+        try {
+            // First try to delete on server
+            try {
+                serverDeleteSuccessful = await this.deleteDocumentOnServer(pubKey);
+                console.log(`Server deletion ${serverDeleteSuccessful ? 'succeeded' : 'failed'}`);
+            } catch (serverErr) {
+                console.error('Server deletion error:', serverErr);
+                // Continue with local delete even if server fails
+            }
+
+            // Then delete locally
+            try {
+                await hominioDB.deleteDocument(pubKey);
+                localDeleteSuccessful = true;
+                console.log('Local deletion succeeded');
+            } catch (localErr) {
+                console.error('Local deletion error:', localErr);
+                throw localErr; // Re-throw local errors
+            }
+
+            // Consider the operation successful if at least one succeeded
+            return serverDeleteSuccessful || localDeleteSuccessful;
+        } catch (err) {
+            this.setSyncError(err instanceof Error ? err.message : 'Document deletion failed');
+            return false;
+        } finally {
+            this.setSyncStatus(false);
+            this.updatePendingChangesCount();
+        }
+    }
+
+    async deleteDocumentOnServer(pubKey: string): Promise<boolean> {
+        if (!browser) return false;
+
+        this.setSyncStatus(true);
+        this.setSyncError(null);
+        console.log(`Requesting document deletion from server for ${pubKey}...`);
+
+        try {
+            // Call the server's delete endpoint
+            // @ts-expect-error Eden Treaty typing issue with dynamic routes
+            const result = await hominio.api.docs({ pubKey }).delete();
+            const response = result as ApiResponse<{ success: boolean; message?: string }>;
+
+            if (response.error) {
+                let errorMessage = 'Unknown error deleting document';
+                const errorValue = response.error.value;
+                if (typeof errorValue === 'object' && errorValue !== null && 'message' in errorValue && typeof errorValue.message === 'string') {
+                    errorMessage = errorValue.message;
+                }
+                throw new Error(`Server error deleting document: ${errorMessage}`);
+            }
+
+            if (response.data?.success) {
+                console.log(`Server successfully deleted document ${pubKey}: ${response.data.message || ''}`);
+                return true;
+            } else {
+                throw new Error(`Server failed to delete document: ${response.data?.message || 'Unknown reason'}`);
+            }
+        } catch (err: unknown) {
+            console.error(`Error deleting document ${pubKey}:`, err);
+            this.setSyncError(err instanceof Error ? err.message : 'Document deletion failed');
+            throw err;
+        } finally {
+            this.setSyncStatus(false);
+        }
+    }
 
     async createConsolidatedSnapshot(): Promise<void> {
         const selected = get(hominioDB.selectedDoc);
@@ -460,28 +613,40 @@ export class HominioSync {
         }
 
         const pubKey = selected.pubKey;
-        console.log(`Requesting consolidated snapshot creation for ${pubKey} on server...`);
+        console.log(`Requesting SERVER consolidated snapshot creation for ${pubKey}...`);
         this.setSyncStatus(true);
         this.setSyncError(null);
 
         try {
-            // Call the server endpoint - Use cast for potentially complex/nested route type
-            const result = await (hominio.api.docs({ pubKey }) as any).snapshot.create.post({});
-            const response = result as ApiResponse<{ success: boolean; message?: string;[key: string]: unknown }>; // Basic response check
+            // Call the server endpoint FIRST
+            // @ts-expect-error // Eden Treaty typing issue with nested routes
+            const result = await hominio.api.docs({ pubKey }).snapshot.create.post({});
+            const response = result as ApiResponse<{ success: boolean; message?: string; newSnapshotCid?: string;[key: string]: unknown }>;
 
             if (response.error) {
-                throw new Error(`Server error creating snapshot: ${response.error.message}`);
+                let errorMessage = 'Unknown server error creating snapshot';
+                const errorValue = response.error.value;
+                if (typeof errorValue === 'object' && errorValue !== null && 'message' in errorValue && typeof errorValue.message === 'string') {
+                    errorMessage = errorValue.message;
+                }
+                throw new Error(`Server error creating snapshot: ${errorMessage}`);
             }
 
             if (response.data?.success) {
-                console.log(`Server successfully created snapshot for ${pubKey}. Triggering pull to refresh.`);
-                // Trigger a pull to get the updated document state from the server
+                console.log(`Server successfully created snapshot ${response.data.newSnapshotCid || ''} for ${pubKey}.`);
+
+                // Local state is now stale - DO NOT update it manually here.
+                // Rely on pullFromServer to get the correct state.
+
+                // Trigger a pull AFTER successful server snapshot
+                console.log('Triggering pull to refresh final state...');
                 await this.pullFromServer();
+
             } else {
-                throw new Error(`Server failed to create snapshot: ${response.data?.message || 'Unknown error'}`);
+                throw new Error(`Server failed to create snapshot: ${response.data?.message || 'Unknown reason'}`);
             }
 
-        } catch (err) {
+        } catch (err: unknown) { // Type the error
             console.error(`Error creating consolidated snapshot for ${pubKey}:`, err);
             this.setSyncError(err instanceof Error ? err.message : 'Snapshot creation failed');
         } finally {

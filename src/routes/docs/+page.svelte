@@ -2,6 +2,8 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { hominioDB, type Docs } from '$lib/KERNEL/hominio-db';
 	import { hominioSync } from '$lib/KERNEL/hominio-sync';
+	import { authClient } from '$lib/client/auth-hominio'; // Import auth client
+	import { canDelete, type CapabilityUser } from '$lib/KERNEL/hominio-capabilities'; // Import capability check
 
 	// Subscribe to hominioDB stores
 	const docs = hominioDB.docs;
@@ -10,6 +12,9 @@
 	const error = hominioDB.error;
 	const docContent = hominioDB.docContent;
 
+	// Subscribe to auth store for capability checking
+	const session = authClient.useSession();
+
 	// Subscribe to hominioSync store
 	const syncStatus = hominioSync.status;
 
@@ -17,6 +22,25 @@
 	let isAddingProperty = false;
 	// State for snapshot button
 	let isCreatingSnapshot = false;
+	// State for delete button
+	let isDeleting = false;
+	// Track delete permission
+	let canDeleteDoc = false;
+
+	// Reactive variable to check if user can delete the selected document
+	$: {
+		if ($selectedDoc && $session.data?.user) {
+			const currentUser = $session.data?.user as CapabilityUser;
+			canDeleteDoc = canDelete(currentUser, $selectedDoc);
+			console.log('Delete capability check:', {
+				userId: currentUser.id,
+				docOwner: $selectedDoc.owner,
+				canDelete: canDeleteDoc
+			});
+		} else {
+			canDeleteDoc = false;
+		}
+	}
 
 	// Handle selecting a document
 	function handleSelectDoc(doc: Docs) {
@@ -51,6 +75,31 @@
 			console.error('Error creating snapshot:', err);
 		} finally {
 			isCreatingSnapshot = false;
+		}
+	}
+
+	// Handle document deletion
+	async function handleDeleteDocument() {
+		if (isDeleting || !$selectedDoc) return;
+
+		if (
+			!confirm(
+				`Are you sure you want to delete document "${$selectedDoc.pubKey}"? This action cannot be undone.`
+			)
+		) {
+			return;
+		}
+
+		isDeleting = true;
+		try {
+			const success = await hominioSync.deleteDocument($selectedDoc.pubKey);
+			if (success) {
+				console.log(`Document ${$selectedDoc.pubKey} deleted successfully`);
+			}
+		} catch (err) {
+			console.error('Error deleting document:', err);
+		} finally {
+			isDeleting = false;
 		}
 	}
 
@@ -244,9 +293,45 @@
 				<!-- Document title at the top -->
 				<div class="p-6">
 					<h1 class="text-3xl font-bold text-blue-400">{$selectedDoc.pubKey}</h1>
-					<p class="mb-6 text-slate-300">
+					<p class="mb-4 text-slate-300">
 						{$selectedDoc.owner || 'A document using Loro CRDT'}
 					</p>
+
+					<!-- Delete Button Section -->
+					{#if canDeleteDoc}
+						<div class="mb-6 border-l-4 border-red-500 bg-red-900/20 p-4">
+							<div class="flex items-center justify-between">
+								<div>
+									<h3 class="text-lg font-medium text-red-300">Danger Zone</h3>
+									<p class="text-sm text-red-200">
+										Permanently delete this document and all its associated data
+									</p>
+								</div>
+								<button
+									class="flex items-center rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+									on:click={handleDeleteDocument}
+									disabled={isDeleting}
+								>
+									{#if isDeleting}
+										<div
+											class="mr-2 h-4 w-4 animate-spin rounded-full border-t-2 border-b-2 border-white"
+										></div>
+										Deleting...
+									{:else}
+										<svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+											<path
+												stroke-linecap="round"
+												stroke-linejoin="round"
+												stroke-width="2"
+												d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+											/>
+										</svg>
+										Delete Document
+									{/if}
+								</button>
+							</div>
+						</div>
+					{/if}
 
 					<!-- Document Metadata -->
 					<div class="overflow-y-auto">

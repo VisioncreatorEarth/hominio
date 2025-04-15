@@ -2,31 +2,51 @@ import { Elysia } from 'elysia';
 import { db } from '$db';
 import { docs, content } from '$db/schema';
 import * as schema from '$db/schema';
-import { eq, inArray, ne, and, sql, count } from 'drizzle-orm';
+import { eq, inArray, ne, and, sql, count, or } from 'drizzle-orm';
 import { hashService } from '$lib/KERNEL/hash-service';
 import { loroService } from '$lib/KERNEL/loro-service';
+// Import capability functions and types
+import { canRead, canWrite, canDelete, GENESIS_HOMINIO as CAP_GENESIS_HOMINIO, type CapabilityUser } from '$lib/KERNEL/hominio-capabilities';
+
+// Use the imported genesis ID, rename slightly to avoid local scope collision if needed
+const GENESIS_HOMINIO = CAP_GENESIS_HOMINIO;
 
 // Helper function for binary data conversion
 function arrayToUint8Array(arr: number[]): Uint8Array {
     return new Uint8Array(arr);
 }
 
-// Types
+// Define stricter types
+interface SessionUser extends CapabilityUser { // Extend CapabilityUser for type compatibility
+    [key: string]: unknown; // Safer than any
+}
+
 interface AuthContext {
-    session: {
-        user: {
-            id: string;
-            [key: string]: any;
-        }
-    },
-    body?: any,
-    set?: any,
-    params?: any,
-    query?: any
+    session: { user: SessionUser };
+    body?: unknown;      // Safer than any
+    set?: { status?: number | string;[key: string]: unknown }; // Model `set` more accurately
+    params?: Record<string, string | undefined>; // Assuming string params
+    query?: Record<string, string | undefined>;  // Assuming string queries
+}
+
+interface ContentResponse {
+    cid: string;
+    type: string;
+    metadata: Record<string, unknown>;
+    hasBinaryData: boolean;
+    contentLength: number;
+    verified: boolean;
+    createdAt: string;
+    binaryData?: number[]; // Optional binary data
+}
+
+interface DocGetResponse {
+    document: schema.Doc;
+    content?: ContentResponse | null;
 }
 
 // Content-related helper functions
-async function getContentByCid(cid: string): Promise<any | null> {
+async function getContentByCid(cid: string): Promise<ContentResponse | null> { // Use defined type
     try {
         // Get content by CID
         const contentItem = await db.select().from(content).where(eq(content.cid, cid));
@@ -90,18 +110,23 @@ async function getBinaryContentByCid(cid: string): Promise<Buffer | null> {
 export const docsHandlers = new Elysia()
     // List all docs
     .get('/list', async ({ session }: AuthContext) => {
-        // Get only docs owned by the current user
+        // Get docs owned by the current user OR the genesis owner
+        // Type assertion for session user ID needed here if DB expects string
+        const userId = session.user.id as string;
         return await db.select().from(docs)
-            .where(eq(docs.owner, session.user.id))
+            .where(or(
+                eq(docs.owner, userId),
+                eq(docs.owner, GENESIS_HOMINIO)
+            ))
             .orderBy(docs.updatedAt);
     })
     // Create new document
     .post('/', async ({ body, session, set }: AuthContext) => {
         try {
-            // Parse request body to extract optional snapshot
+            // Use type assertion for body after checking its type if necessary
             const createDocBody = body as {
                 binarySnapshot?: number[];
-                pubKey?: string; // Accept pubKey from client
+                pubKey?: string;
                 title?: string;
                 description?: string;
             };
@@ -169,11 +194,12 @@ export const docsHandlers = new Elysia()
             }
 
             // Create document entry with the current user as owner
+            const userId = session.user.id as string;
             const docEntry: schema.InsertDoc = {
                 pubKey,
                 snapshotCid: cid,
                 updateCids: [],
-                owner: session.user.id // Associate with current user
+                owner: userId // Associate with current user
             };
 
             // Save the document
@@ -191,7 +217,7 @@ export const docsHandlers = new Elysia()
             };
         } catch (error) {
             console.error('Error creating document:', error);
-            if (set) set.status = 500;
+            if (set?.status) set.status = 500;
             return {
                 success: false,
                 error: 'Failed to create document',
@@ -200,26 +226,31 @@ export const docsHandlers = new Elysia()
         }
     })
     // Get a specific document by pubKey
-    .get('/:pubKey', async ({ params, query, session, set }: AuthContext) => {
+    .get('/:pubKey', async ({ params, query, session, set }: AuthContext): Promise<DocGetResponse | { error: string; details?: string }> => {
         try {
             const pubKey = params?.pubKey;
+            if (!pubKey) {
+                if (set?.status) set.status = 400;
+                return { error: 'Missing pubKey parameter' };
+            }
             // Get doc by pubKey
             const doc = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
             if (!doc.length) {
-                if (set) set.status = 404;
+                if (set?.status) set.status = 404;
                 return { error: 'Document not found' };
             }
 
             const document = doc[0];
+            const capabilityUser: CapabilityUser | null = session.user as CapabilityUser ?? null;
 
-            // Verify the user owns this document
-            if (document.owner !== session.user.id) {
-                if (set) set.status = 403;
+            // *** Use canRead for authorization ***
+            if (!canRead(capabilityUser, document)) {
+                if (set?.status) set.status = 403;
                 return { error: 'Not authorized to access this document' };
             }
 
-            // Create the response including document data
-            const response: any = {
+            // Create the response using the defined interface
+            const response: DocGetResponse = {
                 document
             };
 
@@ -234,7 +265,7 @@ export const docsHandlers = new Elysia()
                     if (includeBinary) {
                         // Get the binary data directly
                         const binaryData = await getBinaryContentByCid(document.snapshotCid);
-                        if (binaryData) {
+                        if (binaryData && response.content) {
                             // Add binary data to the response
                             response.content.binaryData = Array.from(binaryData);
                         }
@@ -246,9 +277,65 @@ export const docsHandlers = new Elysia()
             return response;
         } catch (error) {
             console.error('Error retrieving document:', error);
-            if (set) set.status = 500;
+            if (set?.status) set.status = 500;
             return {
                 error: 'Failed to retrieve document',
+                details: error instanceof Error ? error.message : 'Unknown error'
+            };
+        }
+    })
+    // Delete a specific document by pubKey
+    .delete('/:pubKey', async ({ params, session, set }: AuthContext) => {
+        try {
+            const pubKey = params?.pubKey;
+            if (!pubKey) {
+                if (set?.status) set.status = 400;
+                return { error: 'Missing pubKey parameter' };
+            }
+
+            const docResult = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
+            if (!docResult.length) {
+                if (set?.status) set.status = 404;
+                return { error: 'Document not found' };
+            }
+            const document = docResult[0];
+
+            const capabilityUser: CapabilityUser | null = session.user as CapabilityUser ?? null;
+            if (!canDelete(capabilityUser, document)) {
+                if (set?.status) set.status = 403;
+                return { error: 'Not authorized to delete this document' };
+            }
+
+            console.log(`Attempting to delete document ${pubKey} owned by ${document.owner}`);
+
+            const cidsToDelete: string[] = [];
+            if (document.snapshotCid) {
+                cidsToDelete.push(document.snapshotCid);
+            }
+            if (document.updateCids && document.updateCids.length > 0) {
+                cidsToDelete.push(...document.updateCids);
+            }
+
+            await db.delete(docs).where(eq(docs.pubKey, pubKey));
+            console.log(`Deleted document entry ${pubKey}`);
+
+            if (cidsToDelete.length > 0) {
+                console.log(`Attempting to delete ${cidsToDelete.length} associated content items...`);
+                try {
+                    const deleteContentResult = await db.delete(content).where(inArray(content.cid, cidsToDelete));
+                    console.log(`Deleted ${deleteContentResult.rowCount} content items.`);
+                } catch (contentDeleteError: unknown) {
+                    console.error(`Error deleting associated content for doc ${pubKey}:`, contentDeleteError);
+                }
+            }
+
+            return { success: true, message: `Document ${pubKey} deleted successfully` };
+
+        } catch (error: unknown) {
+            console.error('Error deleting document:', error);
+            if (set?.status) set.status = 500;
+            return {
+                error: 'Failed to delete document',
                 details: error instanceof Error ? error.message : 'Unknown error'
             };
         }
@@ -261,18 +348,23 @@ docsHandlers.group('/:pubKey/update', app => app
     .post('/batch', async ({ params, body, session, set }: AuthContext) => {
         try {
             const pubKey = params?.pubKey;
+            if (!pubKey) {
+                if (set?.status) set.status = 400;
+                return { error: 'Missing pubKey parameter' };
+            }
             // Verify document exists and user owns it
             const docResult = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
             if (!docResult.length) {
-                if (set) set.status = 404;
+                if (set?.status) set.status = 404;
                 return { error: 'Document not found' };
             }
 
             const document = docResult[0];
+            const capabilityUser: CapabilityUser | null = session.user as CapabilityUser ?? null;
 
-            // Verify the user owns this document
-            if (document.owner !== session.user.id) {
-                if (set) set.status = 403;
+            // *** Use canWrite for authorization ***
+            if (!canWrite(capabilityUser, document)) {
+                if (set?.status) set.status = 403;
                 return { error: 'Not authorized to update this document' };
             }
 
@@ -281,7 +373,7 @@ docsHandlers.group('/:pubKey/update', app => app
             const updateCids = updateBody.updateCids;
 
             if (!updateCids || !Array.isArray(updateCids) || updateCids.length === 0) {
-                if (set) set.status = 400;
+                if (set?.status) set.status = 400;
                 return { error: 'Invalid request. Array of update CIDs required.' };
             }
 
@@ -297,7 +389,7 @@ docsHandlers.group('/:pubKey/update', app => app
             const missingCids = updateCids.filter(cid => !existingCids.has(cid));
 
             if (missingCids.length > 0) {
-                if (set) set.status = 400;
+                if (set?.status) set.status = 400;
                 return {
                     error: 'Some update CIDs are missing in the content store',
                     missing: missingCids
@@ -342,7 +434,7 @@ docsHandlers.group('/:pubKey/update', app => app
             };
         } catch (error) {
             console.error('Error batch updating document:', error);
-            if (set) set.status = 500;
+            if (set?.status) set.status = 500;
             return {
                 error: 'Failed to batch update document',
                 details: error instanceof Error ? error.message : 'Unknown error'
@@ -352,18 +444,23 @@ docsHandlers.group('/:pubKey/update', app => app
     .post('/', async ({ params, body, session, set }: AuthContext) => {
         try {
             const pubKey = params?.pubKey;
+            if (!pubKey) {
+                if (set?.status) set.status = 400;
+                return { error: 'Missing pubKey parameter' };
+            }
             // Verify document exists and user owns it
             const docResult = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
             if (!docResult.length) {
-                if (set) set.status = 404;
+                if (set?.status) set.status = 404;
                 return { error: 'Document not found' };
             }
 
             const document = docResult[0];
+            const capabilityUser: CapabilityUser | null = session.user as CapabilityUser ?? null;
 
-            // Verify the user owns this document
-            if (document.owner !== session.user.id) {
-                if (set) set.status = 403;
+            // *** Use canWrite for authorization ***
+            if (!canWrite(capabilityUser, document)) {
+                if (set?.status) set.status = 403;
                 return { error: 'Not authorized to update this document' };
             }
 
@@ -374,7 +471,7 @@ docsHandlers.group('/:pubKey/update', app => app
             const binaryUpdate = updateBody.data?.binaryUpdate || updateBody.binaryUpdate;
 
             if (!binaryUpdate || !Array.isArray(binaryUpdate)) {
-                if (set) set.status = 400;
+                if (set?.status) set.status = 400;
                 return { error: 'Invalid update data. Binary update required.' };
             }
 
@@ -444,7 +541,7 @@ docsHandlers.group('/:pubKey/update', app => app
             };
         } catch (error) {
             console.error('Error updating document:', error);
-            if (set) set.status = 500;
+            if (set?.status) set.status = 500;
             return {
                 error: 'Failed to update document',
                 details: error instanceof Error ? error.message : 'Unknown error'
@@ -458,18 +555,23 @@ docsHandlers.group('/:pubKey/snapshot', app => app
     .post('/', async ({ params, body, session, set }: AuthContext) => {
         try {
             const pubKey = params?.pubKey;
+            if (!pubKey) {
+                if (set?.status) set.status = 400;
+                return { error: 'Missing pubKey parameter' };
+            }
             // Verify document exists and user owns it
             const docResult = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
             if (!docResult.length) {
-                if (set) set.status = 404;
+                if (set?.status) set.status = 404;
                 return { error: 'Document not found' };
             }
 
             const document = docResult[0];
+            const capabilityUser: CapabilityUser | null = session.user as CapabilityUser ?? null;
 
-            // Verify the user owns this document
-            if (document.owner !== session.user.id) {
-                if (set) set.status = 403;
+            // *** Use canWrite for authorization ***
+            if (!canWrite(capabilityUser, document)) {
+                if (set?.status) set.status = 403;
                 return { error: 'Not authorized to update this document' };
             }
 
@@ -483,7 +585,7 @@ docsHandlers.group('/:pubKey/snapshot', app => app
             const binarySnapshot = snapshotBody.data?.binarySnapshot || snapshotBody.binarySnapshot;
 
             if (!binarySnapshot || !Array.isArray(binarySnapshot)) {
-                if (set) set.status = 400;
+                if (set?.status) set.status = 400;
                 return { error: 'Invalid snapshot data. Binary snapshot required.' };
             }
 
@@ -496,7 +598,7 @@ docsHandlers.group('/:pubKey/snapshot', app => app
                 // Import to verify it's valid
                 loroDoc.import(snapshotData);
             } catch (error) {
-                if (set) set.status = 400;
+                if (set?.status) set.status = 400;
                 return {
                     error: 'Invalid Loro snapshot',
                     details: error instanceof Error ? error.message : 'Unknown error'
@@ -563,7 +665,7 @@ docsHandlers.group('/:pubKey/snapshot', app => app
             };
         } catch (error) {
             console.error('Error updating document snapshot:', error);
-            if (set) set.status = 500;
+            if (set?.status) set.status = 500;
             return {
                 error: 'Failed to update document snapshot',
                 details: error instanceof Error ? error.message : 'Unknown error'
@@ -574,29 +676,34 @@ docsHandlers.group('/:pubKey/snapshot', app => app
     .post('/create', async ({ params, session, set }: AuthContext) => {
         try {
             const pubKey = params?.pubKey;
+            if (!pubKey) {
+                if (set?.status) set.status = 400;
+                return { error: 'Missing pubKey parameter' };
+            }
             // Verify document exists and user owns it
             const docResult = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
             if (!docResult.length) {
-                if (set) set.status = 404;
+                if (set?.status) set.status = 404;
                 return { error: 'Document not found' };
             }
 
             const document = docResult[0];
+            const capabilityUser: CapabilityUser | null = session.user as CapabilityUser ?? null;
 
-            // Verify the user owns this document
-            if (document.owner !== session.user.id) {
-                if (set) set.status = 403;
+            // *** Use canWrite for authorization ***
+            if (!canWrite(capabilityUser, document)) {
+                if (set?.status) set.status = 403;
                 return { error: 'Not authorized to snapshot this document' };
             }
 
             // Check if the document has a snapshot and updates
             if (!document.snapshotCid) {
-                if (set) set.status = 400;
+                if (set?.status) set.status = 400;
                 return { error: 'Document has no snapshot to consolidate' };
             }
 
             if (!document.updateCids || document.updateCids.length === 0) {
-                if (set) set.status = 400;
+                if (set?.status) set.status = 400;
                 return { error: 'No updates to consolidate into a new snapshot' };
             }
 
@@ -605,7 +712,7 @@ docsHandlers.group('/:pubKey/snapshot', app => app
             // 1. Load the base snapshot
             const snapshotData = await getBinaryContentByCid(document.snapshotCid);
             if (!snapshotData) {
-                if (set) set.status = 500;
+                if (set?.status) set.status = 500;
                 return { error: 'Failed to load document snapshot' };
             }
 
@@ -636,7 +743,7 @@ docsHandlers.group('/:pubKey/snapshot', app => app
                     console.log(`Successfully applied ${updatesData.length} updates in batch`);
                 } catch (err) {
                     console.error('Error applying updates in batch:', err);
-                    if (set) set.status = 500;
+                    if (set?.status) set.status = 500;
                     return { error: 'Failed to apply updates in batch' };
                 }
             }

@@ -9,11 +9,84 @@ import { drizzle } from 'drizzle-orm/neon-http';
 import { LoroDoc } from 'loro-crdt';
 import { blake3 } from '@noble/hashes/blake3';
 import b4a from 'b4a';
-import { randomBytes } from 'crypto';
 import * as schema from './schema';
+import { sql } from 'drizzle-orm'; // Import sql for querying
 
-// Sample user ID for seed documents - use a real user ID from your BetterAuth database
-const SAMPLE_USER_ID = "0DaaHRf7Khtw3UcBxcofmnTM4V27Dasd";
+const GENESIS_HOMINIO = "00000000000000000000000000000000";
+const GENESIS_PUBKEY = "0000000000000000000000000000000000000000000000000000000000000000";
+
+// Basic placeholder type for SchemaDefinition matching the structure used
+interface SchemaDefinition {
+    pubkey: string | null;
+    schema: string | null;
+    name: string;
+    places: Record<string, {
+        description: string;
+        type: string | string[];
+        required: boolean;
+        validation?: Record<string, unknown>;
+        entitySchemas?: string[];
+    }>;
+    translations: Array<{
+        lang: string;
+        name: string;
+        description: string;
+        places: Record<string, string>;
+    }>;
+}
+
+const gismuSchema: SchemaDefinition = {
+    pubkey: GENESIS_PUBKEY,
+    schema: null, // Self-referential as the fundamental meta-schema
+    name: "gismu",
+    places: {
+        x1: {
+            description: "lo lojbo ke krasi valsi",
+            type: "string",
+            required: true
+        },
+        x2: {
+            description: "lo bridi be lo ka ce'u skicu zo'e",
+            type: "string",
+            required: true
+        },
+        x3: {
+            description: "lo sumti javni",
+            type: "any", // Consider defining a structure for places later
+            required: true
+        },
+        x4: {
+            description: "lo rafsi",
+            type: "string", // Should likely be array of strings
+            required: false
+        }
+    },
+    translations: [
+        {
+            lang: "en",
+            name: "Root Word",
+            description: "A Lojban root word (gismu) defining a fundamental concept",
+            places: {
+                x1: "A Lojban root word",
+                x2: "Relation/concept expressed by the word",
+                x3: "Argument roles for the relation",
+                x4: "Associated affix(es)"
+            }
+        },
+        {
+            lang: "de",
+            name: "Stammwort",
+            description: "Ein Lojban-Stammwort (Gismu), das einen grundlegenden Begriff definiert",
+            places: {
+                x1: "Das Stammwort",
+                x2: "Ausgedrückte Relation/Konzept",
+                x3: "Argumentrollen der Relation",
+                x4: "Zugehörige Affixe"
+            }
+        }
+    ]
+};
+
 
 // Helper functions
 // --------------------------------------------------------
@@ -24,91 +97,83 @@ async function hashSnapshot(snapshot: Uint8Array): Promise<string> {
     return b4a.toString(hashBytes, 'hex');
 }
 
-// Helper function to generate a public key
-function generatePublicKey(): string {
-    // Format: z + base64url encoding of 32 bytes
-    return 'z' + randomBytes(32).toString('base64url');
-}
+// Removed generatePublicKey helper
 
-// Seed function to create a random Loro doc
-async function seedRandomLoroDoc(db: ReturnType<typeof drizzle>) {
+
+// Seed function to create the Gismu schema document
+// --------------------------------------------------------
+async function seedGismuSchemaDoc(db: ReturnType<typeof drizzle>) {
     try {
-        // Create a new LoroDoc directly (without loroService)
+        console.log(`Checking for existing Gismu schema with pubKey: ${GENESIS_PUBKEY}...`);
+
+        // Check if the document already exists
+        const existingDoc = await db.select()
+            .from(schema.docs)
+            .where(sql`${schema.docs.pubKey} = ${GENESIS_PUBKEY}`)
+            .limit(1);
+
+        if (existingDoc.length > 0) {
+            console.log(`✅ Gismu schema document already exists (pubKey: ${existingDoc[0].pubKey}). Skipping creation.`);
+            return;
+        }
+
+        console.log("Gismu schema document not found. Creating...");
+
+        // Create a new LoroDoc to store the schema definition
         const loroDoc = new LoroDoc();
+        loroDoc.setPeerId(1); // Static peer ID for seeding
 
-        // Set a random peer ID
-        loroDoc.setPeerId(Math.floor(Math.random() * 1000000));
-
-        // Add metadata to Loro document - this follows hominio-db.ts model
+        // Populate the LoroDoc using the standard meta/data structure
         const meta = loroDoc.getMap('meta');
-        meta.set('name', 'Example Loro Document');
-        meta.set('description', 'A test document using Loro CRDT');
-        meta.set('author', 'SeedScript');
-        meta.set('createdAt', new Date().toISOString());
-        meta.set('schemaId', 'default');
+        meta.set('name', gismuSchema.name); // Store name in meta
+        // The schema reference is null for the self-referential gismu schema
+        meta.set('schema', gismuSchema.schema); // Should be null
 
-        // Add data content - following hominio-db structure
-        const dataMap = loroDoc.getMap("data");
-        dataMap.set("prop_1", "This is a test document created with Loro CRDT library.");
-        dataMap.set("prop_2", "Example property value");
-        dataMap.set("prop_3", Math.floor(Math.random() * 100).toString());
-
-        // Generate a pubKey
-        const pubKey = generatePublicKey();
-        const now = new Date().toISOString();
+        const data = loroDoc.getMap('data');
+        data.set('places', gismuSchema.places); // Store places in data
+        data.set('translations', gismuSchema.translations); // Store translations in data
 
         // Export snapshot and generate hash
         const snapshot = loroDoc.exportSnapshot();
         const cid = await hashSnapshot(snapshot);
-        // Get JSON representation only for logging/debugging if needed
-        // const jsonState = loroDoc.toJSON();
+        const now = new Date().toISOString();
 
-        // First, store the content with BYTEA data - matching hominio-db.ts Content structure
+        // 1. Store the content
         const contentEntry: schema.InsertContent = {
             cid,
             type: 'snapshot',
-            // Store binary data directly as Buffer - match 'raw' field from interface
             raw: Buffer.from(snapshot),
-            // Store metadata separately as JSON
+            // Update metadata stored alongside content - keep it minimal
             metadata: {
-                created: now,
-                // Include only schema ID and name from document metadata
-                schemaId: meta.get('schemaId'),
-                name: meta.get('name')
+                name: gismuSchema.name,
+                schema: gismuSchema.schema, // null (indicates it's the root schema)
+                created: now
             }
         };
 
-        // Save the content
         const contentResult = await db.insert(schema.content)
             .values(contentEntry)
             .returning();
+        console.log('  - Created content entry:', contentResult[0].cid);
 
-        console.log('Created content entry:', contentResult[0].cid);
-
-        // Then create document entry that references the content - matching schema requirements
-        // but including metadata that's important for hominio-db
+        // 2. Create the document entry
         const docEntry: schema.InsertDoc = {
-            pubKey,
+            pubKey: GENESIS_PUBKEY,
             snapshotCid: cid,
             updateCids: [],
-            owner: SAMPLE_USER_ID, // Match 'owner' field in interface, not 'ownerId'
-            // Use a Date object for updatedAt since that's what the schema expects
+            owner: GENESIS_HOMINIO,
             updatedAt: new Date()
         };
 
-        // Save the document entry
         const docResult = await db.insert(schema.docs)
             .values(docEntry)
             .returning();
+        console.log('  - Created document entry:', docResult[0].pubKey);
 
-        console.log('Created document entry:', docResult[0].pubKey);
+        console.log('✅ Successfully created Gismu schema document.');
 
-        return {
-            doc: docResult[0],
-            content: contentResult[0]
-        };
     } catch (error) {
-        console.error('Error creating Loro doc:', error);
+        console.error('Error seeding Gismu schema document:', error);
         throw error;
     }
 }
@@ -126,20 +191,18 @@ async function main() {
         process.exit(1);
     }
 
-    console.log('🌱 Seeding database with Loro documents...');
+    console.log('🌱 Seeding database with Gismu schema...');
 
     try {
         // Create direct database connection
         const sql = neon(dbUrl);
-        const db = drizzle({ client: sql, schema });
+        const db = drizzle(sql, { schema }); // Pass schema correctly
 
-        // Seed the database
-        const result = await seedRandomLoroDoc(db);
+        // Seed the Gismu schema document
+        await seedGismuSchemaDoc(db);
 
-        console.log('✅ Successfully created Loro document:');
-        console.log('  - Public Key:', result.doc.pubKey);
-        console.log('  - Snapshot CID:', result.doc.snapshotCid);
-        console.log('  - Owner:', result.doc.owner);
+        console.log('✅ Database seeding completed successfully.');
+
     } catch (error) {
         console.error('❌ Error seeding database:', error);
         process.exit(1);
