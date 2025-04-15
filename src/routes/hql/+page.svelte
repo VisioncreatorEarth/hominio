@@ -544,10 +544,6 @@
 	:global(body) {
 		margin: 0;
 		padding: 0;
-		background-image: url('/hql-background.jpg');
-		background-size: cover;
-		background-position: center;
-		background-attachment: fixed;
 		color: #fff;
 		font-family:
 			system-ui,

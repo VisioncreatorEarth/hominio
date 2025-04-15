@@ -5,43 +5,7 @@ import {
 } from 'drizzle-typebox'
 
 import type { Table } from 'drizzle-orm'
-import { db } from './index';
 
-/**
- * Drop all tables in the database for a clean reset
- */
-export async function dropAllTables() {
-    try {
-        // Execute raw SQL to drop all tables in public schema
-        await db.execute(`
-            DO $$ DECLARE
-                r RECORD;
-            BEGIN
-                FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
-                    EXECUTE 'DROP TABLE IF EXISTS ' || quote_ident(r.tablename) || ' CASCADE';
-                END LOOP;
-            END $$;
-        `);
-
-        console.log('✅ All tables dropped successfully');
-    } catch (error) {
-        console.error('❌ Error dropping tables:', error);
-        throw error;
-    }
-}
-
-// Command line handler for direct execution
-if (process.argv[2] === 'dropAllTables') {
-    dropAllTables()
-        .then(() => {
-            console.log('Database reset completed');
-            process.exit(0);
-        })
-        .catch((error) => {
-            console.error('Database reset failed:', error);
-            process.exit(1);
-        });
-}
 
 type Spread<
     T extends TObject | Table,

@@ -38,7 +38,7 @@ async function getContentByCid(cid: string): Promise<any | null> {
         const item = contentItem[0];
 
         // Get binary data and metadata
-        const binaryData = item.data as Buffer;
+        const binaryData = item.raw as Buffer;
         const metadata = item.metadata as Record<string, unknown> || {};
 
         // Verify content integrity
@@ -79,7 +79,7 @@ async function getBinaryContentByCid(cid: string): Promise<Buffer | null> {
         }
 
         // Return raw binary data
-        return contentItem[0].data as Buffer;
+        return contentItem[0].raw as Buffer;
     } catch (error) {
         console.error('Error retrieving binary content:', error);
         return null;
@@ -92,7 +92,7 @@ export const docsHandlers = new Elysia()
     .get('/list', async ({ session }: AuthContext) => {
         // Get only docs owned by the current user
         return await db.select().from(docs)
-            .where(eq(docs.ownerId, session.user.id))
+            .where(eq(docs.owner, session.user.id))
             .orderBy(docs.updatedAt);
     })
     // Create new document
@@ -149,7 +149,7 @@ export const docsHandlers = new Elysia()
                 const contentEntry: schema.InsertContent = {
                     cid,
                     type: 'snapshot',
-                    data: Buffer.from(snapshot), // Store binary data directly
+                    raw: Buffer.from(snapshot), // Store binary data directly
                     metadata: { docState: jsonState } // Store metadata separately
                 };
                 contentResult = await db.insert(schema.content)
@@ -173,9 +173,7 @@ export const docsHandlers = new Elysia()
                 pubKey,
                 snapshotCid: cid,
                 updateCids: [],
-                ownerId: session.user.id, // Associate with current user
-                title: createDocBody.title || 'New Loro Document',
-                description: createDocBody.description || 'Created on ' + new Date().toLocaleString()
+                owner: session.user.id // Associate with current user
             };
 
             // Save the document
@@ -184,6 +182,7 @@ export const docsHandlers = new Elysia()
                 .returning();
 
             console.log('Created document entry:', docResult[0].pubKey);
+
 
             // Return the created document
             return {
@@ -214,7 +213,7 @@ export const docsHandlers = new Elysia()
             const document = doc[0];
 
             // Verify the user owns this document
-            if (document.ownerId !== session.user.id) {
+            if (document.owner !== session.user.id) {
                 if (set) set.status = 403;
                 return { error: 'Not authorized to access this document' };
             }
@@ -272,7 +271,7 @@ docsHandlers.group('/:pubKey/update', app => app
             const document = docResult[0];
 
             // Verify the user owns this document
-            if (document.ownerId !== session.user.id) {
+            if (document.owner !== session.user.id) {
                 if (set) set.status = 403;
                 return { error: 'Not authorized to update this document' };
             }
@@ -363,7 +362,7 @@ docsHandlers.group('/:pubKey/update', app => app
             const document = docResult[0];
 
             // Verify the user owns this document
-            if (document.ownerId !== session.user.id) {
+            if (document.owner !== session.user.id) {
                 if (set) set.status = 403;
                 return { error: 'Not authorized to update this document' };
             }
@@ -391,7 +390,7 @@ docsHandlers.group('/:pubKey/update', app => app
                 cid,
                 type: 'update',
                 // Store binary data directly without any modification
-                data: Buffer.from(binaryUpdateArray),
+                raw: Buffer.from(binaryUpdateArray),
                 // Only store minimal metadata
                 metadata: {
                     documentPubKey: pubKey
@@ -418,7 +417,7 @@ docsHandlers.group('/:pubKey/update', app => app
             const updateResult2 = await db.update(schema.docs)
                 .set({
                     // Use SQL to append CID only if it doesn't already exist in the array
-                    updateCids: schema.sql`(
+                    updateCids: sql`(
                         CASE 
                             WHEN ${cid} = ANY(${docs.updateCids}) THEN ${docs.updateCids}
                             ELSE array_append(COALESCE(${docs.updateCids}, ARRAY[]::text[]), ${cid})
@@ -469,7 +468,7 @@ docsHandlers.group('/:pubKey/snapshot', app => app
             const document = docResult[0];
 
             // Verify the user owns this document
-            if (document.ownerId !== session.user.id) {
+            if (document.owner !== session.user.id) {
                 if (set) set.status = 403;
                 return { error: 'Not authorized to update this document' };
             }
@@ -529,7 +528,7 @@ docsHandlers.group('/:pubKey/snapshot', app => app
                     cid: snapshotCid,
                     type: 'snapshot',
                     // Store binary data directly
-                    data: Buffer.from(snapshotData),
+                    raw: Buffer.from(snapshotData),
                     // Store metadata with docState if available
                     metadata: {
                         updatedAt: new Date().toISOString(),
@@ -585,7 +584,7 @@ docsHandlers.group('/:pubKey/snapshot', app => app
             const document = docResult[0];
 
             // Verify the user owns this document
-            if (document.ownerId !== session.user.id) {
+            if (document.owner !== session.user.id) {
                 if (set) set.status = 403;
                 return { error: 'Not authorized to snapshot this document' };
             }
@@ -650,7 +649,7 @@ docsHandlers.group('/:pubKey/snapshot', app => app
             await db.insert(content).values({
                 cid: newSnapshotCid,
                 type: 'snapshot',
-                data: Buffer.from(newSnapshotData),
+                raw: Buffer.from(newSnapshotData),
                 metadata: { documentPubKey: pubKey },
                 createdAt: new Date()
             });

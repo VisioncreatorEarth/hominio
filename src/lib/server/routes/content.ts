@@ -45,7 +45,7 @@ async function getContentByCid(cid: string): Promise<ContentResponse | null> {
         const item = contentItem[0];
 
         // Get binary data and metadata
-        const binaryData = item.data as Buffer;
+        const binaryData = item.raw as Buffer;
         const metadata = item.metadata as Record<string, unknown> || {};
 
         // Verify content integrity
@@ -87,7 +87,7 @@ async function getBinaryContentByCid(cid: string): Promise<Buffer | null> {
         }
 
         // Return raw binary data
-        return contentItem[0].data as Buffer;
+        return contentItem[0].raw as Buffer;
     } catch (error) {
         console.error('Error retrieving binary content:', error);
         return null;
@@ -208,7 +208,7 @@ contentHandlers.group('/batch', app => app
             const contentEntries = newItems.map(item => ({
                 cid: item.cid,
                 type: item.type,
-                data: Buffer.from(new Uint8Array(item.binaryData)),
+                raw: Buffer.from(new Uint8Array(item.binaryData)),
                 metadata: item.metadata || {},
                 createdAt: new Date()
             }));

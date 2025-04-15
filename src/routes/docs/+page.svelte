@@ -1,17 +1,17 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { documentService, type DocMetadata } from '$lib/KERNEL/doc-state';
-	import { syncService } from '$lib/KERNEL/sync-service';
+	import { hominioDB, type Docs } from '$lib/KERNEL/hominio-db';
+	import { hominioSync } from '$lib/KERNEL/hominio-sync';
 
-	// Subscribe to document service stores
-	const docs = documentService.docs;
-	const selectedDoc = documentService.selectedDoc;
-	const status = documentService.status;
-	const error = documentService.error;
-	const docContent = documentService.docContent;
+	// Subscribe to hominioDB stores
+	const docs = hominioDB.docs;
+	const selectedDoc = hominioDB.selectedDoc;
+	const status = hominioDB.status;
+	const error = hominioDB.error;
+	const docContent = hominioDB.docContent;
 
-	// Subscribe to sync service store
-	const syncStatus = syncService.status;
+	// Subscribe to hominioSync store
+	const syncStatus = hominioSync.status;
 
 	// State for random property button
 	let isAddingProperty = false;
@@ -19,13 +19,13 @@
 	let isCreatingSnapshot = false;
 
 	// Handle selecting a document
-	function handleSelectDoc(doc: DocMetadata) {
-		documentService.selectDoc(doc);
+	function handleSelectDoc(doc: Docs) {
+		hominioDB.selectDoc(doc);
 	}
 
 	// Handle creating a new document
 	function handleCreateNewDocument() {
-		documentService.createNewDocument();
+		hominioDB.createDocument();
 	}
 
 	// Handle adding random property
@@ -34,7 +34,7 @@
 
 		isAddingProperty = true;
 		try {
-			await documentService.addRandomPropertyToDocument();
+			await hominioDB.addRandomPropertyToDocument();
 		} finally {
 			isAddingProperty = false;
 		}
@@ -46,7 +46,7 @@
 
 		isCreatingSnapshot = true;
 		try {
-			await documentService.createConsolidatedSnapshot();
+			await hominioSync.createConsolidatedSnapshot();
 		} catch (err) {
 			console.error('Error creating snapshot:', err);
 		} finally {
@@ -56,12 +56,12 @@
 
 	// Handle manual pull from server
 	function handlePull() {
-		syncService.pullFromServer();
+		hominioSync.pullFromServer();
 	}
 
 	// Handle manual push to server
 	function handlePush() {
-		syncService.pushToServer();
+		hominioSync.pushToServer();
 	}
 
 	// On mount, ensure we have properly initialized
@@ -70,8 +70,8 @@
 	});
 
 	onDestroy(() => {
-		documentService.destroy();
-		syncService.destroy();
+		hominioDB.destroy();
+		hominioSync.destroy();
 	});
 </script>
 
@@ -117,6 +117,17 @@
 							>
 								Pull
 							</button>
+							<!-- Remove Test Get Button -->
+							<!--
+							<button
+								class="rounded bg-yellow-600 px-2 py-0.5 text-xs text-white hover:bg-yellow-700"
+								on:click={() =>
+									testDocGet('e14858526407fec42e729fab85c7ed404a4a3ae0283e2d9b097e50a8238f29f5')}
+								title="Test GET request for specific doc"
+							>
+								Test Get
+							</button>
+							-->
 						</div>
 					{/if}
 				</div>
@@ -207,9 +218,9 @@
 								: ''}"
 							on:click={() => handleSelectDoc(doc)}
 						>
-							<h2 class="font-medium text-blue-400">{doc.title}</h2>
+							<h2 class="font-medium text-blue-400">{doc.pubKey}</h2>
 							<p class="mt-1 truncate text-xs text-slate-400">
-								{doc.description || 'No description'}
+								{doc.owner || 'No owner'}
 							</p>
 							<div class="mt-1 flex items-center text-xs">
 								<span class="font-mono text-slate-300">
@@ -232,9 +243,9 @@
 			{#if $selectedDoc}
 				<!-- Document title at the top -->
 				<div class="p-6">
-					<h1 class="text-3xl font-bold text-blue-400">{$selectedDoc.title}</h1>
+					<h1 class="text-3xl font-bold text-blue-400">{$selectedDoc.pubKey}</h1>
 					<p class="mb-6 text-slate-300">
-						{$selectedDoc.description || 'A document using Loro CRDT'}
+						{$selectedDoc.owner || 'A document using Loro CRDT'}
 					</p>
 
 					<!-- Document Metadata -->
@@ -249,18 +260,12 @@
 							<div>
 								<span class="font-medium">Owner ID:</span>
 								<span class="ml-2 font-mono">
-									{$selectedDoc.ownerId}
+									{$selectedDoc.owner}
 									{#if $selectedDoc.localState}
 										<span class="ml-2 rounded bg-amber-800 px-1 text-xs text-amber-200"
 											>Not yet synced to server</span
 										>
 									{/if}
-								</span>
-							</div>
-							<div>
-								<span class="font-medium">Created:</span>
-								<span class="ml-2">
-									{new Date($selectedDoc.createdAt).toLocaleString()}
 								</span>
 							</div>
 							<div>
