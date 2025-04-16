@@ -11,7 +11,7 @@ import { blake3 } from '@noble/hashes/blake3';
 import b4a from 'b4a';
 import * as schema from './schema';
 import { eq } from 'drizzle-orm'; // Removed unused sql import
-import { validateSchemaDocumentStructure } from '../lib/KERNEL/hominio-validate';
+import { validateSchemaJsonStructure } from '../lib/KERNEL/hominio-validate';
 import { GENESIS_PUBKEY, GENESIS_HOMINIO } from './constants'; // Import from new constants file
 
 // Basic placeholder types matching the structure used
@@ -192,13 +192,19 @@ async function seedDocument(
         data.set('translations', dataMapContent.translations);
     }
 
-    // --- NEW: 4.5 Validate the LoroDoc structure ---
+    // --- UPDATED: 4.5 Validate the LoroDoc structure VIA JSON --- //
     if (docType === 'schema') { // Only validate schema docs for now
         console.log(`  - Validating structure for schema: ${docKey}...`);
-        const { isValid, errors } = validateSchemaDocumentStructure(loroDoc);
+        // Get JSON representation for validation
+        const schemaJsonForValidation = loroDoc.toJSON() as Record<string, unknown>;
+        // Add pubKey to JSON as the validator might expect it (depending on its implementation)
+        schemaJsonForValidation.pubKey = pubKey;
+
+        const { isValid, errors } = validateSchemaJsonStructure(schemaJsonForValidation);
         if (!isValid) {
             console.error(`  - ❌ Validation Failed for ${docKey}:`);
-            errors.forEach(err => console.error(`    - ${err}`));
+            // Add type string to err parameter
+            errors.forEach((err: string) => console.error(`    - ${err}`));
             console.warn(`  - Skipping database insertion for invalid schema: ${docKey}`);
             return; // Do not proceed if validation fails
         }
@@ -206,6 +212,8 @@ async function seedDocument(
     }
 
     // 5. Export snapshot and hash
+    // Use exportSnapshot() as export() with mode is deprecated/changed in newer Loro versions?
+    // Reverting to exportSnapshot as it seems to be the intended method based on context.
     const snapshot = loroDoc.exportSnapshot();
     const cid = await hashSnapshot(snapshot);
     const now = new Date();

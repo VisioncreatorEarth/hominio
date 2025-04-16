@@ -125,15 +125,13 @@
 			</div>
 		</main>
 
-		<div class="fixed bottom-0 left-1/2 z-50 -translate-x-1/2">
+		<div class="fixed bottom-0 left-1/2 z-50 mb-4 -translate-x-1/2">
 			{#if !isCallActive}
 				<button
-					class="flex h-16 w-16 transform items-center justify-center rounded-full bg-white/5 shadow-lg backdrop-blur-sm transition-all duration-300 hover:scale-105 hover:bg-white/10 focus:outline-none"
+					class="flex h-12 w-12 transform items-center justify-center rounded-full bg-white/20 shadow-2xl shadow-black/50 transition-all duration-300 hover:scale-105 hover:bg-white/30 focus:outline-none"
 					onclick={toggleCall}
 				>
-					<div class="h-12 w-12 overflow-hidden rounded-full bg-white/5 p-1">
-						<img src="/logo.png" alt="Hominio Logo" class="h-full w-full object-cover" />
-					</div>
+					<img src="logo-button.png" alt="o" />
 				</button>
 			{/if}
 		</div>

@@ -1,4 +1,3 @@
-import { LoroDoc, LoroMap } from 'loro-crdt';
 import { GENESIS_PUBKEY } from '../../db/constants'; // Import from new constants file
 
 // Define the genesis pubkey constant with 0x prefix - REMOVED, now imported
@@ -30,7 +29,7 @@ interface TranslationStructure {
 }
 
 /**
- * Validates the basic structure of a LoroDoc intended to represent a Hominio Schema Definition.
+ * Validates the basic structure of a Schema Definition *represented as JSON*.
  *
  * Checks for:
  * - Presence and type of required meta fields (name, schema).
@@ -39,24 +38,25 @@ interface TranslationStructure {
  * - Basic structure of places (x1-x5 keys, required fields within each place).
  * - Basic structure of translations (lang, name, description, places).
  *
- * @param doc The LoroDoc instance to validate.
+ * @param schemaJson The schema definition as a JSON object.
  * @returns An object containing `isValid` (boolean) and an array of `errors` (string[]).
  */
-export function validateSchemaDocumentStructure(doc: LoroDoc): { isValid: boolean; errors: string[] } {
+export function validateSchemaJsonStructure(schemaJson: Record<string, unknown>): { isValid: boolean; errors: string[] } {
     const errors: string[] = [];
     let isValid = true;
 
-    const meta = doc.getMap('meta');
-    const data = doc.getMap('data');
+    // Access data directly from JSON object
+    const meta = schemaJson.meta as Record<string, unknown> | undefined;
+    const data = schemaJson.data as Record<string, unknown> | undefined;
 
     // --- Meta Validation ---
     if (!meta) {
         errors.push("Missing 'meta' map.");
         isValid = false;
     } else {
-        const metaContent = meta.toJSON(); // Get a snapshot for validation
-        const name = metaContent.name;
-        const schemaRef = metaContent.schema;
+        // No need for .toJSON()
+        const name = meta.name;
+        const schemaRef = meta.schema;
 
         if (typeof name !== 'string' || name.trim() === '') {
             errors.push("Invalid or missing 'meta.name' (must be a non-empty string).");
@@ -81,9 +81,9 @@ export function validateSchemaDocumentStructure(doc: LoroDoc): { isValid: boolea
         errors.push("Missing 'data' map.");
         isValid = false;
     } else {
-        const dataContent = data.toJSON(); // Get a snapshot for validation
-        const places = dataContent.places as Record<string, PlaceDefinitionStructure> | undefined;
-        const translations = dataContent.translations as TranslationStructure[] | undefined;
+        // No need for .toJSON()
+        const places = data.places as Record<string, PlaceDefinitionStructure> | undefined;
+        const translations = data.translations as TranslationStructure[] | undefined;
 
         // --- Places Validation ---
         if (typeof places !== 'object' || places === null || Array.isArray(places)) {
@@ -186,14 +186,8 @@ export function validateSchemaDocumentStructure(doc: LoroDoc): { isValid: boolea
 // --- Entity Validation ---
 
 /**
- * Placeholder type for a function that fetches a schema LoroDoc based on its @pubKey reference.
- * Replace with actual implementation later.
- */
-type SchemaFetcher = (schemaRef: string) => Promise<LoroDoc | null>;
-
-/**
- * Validates the structure and basic content of a LoroDoc intended to represent a Hominio Entity
- * against its referenced schema definition.
+ * Validates the structure and basic content of Hominio Entity *JSON data*
+ * against its referenced *schema JSON data*.
  *
  * Checks for:
  * - Presence and type of required meta fields (name, schema).
@@ -201,30 +195,30 @@ type SchemaFetcher = (schemaRef: string) => Promise<LoroDoc | null>;
  * - Presence and type of required data fields (places).
  * - Existence and basic type validation of entity place values against the schema definition.
  *
- * @param entityDoc The entity LoroDoc instance to validate.
- * @param fetchSchema A function to retrieve the schema LoroDoc based on its @pubKey reference.
+ * @param entityJson The entity data as a JSON object.
+ * @param schemaJson The schema definition as a JSON object.
  * @returns An object containing `isValid` (boolean) and an array of `errors` (string[]).
  */
-export async function validateEntityDocument(
-    entityDoc: LoroDoc,
-    fetchSchema: SchemaFetcher
-): Promise<{ isValid: boolean; errors: string[] }> {
+export function validateEntityJsonAgainstSchema(
+    entityJson: Record<string, unknown>,
+    schemaJson: Record<string, unknown>
+): { isValid: boolean; errors: string[] } {
     const errors: string[] = [];
     let isValid = true;
 
-    const entityMetaMap = entityDoc.getMap('meta');
-    const entityDataMap = entityDoc.getMap('data');
+    // Access data directly from JSON objects
+    const entityMeta = entityJson.meta as Record<string, unknown> | undefined;
+    const entityData = entityJson.data as Record<string, unknown> | undefined;
 
     // --- Entity Meta Validation ---
     let schemaRef: string | null = null;
-    if (!entityMetaMap) {
+    if (!entityMeta) {
         errors.push("Missing entity 'meta' map.");
         isValid = false;
     } else {
-        // Use .toJSON() on the map
-        const metaContent = entityMetaMap.toJSON();
-        schemaRef = typeof metaContent.schema === 'string' ? metaContent.schema : null;
-        const name = metaContent.name;
+        // No need for .toJSON()
+        schemaRef = typeof entityMeta.schema === 'string' ? entityMeta.schema : null;
+        const name = entityMeta.name;
 
         if (typeof name !== 'string' || name.trim() === '') {
             errors.push("Invalid or missing entity 'meta.name' (must be a non-empty string).");
@@ -233,12 +227,19 @@ export async function validateEntityDocument(
         if (!schemaRef || !/^@0x[0-9a-f]{64}$/i.test(schemaRef)) {
             errors.push(`Invalid or missing entity 'meta.schema' (must be in @0x... format). Found: ${schemaRef}`);
             isValid = false;
-            schemaRef = null;
+            schemaRef = null; // Prevent using invalid ref later
         }
+        // Also check if the entity's schema ref matches the provided schema's pubKey
+        const schemaPubKey = schemaJson.pubKey as string | undefined;
+        if (schemaRef && schemaPubKey && schemaRef !== `@${schemaPubKey}`) {
+            errors.push(`Entity schema reference (${schemaRef}) does not match provided schema pubKey (@${schemaPubKey}).`);
+            isValid = false;
+        }
+
     }
 
     // --- Entity Data Validation ---
-    if (!entityDataMap) {
+    if (!entityData) {
         errors.push("Missing entity 'data' map.");
         isValid = false;
     } else if (!schemaRef) {
@@ -247,115 +248,112 @@ export async function validateEntityDocument(
             isValid = false;
         }
     } else {
-        const schemaDoc = await fetchSchema(schemaRef);
-        if (!schemaDoc) {
-            errors.push(`Schema document not found for reference: ${schemaRef}`);
-            isValid = false;
-        } else {
-            const schemaDataMap = schemaDoc.getMap('data');
+        // Schema is provided as JSON, no need to fetch
+        const schemaData = schemaJson.data as Record<string, unknown> | undefined;
 
-            // Get places from Schema Doc
-            const schemaPlacesValue = schemaDataMap?.get('places');
-            let schemaPlaces: Record<string, PlaceDefinitionStructure> | undefined;
-            if (schemaPlacesValue instanceof LoroMap) {
-                schemaPlaces = schemaPlacesValue.toJSON() as Record<string, PlaceDefinitionStructure>;
-            } else if (schemaPlacesValue !== undefined) {
-                errors.push(`Schema document ${schemaRef} 'data.places' is not a Map.`);
+        // Get places from Schema JSON
+        const schemaPlaces = schemaData?.places as Record<string, PlaceDefinitionStructure> | undefined;
+
+        // Get places from Entity JSON
+        const entityPlaces = entityData?.places as Record<string, LoroJsonValue> | undefined;
+
+        if (!schemaData || !schemaPlaces) {
+            if (isValid) {
+                errors.push(`Provided schema JSON is missing 'data.places' definition.`);
                 isValid = false;
             }
-
-            // Get places from Entity Doc
-            const entityPlacesValue = entityDataMap?.get('places');
-            let entityPlaces: Record<string, LoroJsonValue> | undefined;
-            if (entityPlacesValue instanceof LoroMap) {
-                entityPlaces = entityPlacesValue.toJSON() as Record<string, LoroJsonValue>;
-            } else if (entityPlacesValue !== undefined) {
-                errors.push(`Entity document 'data.places' is not a Map.`);
+        } else if (typeof entityPlaces !== 'object' || entityPlaces === null) {
+            if (isValid) {
+                errors.push("Invalid or missing entity 'data.places' (must be an object).");
                 isValid = false;
-            } // If undefined, checks below will handle it
+            }
+        }
 
+        // Proceed with validation only if both schema and entity places seem structurally correct so far
+        if (isValid && schemaPlaces && entityPlaces) {
+            const schemaPlaceKeys = Object.keys(schemaPlaces);
+            const entityPlaceKeys = Object.keys(entityPlaces);
 
-            if (!schemaPlaces) {
-                if (isValid) { // Avoid duplicate errors if already invalid
-                    errors.push(`Schema document ${schemaRef} is missing the 'data.places' definition or it's not a Map.`);
+            // 1. Check required fields
+            for (const schemaKey of schemaPlaceKeys) {
+                const schemaPlaceDef = schemaPlaces[schemaKey];
+                if (schemaPlaceDef.required && !(schemaKey in entityPlaces)) {
+                    errors.push(`Missing required place "${schemaKey}" in entity.`);
                     isValid = false;
                 }
             }
-            // Check if entityPlaces is an object (it could be null/undefined if get/toJSON failed or wasn't a map)
-            if (typeof entityPlaces !== 'object' || entityPlaces === null) {
-                if (isValid) {
-                    // Only add error if schemaPlaces *was* valid, otherwise the core issue is the schema
-                    if (schemaPlaces) {
-                        errors.push("Invalid or missing entity 'data.places' (must be an object/Map).");
-                        isValid = false;
-                    }
+
+            // 2. Check entity keys validity
+            for (const entityKey of entityPlaceKeys) {
+                if (!(entityKey in schemaPlaces)) {
+                    errors.push(`Entity place "${entityKey}" is not defined in schema.`);
+                    isValid = false;
                 }
             }
 
-            // Proceed with validation only if both schema and entity places seem structurally correct so far
-            if (isValid && schemaPlaces && entityPlaces) {
-                const schemaPlaceKeys = Object.keys(schemaPlaces);
-                const entityPlaceKeys = Object.keys(entityPlaces);
+            // 3. Validate entity place values
+            for (const entityKey in entityPlaces) {
+                if (!(entityKey in schemaPlaces)) continue; // Already caught by check 2
 
-                // 1. Check required fields
-                for (const schemaKey of schemaPlaceKeys) {
-                    const schemaPlaceDef = schemaPlaces[schemaKey];
-                    if (schemaPlaceDef.required && !(schemaKey in entityPlaces)) {
-                        errors.push(`Missing required place "${schemaKey}" in entity.`);
+                const entityValue = entityPlaces[entityKey];
+                const schemaPlaceDef = schemaPlaces[entityKey];
+                const schemaValidation = schemaPlaceDef?.validation as Record<string, unknown> | undefined;
+
+                if (!schemaValidation) {
+                    errors.push(`Schema place definition for "${entityKey}" is missing the 'validation' object.`);
+                    isValid = false;
+                    continue;
+                }
+
+                // Basic Type/Reference Validation
+                const expectedValueType = schemaValidation.value as string | undefined; // e.g., 'string', 'number', 'boolean'
+                const expectedSchemaRef = schemaValidation.schema as (string | null)[] | undefined; // e.g., ['prenu', null]
+
+                if (expectedSchemaRef) { // Check if the value should be a reference
+                    if (entityValue === null) {
+                        if (!expectedSchemaRef.includes(null)) {
+                            errors.push(`Place "${entityKey}": null reference is not allowed by schema.`);
+                            isValid = false;
+                        }
+                        // Null reference is allowed and provided, continue
+                    } else if (typeof entityValue !== 'string' || !/^@0x[0-9a-f]{64}$/i.test(entityValue)) {
+                        errors.push(`Place "${entityKey}" value "${entityValue}" is not a valid schema reference (@0x...).`);
+                        isValid = false;
+                    } else {
+                        // TODO: Need a way to check the *type* (schema name/pubkey) of the referenced entity.
+                        // This requires fetching the referenced entity's schema, which is beyond this function's scope.
+                        // For now, we only validate the format.
+                        // We could check if expectedSchemaRef contains the referenced entity's schema name if names were reliable.
+                    }
+                } else if (expectedValueType) { // Check if the value should be a primitive
+                    const actualValueType = typeof entityValue;
+                    if (expectedValueType === 'string' && actualValueType !== 'string') {
+                        errors.push(`Place "${entityKey}": Expected string, got ${actualValueType}.`);
+                        isValid = false;
+                    } else if (expectedValueType === 'number' && actualValueType !== 'number') {
+                        errors.push(`Place "${entityKey}": Expected number, got ${actualValueType}.`);
+                        isValid = false;
+                    } else if (expectedValueType === 'boolean' && actualValueType !== 'boolean') {
+                        errors.push(`Place "${entityKey}": Expected boolean, got ${actualValueType}.`);
+                        isValid = false;
+                    }
+                    // Add check for null if type is defined but value is null
+                    else if (entityValue === null) {
+                        errors.push(`Place "${entityKey}": Expected ${expectedValueType}, got null.`);
+                        isValid = false;
+                    }
+                } else if (entityValue !== null && typeof entityValue === 'object') {
+                    // Handle case where schema expects 'any' (no specific type/ref) but value is complex object/array
+                    // This might be okay depending on how 'any' is interpreted
+                    // For now, we allow it, but could add stricter checks if needed.
+                } else if (!schemaValidation) {
+                    // No validation rule defined in schema, allow any basic type (string, number, boolean, null)
+                    if (!['string', 'number', 'boolean'].includes(typeof entityValue) && entityValue !== null) {
+                        errors.push(`Place "${entityKey}": Invalid type ${typeof entityValue} for place with no specific validation.`);
                         isValid = false;
                     }
                 }
-
-                // 2. Check entity keys validity
-                for (const entityKey of entityPlaceKeys) {
-                    if (!(entityKey in schemaPlaces)) {
-                        errors.push(`Entity place "${entityKey}" is not defined in schema ${schemaRef}.`);
-                        isValid = false;
-                    }
-                }
-
-                // 3. Validate entity place values
-                for (const entityKey in entityPlaces) {
-                    if (!(entityKey in schemaPlaces)) continue;
-
-                    const entityValue = entityPlaces[entityKey];
-                    const schemaPlaceDef = schemaPlaces[entityKey];
-                    const schemaValidation = schemaPlaceDef?.validation;
-
-                    if (!schemaValidation) {
-                        errors.push(`Schema place definition for "${entityKey}" in ${schemaRef} is missing the 'validation' object.`);
-                        isValid = false;
-                        continue;
-                    }
-
-                    // Basic Type/Reference Validation
-                    const expectedValueType = schemaValidation.value;
-                    const expectedSchemaRef = schemaValidation.schema;
-
-                    if (expectedSchemaRef && Array.isArray(expectedSchemaRef)) {
-                        if (entityValue === null && expectedSchemaRef.includes(null)) {
-                            continue; // Allow null ref
-                        }
-                        if (typeof entityValue !== 'string' || !/^@0x[0-9a-f]{64}$/i.test(entityValue)) {
-                            errors.push(`Place "${entityKey}" value "${entityValue}" is not a valid schema reference (@0x...).`);
-                            isValid = false;
-                        } else {
-                            // TODO: Verify referenced entity's schema matches expectedSchemaRef
-                        }
-                    } else if (expectedValueType) {
-                        if (expectedValueType === 'string' && typeof entityValue !== 'string') {
-                            errors.push(`Place "${entityKey}": Expected string, got ${typeof entityValue}.`);
-                            isValid = false;
-                        } else if (expectedValueType === 'number' && typeof entityValue !== 'number') {
-                            errors.push(`Place "${entityKey}": Expected number, got ${typeof entityValue}.`);
-                            isValid = false;
-                        } else if (expectedValueType === 'boolean' && typeof entityValue !== 'boolean') {
-                            errors.push(`Place "${entityKey}": Expected boolean, got ${typeof entityValue}.`);
-                            isValid = false;
-                        }
-                    }
-                    // TODO: Complex rule validation (enum, min/max, regex)
-                }
+                // TODO: Complex rule validation (enum, min/max, regex) - requires parsing schemaValidation.value/rule object
             }
         }
     }
