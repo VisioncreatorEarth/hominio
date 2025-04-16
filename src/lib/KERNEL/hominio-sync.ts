@@ -1,9 +1,9 @@
 import { writable, get } from 'svelte/store';
-import { hominio } from '$lib/client/hominio';
+import { hominio } from '$lib/KERNEL/hominio-client';
 import { hominioDB, docChangeNotifier, type Docs } from '$lib/KERNEL/hominio-db';
 import { browser } from '$app/environment';
-import { authClient } from '$lib/client/auth-hominio'; // Assumed path for auth client
-import { canWrite, type CapabilityUser } from './hominio-capabilities'; // Import capabilities
+import { authClient } from '$lib/KERNEL/hominio-auth'; // Assumed path for auth client
+import { canWrite, type CapabilityUser } from './hominio-caps'; // Import capabilities
 import { getContentStorage } from '$lib/KERNEL/hominio-storage';
 
 // Helper type for API response structure

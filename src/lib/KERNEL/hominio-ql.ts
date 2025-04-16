@@ -1,10 +1,10 @@
 import { hominioDB, type Docs } from './hominio-db';
 import { validateEntityJsonAgainstSchema } from './hominio-validate'; // Re-add import
-import { canRead, canDelete, type CapabilityUser, canWrite } from './hominio-capabilities';
+import { canRead, canDelete, type CapabilityUser, canWrite } from './hominio-caps';
 // --- Add Svelte store imports for reactive queries ---
 import { readable, type Readable, get } from 'svelte/store';
 import { docChangeNotifier } from './hominio-db'; // Import the notifier
-import { authClient } from '$lib/client/auth-hominio'; // Import authClient
+import { authClient } from '$lib/KERNEL/hominio-auth'; // Import authClient
 // ---------------------------------------------------
 import { LoroMap } from 'loro-crdt'; // <-- ADDED LoroMap import
 
@@ -418,16 +418,28 @@ class HominioQLService {
         if (!user) {
             throw new Error("Authentication required for mutations.");
         }
+        let result: HqlMutationResult;
         switch (request.action) {
             case 'create':
-                return this._handleCreate(request, user);
+                result = await this._handleCreate(request, user);
+                break;
             case 'update':
-                return this._handleUpdate(request, user);
+                result = await this._handleUpdate(request, user);
+                break;
             case 'delete':
-                return this._handleDelete(request, user);
+                result = await this._handleDelete(request, user);
+                break;
             default:
                 throw new Error(`Invalid mutation action: ${request.action}`);
         }
+
+        // Notify AFTER the mutation logic completes, but yield first
+        setTimeout(() => {
+            docChangeNotifier.update(n => n + 1);
+            console.log(`[HQL Mutate] Notifier triggered after action: ${request.action} (delayed)`);
+        }, 0); // Delay of 0ms yields to the event loop
+
+        return result;
     }
 
     private async _handleCreate(request: HqlMutationRequest, user: CapabilityUser): Promise<Docs> {
@@ -574,18 +586,37 @@ class HominioQLService {
         // 7. Perform Update using generic updateDocument
         await hominioDB.updateDocument(pubKey, (loroDoc) => {
             const dataMap = loroDoc.getMap('data');
-            let placesMap = dataMap.get('places');
-            // Ensure placesMap is a LoroMap
-            if (!(placesMap instanceof LoroMap)) {
-                console.warn(`[HQL Update] Document ${pubKey} data.places was not a LoroMap. Recreating.`);
-                placesMap = dataMap.setContainer('places', new LoroMap());
+            const currentPlacesContainer = dataMap.get('places'); // Get the container/value
+            let currentPlacesData: Record<string, LoroJsonValue> = {};
+
+            // Check if it's a LoroMap and convert to plain object if so
+            if (currentPlacesContainer instanceof LoroMap) {
+                try {
+                    // Use toJSON() for a reliable plain JS representation
+                    currentPlacesData = currentPlacesContainer.toJSON() as Record<string, LoroJsonValue>;
+                } catch (e) {
+                    console.error(`[HQL Update mutationFn] Error converting current places LoroMap to JSON for ${pubKey}:`, e);
+                    // Leave currentPlacesData as empty {} on error
+                }
+            } else {
+                console.warn(`[HQL Update mutationFn] Current data.places for ${pubKey} is not a LoroMap or doesn't exist. Starting fresh.`);
+                // currentPlacesData remains empty {}
             }
-            // Apply the updates
-            for (const key in placesUpdate) {
-                if (Object.prototype.hasOwnProperty.call(placesUpdate, key)) {
-                    (placesMap as LoroMap).set(key, placesUpdate[key]);
+
+            // Merge updates into the plain JS object
+            const newPlacesData = { ...currentPlacesData, ...placesUpdate };
+
+            // Create a new LoroMap and populate it from the merged plain object
+            const newPlacesLoroMap = new LoroMap();
+            for (const key in newPlacesData) {
+                if (Object.prototype.hasOwnProperty.call(newPlacesData, key)) {
+                    newPlacesLoroMap.set(key, newPlacesData[key]);
                 }
             }
+
+            // Replace the entire 'places' container - This should trigger subscription
+            console.log(`[HQL Update mutationFn] Replacing places container for ${pubKey}`);
+            dataMap.setContainer('places', newPlacesLoroMap);
         });
 
         // 8. Return updated document metadata

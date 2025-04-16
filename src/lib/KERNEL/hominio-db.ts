@@ -4,8 +4,8 @@ import { LoroDoc, LoroMap } from 'loro-crdt';
 import { hashService } from './hash-service';
 import { docIdService } from './docid-service';
 import { getContentStorage, getDocsStorage, initStorage } from './hominio-storage';
-import { authClient } from '$lib/client/auth-hominio'; // Assumed path for auth client
-import { canRead, canWrite, type CapabilityUser, canDelete } from './hominio-capabilities'; // Import capabilities
+import { authClient } from '$lib/KERNEL/hominio-auth'; // Assumed path for auth client
+import { canRead, canWrite, type CapabilityUser, canDelete } from './hominio-caps'; // Import capabilities
 
 // --- Reactivity Notifier ---
 // Simple store that increments when any tracked document changes.
@@ -97,7 +97,7 @@ class HominioDB {
 
             this._setStatus({ loading: false });
             // Notify that DB is ready (optional)
-            docChangeNotifier.update(n => n + 1);
+            // docChangeNotifier.update(n => n + 1);
         } catch (err) {
             this._setError(`Initialization error: ${err instanceof Error ? err.message : String(err)}`);
             this._setStatus({ loading: false });
@@ -170,8 +170,8 @@ class HominioDB {
             const docsStorage = getDocsStorage();
             await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(newDocMeta)));
 
-            // Trigger reactivity *after* metadata is saved
-            docChangeNotifier.update(n => n + 1);
+            // Explicitly trigger reactivity *after* metadata is saved
+            // docChangeNotifier.update(n => n + 1);
 
             return pubKey;
         } catch (err) {
@@ -266,7 +266,7 @@ class HominioDB {
                 this._setError(`Background save failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
             });
         });
-        console.log(`[Loro Management] Subscribed to changes for ${pubKey}.`);
+        console.log(`[Loro Management] Attached Loro subscription for ${pubKey}.`); // <-- Log subscription attachment
         // ***************************
 
         // Store in the active documents map
@@ -326,7 +326,30 @@ class HominioDB {
         const loroDoc = await this.getOrCreateLoroDoc(pubKey, docMeta.snapshotCid);
 
         // Apply the mutation (this triggers the Loro change event)
+        console.log(`[updateDocument] About to apply mutationFn for ${pubKey}`); // <-- Log before mutation
         mutationFn(loroDoc);
+        console.log(`[updateDocument] Finished applying mutationFn for ${pubKey}`); // <-- Log after mutation
+
+        // *** Explicitly commit the transaction to trigger events ***
+        loroDoc.commit();
+        console.log(`[updateDocument] Committed LoroDoc changes for ${pubKey}`); // <-- Log commit
+
+        // *** Diagnostic: Check export after commit ***
+        try {
+            const updateCheck = loroDoc.export({ mode: 'update' });
+            console.log(`[updateDocument] Update export check AFTER commit for ${pubKey}, byteLength: ${updateCheck.byteLength}`);
+        } catch (e) {
+            console.error(`[updateDocument] Error during diagnostic export check for ${pubKey}:`, e);
+        }
+        // *** End Diagnostic ***
+
+        // *** Manually trigger persistence since subscribe isn't firing reliably ***
+        this._persistLoroUpdateAsync(pubKey, loroDoc).catch((err: unknown) => {
+            console.error(`[updateDocument] Manual persistence trigger failed for ${pubKey}:`, err);
+            // Handle error appropriately, maybe set an error state?
+            this._setError(`Background save failed after manual trigger: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        });
+        console.log(`[updateDocument] Manually triggered _persistLoroUpdateAsync for ${pubKey}`);
 
         // --- REMOVED PERSISTENCE & SVELTE STORE UPDATES --- 
         // The Loro change handler (`_handleLoroChange`) is now responsible for:
@@ -411,8 +434,8 @@ class HominioDB {
             const docsStorage = getDocsStorage();
             await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDoc))); // Use pubKey directly
 
-            // Trigger general reactivity notifier
-            docChangeNotifier.update(n => n + 1);
+            // Explicitly trigger reactivity *after* metadata is saved
+            // docChangeNotifier.update(n => n + 1);
 
             return snapshotCid;
         } catch (err) {
@@ -501,8 +524,8 @@ class HominioDB {
             const docsStorage = getDocsStorage();
             await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDoc)));
 
-            // Trigger general reactivity notifier
-            docChangeNotifier.update(n => n + 1);
+            // Explicitly trigger reactivity *after* metadata is saved
+            // docChangeNotifier.update(n => n + 1);
 
         } catch (err) {
             console.error(`Error clearing local changes for ${pubKey}:`, err);
@@ -581,8 +604,8 @@ class HominioDB {
                 const docsStorage = getDocsStorage();
                 await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDoc)));
 
-                // Trigger general reactivity notifier
-                docChangeNotifier.update(n => n + 1);
+                // Explicitly trigger reactivity *after* metadata is saved
+                // docChangeNotifier.update(n => n + 1);
                 console.log(`[updateDocStateAfterSync] Saved updated state for ${pubKey}`);
             }
 
@@ -666,8 +689,8 @@ class HominioDB {
             const docsStorage = getDocsStorage();
             await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(newDoc)));
 
-            // Trigger general reactivity notifier
-            docChangeNotifier.update(n => n + 1);
+            // Explicitly trigger reactivity *after* metadata is saved
+            // docChangeNotifier.update(n => n + 1);
 
             return { pubKey, snapshotCid };
         } catch (err) {
@@ -778,8 +801,8 @@ class HominioDB {
             const docsStorage = getDocsStorage();
             await docsStorage.delete(pubKey);
 
-            // Trigger general reactivity notifier
-            docChangeNotifier.update(n => n + 1);
+            // Explicitly trigger reactivity *after* metadata is saved
+            // docChangeNotifier.update(n => n + 1);
 
             console.log(`[deleteDocument] Deleted document ${pubKey} from storage.`);
             return true;
@@ -990,7 +1013,7 @@ class HominioDB {
             activeLoroDocuments.set(pubKey, loroDoc);
 
             // Explicitly trigger reactivity *after* metadata is saved
-            docChangeNotifier.update(n => n + 1);
+            // docChangeNotifier.update(n => n + 1);
 
             console.log(`[createEntity] Created entity ${pubKey} with schema @${schemaPubKey}`);
             return newDoc;
@@ -1012,58 +1035,62 @@ class HominioDB {
      * @throws Error if persistence fails or document not found.
      */
     public async persistLoroUpdate(pubKey: string, updateData: Uint8Array): Promise<string> {
+        console.log(`[persistLoroUpdate] Starting for ${pubKey}, update size: ${updateData.byteLength}`); // <-- Log: Function entry
         try {
             // 1. Calculate CID
             const updateCid = await hashService.hashSnapshot(updateData); // Use same hash function
+            console.log(`[persistLoroUpdate] Calculated update CID: ${updateCid}`); // <-- Log: Calculated CID
 
-            // 2. Store Update Content (check for existence first)
+            // 2. Store Update Content
             const contentStorage = getContentStorage();
-            const existingUpdate = await contentStorage.get(updateCid);
-            if (!existingUpdate) {
-                await contentStorage.put(updateCid, updateData, {
-                    type: 'update',
-                    documentPubKey: pubKey,
-                    created: new Date().toISOString()
-                });
-                console.log(`[persistLoroUpdate] Stored new update content ${updateCid} for doc ${pubKey}`);
-            } else {
-                console.log(`[persistLoroUpdate] Update content ${updateCid} already exists.`);
-            }
+            // Removed existence check for simplicity, assume put handles it or overwrites are cheap
+            await contentStorage.put(updateCid, updateData, {
+                type: 'update',
+                documentPubKey: pubKey,
+                created: new Date().toISOString()
+            });
+            console.log(`[persistLoroUpdate] Stored update content ${updateCid} for doc ${pubKey}`);
 
-            // 3. Fetch Current Document Metadata (needed for atomic update simulation if needed)
-            // We fetch it here to ensure we have the latest state before updating.
-            // An alternative for true atomic DBs would be a single UPDATE command.
+            // 3. Fetch Current Document Metadata
+            console.log(`[persistLoroUpdate] Fetching current metadata for ${pubKey}...`); // <-- Log: Before metadata fetch
             const currentDoc = await this.getDocument(pubKey);
             if (!currentDoc) {
                 throw new Error(`Document ${pubKey} not found during update persistence.`);
             }
+            console.log(`[persistLoroUpdate] Fetched metadata.`); // <-- Log: After metadata fetch
 
-            // 4. Check if update CID is already present
-            if (currentDoc.updateCids?.includes(updateCid)) {
-                console.log(`[persistLoroUpdate] Update CID ${updateCid} already present in doc ${pubKey}. Skipping metadata update.`);
-                return updateCid; // Return existing CID, no metadata change needed
+            // 4. Prepare updated metadata with the new update CID in localState
+            const updatedDocData: Docs = { ...currentDoc }; // Shallow copy
+
+            // Ensure localState and updateCids array exist
+            if (!updatedDocData.localState) {
+                updatedDocData.localState = { updateCids: [] };
+            }
+            // Explicitly check and initialize updateCids if localState exists but updateCids doesn't
+            if (!updatedDocData.localState.updateCids) {
+                updatedDocData.localState.updateCids = [];
             }
 
-            // 5. Update Document Metadata
-            const updatedCids = [...(currentDoc.updateCids || []), updateCid];
-            const updatedDocData: Docs = {
-                ...currentDoc,
-                updateCids: updatedCids,
-                updatedAt: new Date().toISOString()
-            };
+            // Append CID if not already present in localState
+            // Now we know updatedDocData.localState.updateCids is an array
+            if (!updatedDocData.localState.updateCids.includes(updateCid)) {
+                updatedDocData.localState.updateCids.push(updateCid);
+                updatedDocData.updatedAt = new Date().toISOString(); // Update timestamp only if CID added
 
-            // Overwrite the existing metadata entry
-            const docsStorage = getDocsStorage();
-            await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDocData)));
+                // 5. Save Updated Document Metadata
+                const docsStorage = getDocsStorage();
+                await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDocData)));
+                console.log(`[persistLoroUpdate] Appended update CID ${updateCid} to localState for doc ${pubKey}`);
 
-            // Trigger general reactivity notifier
-            docChangeNotifier.update(n => n + 1);
+            } else {
+                console.log(`[persistLoroUpdate] Update CID ${updateCid} already present in localState for doc ${pubKey}. Skipping metadata update.`);
+            }
 
-            console.log(`[persistLoroUpdate] Appended update CID ${updateCid} to doc ${pubKey}`);
-            return updateCid;
+            console.log(`[persistLoroUpdate] Completed successfully for ${pubKey}.`); // <-- Log: Success
+            return updateCid; // Return the CID regardless of whether metadata was updated
 
         } catch (err) {
-            console.error(`[persistLoroUpdate] Failed for doc ${pubKey}:`, err);
+            console.error(`[persistLoroUpdate] Failed for doc ${pubKey}:`, err); // <-- Log: Error
             this._setError(`Failed to persist update: ${err instanceof Error ? err.message : 'Unknown error'}`);
             throw err; // Re-throw error
         }
@@ -1072,11 +1099,14 @@ class HominioDB {
     // Helper for async persistence triggered by Loro event
     private async _persistLoroUpdateAsync(pubKey: string, loroDoc: LoroDoc): Promise<void> {
         // Removed redundant try...catch, caller handles errors
+        console.log(`[Loro Event] Callback triggered for ${pubKey}. Exporting update...`); // <-- Log: Callback triggered
         const updateData = loroDoc.export({ mode: 'update' });
+        console.log(`[Loro Event] Exported update for ${pubKey}, byteLength: ${updateData.byteLength}`); // <-- Log: Export result
+
         if (updateData.byteLength > 0) {
             // Call the existing persistence logic (which also updates metadata & triggers notifier)
             await this.persistLoroUpdate(pubKey, updateData);
-            console.log(`[Loro Event] Background persistence successful for ${pubKey}.`);
+            console.log(`[Loro Event] Background persistence call completed for ${pubKey}.`);
         } else {
             console.log(`[Loro Event] No effective changes detected by Loro for ${pubKey}. Skipping persistence.`);
         }
@@ -1170,6 +1200,9 @@ class HominioDB {
             // 3. Save merged data to storage
             const docsStorage = getDocsStorage();
             await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(mergedDoc)));
+
+            // Explicitly trigger reactivity *after* metadata is saved
+            // docChangeNotifier.update(n => n + 1);
 
             console.log(`[saveSyncedDocument] Successfully saved and notified for doc ${pubKey}`);
 

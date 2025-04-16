@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { authClient } from '$lib/client/auth-hominio';
+	import { authClient } from '$lib/KERNEL/hominio-auth';
 	import { goto } from '$app/navigation';
 	import type { PageData } from './$types';
 	import VibeRenderer from '$lib/components/VibeRenderer.svelte';

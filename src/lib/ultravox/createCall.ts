@@ -7,7 +7,7 @@ import { browser } from '$app/environment';
 import type { JoinUrlResponse, CallConfig } from './types';
 import { getActiveVibe } from './stageManager';
 import { setupToolRegistrationListeners } from './loaders/toolLoader';
-import { hominio } from '$lib/client/hominio';
+import { hominio } from '$lib/KERNEL/hominio-client';
 
 /**
  * Creates a call using the API and returns a join URL

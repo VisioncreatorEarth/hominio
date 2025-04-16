@@ -6,7 +6,7 @@ import { eq, inArray, ne, and, sql, count, or } from 'drizzle-orm';
 import { hashService } from '$lib/KERNEL/hash-service';
 import { loroService } from '$lib/KERNEL/loro-service';
 // Import capability functions and types
-import { canRead, canWrite, canDelete, type CapabilityUser } from '$lib/KERNEL/hominio-capabilities';
+import { canRead, canWrite, canDelete, type CapabilityUser } from '$lib/KERNEL/hominio-caps';
 // Import the constant directly from its source
 import { GENESIS_HOMINIO } from '$db/constants';
 

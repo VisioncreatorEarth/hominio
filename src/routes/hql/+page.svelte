@@ -91,13 +91,18 @@
 		console.log('[Action] Creating new Prenu...');
 		try {
 			const randomName = samplePrenuNames[Math.floor(Math.random() * samplePrenuNames.length)];
-			const prenuSchemaRef =
-				'@' + ($schemasReadable?.find((s) => (s.meta as any)?.name === 'prenu')?.pubKey ?? 'prenu'); // Find prenu schema pubkey or fallback to name
+			const prenuSchema = $schemasReadable?.find((s) => (s.meta as any)?.name === 'prenu');
+			const prenuSchemaRef = '@' + (prenuSchema?.pubKey ?? 'prenu'); // Find prenu schema pubkey or fallback to name
+
+			if (!prenuSchema) {
+				console.error('Prenu schema not found!');
+				return;
+			}
 
 			const mutation: HqlMutationRequest = {
 				operation: 'mutate',
 				action: 'create',
-				schema: prenuSchemaRef, // Use the found schema ref or name
+				schema: prenuSchemaRef, // Use the found schema ref
 				places: {
 					x1: randomName
 				}
@@ -111,6 +116,36 @@
 			// TODO: Show error to user
 		} finally {
 			isCreatingPrenu = false;
+		}
+	}
+
+	// --- Prenu Name Update ---
+	let currentlyUpdatingPrenu = $state<string | null>(null);
+
+	async function updatePrenuName(entityPubKey: string) {
+		if (currentlyUpdatingPrenu) return; // Prevent concurrent updates
+		currentlyUpdatingPrenu = entityPubKey;
+		console.log(`[Action] Updating name for Prenu ${entityPubKey}...`);
+		try {
+			const randomName = samplePrenuNames[Math.floor(Math.random() * samplePrenuNames.length)];
+
+			const mutation: HqlMutationRequest = {
+				operation: 'mutate',
+				action: 'update',
+				pubKey: entityPubKey, // Use pubKey directly for update actions
+				places: {
+					x1: randomName // Update the name field
+				}
+			};
+
+			const result = await hominioQLService.process(mutation);
+			console.log(`[Action] Prenu ${entityPubKey} name update result:`, result);
+			// List should update automatically due to reactive query
+		} catch (err) {
+			console.error(`[Action] Error updating Prenu ${entityPubKey} name:`, err);
+			// TODO: Show error to user
+		} finally {
+			currentlyUpdatingPrenu = null;
 		}
 	}
 
@@ -276,22 +311,36 @@
 							{#each $entitiesReadable as entity (entity.pubKey)}
 								{@const entityMeta = entity.meta as Record<string, any> | undefined}
 								{@const entityData = entity.data as Record<string, any> | undefined}
-								<li class="py-0">
-									<!-- Make list items clickable -->
-									<button
-										class="block w-full cursor-pointer rounded px-3 py-3 text-left transition-colors hover:bg-gray-100 {selectedEntityPubKey ===
-										entity.pubKey
-											? 'bg-blue-50'
-											: ''}"
-										on:click={() => (selectedEntityPubKey = entity.pubKey)}
-									>
-										<p class="font-medium text-gray-800">
-											{entityData?.places?.x1 ?? entityMeta?.name ?? 'Unnamed Entity'}
-										</p>
-										<p class="text-xs text-gray-500">
-											PubKey: <code class="text-xs">{entity.pubKey}</code>
-										</p>
-									</button>
+								<li class="py-3">
+									<div class="flex items-center justify-between">
+										<!-- Entity Info & Selection Button -->
+										<button
+											class="flex-grow cursor-pointer rounded-l px-3 py-1 text-left transition-colors hover:bg-gray-100 {selectedEntityPubKey ===
+											entity.pubKey
+												? 'bg-blue-50'
+												: ''}"
+											on:click={() => (selectedEntityPubKey = entity.pubKey)}
+										>
+											<p class="font-medium text-gray-800">
+												{entityData?.places?.x1 ?? entityMeta?.name ?? 'Unnamed Entity'}
+											</p>
+											<p class="text-xs text-gray-500">
+												PubKey: <code class="text-xs">{entity.pubKey}</code>
+											</p>
+										</button>
+
+										<!-- Edit Button (Only for Prenu Schema) -->
+										{#if selectedMetaData?.name === 'prenu'}
+											{@const isUpdatingThis = currentlyUpdatingPrenu === entity.pubKey}
+											<button
+												class="ml-2 flex-shrink-0 rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600 shadow-sm transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+												on:click={() => updatePrenuName(entity.pubKey)}
+												disabled={currentlyUpdatingPrenu !== null}
+											>
+												{isUpdatingThis ? '...' : 'Edit Name'}
+											</button>
+										{/if}
+									</div>
 								</li>
 							{/each}
 						</ul>

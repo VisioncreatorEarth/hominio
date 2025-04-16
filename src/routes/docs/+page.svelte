@@ -2,8 +2,8 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { hominioDB, type Docs } from '$lib/KERNEL/hominio-db';
 	import { hominioSync } from '$lib/KERNEL/hominio-sync';
-	import { authClient } from '$lib/client/auth-hominio'; // Import auth client
-	import { canDelete, type CapabilityUser } from '$lib/KERNEL/hominio-capabilities'; // Import capability check
+	import { authClient } from '$lib/KERNEL/hominio-auth'; // Import auth client
+	import { canDelete, type CapabilityUser } from '$lib/KERNEL/hominio-caps'; // Import capability check
 
 	// Subscribe to hominioDB stores
 	const docs = hominioDB.docs;

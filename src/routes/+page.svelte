@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { authClient } from '$lib/client/auth-hominio';
+	import { authClient } from '$lib/KERNEL/hominio-auth';
 	import { goto } from '$app/navigation';
 
 	// State variables
