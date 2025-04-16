@@ -1,6 +1,11 @@
 import { hominioDB, type Docs } from './hominio-db';
 import { validateEntityJsonAgainstSchema } from './hominio-validate';
 import { canRead, canDelete, type CapabilityUser, canWrite } from './hominio-capabilities';
+// --- Add Svelte store imports for reactive queries ---
+import { readable, type Readable, get } from 'svelte/store';
+import { docChangeNotifier } from './hominio-db'; // Import the notifier
+import { authClient } from '$lib/client/auth-hominio'; // Import authClient
+// ---------------------------------------------------
 
 type LoroJsonValue = string | number | boolean | null | LoroJsonObject | LoroJsonArray;
 interface LoroJsonObject { [key: string]: LoroJsonValue }
@@ -68,11 +73,14 @@ class HominioQLService {
     }
 
     /**
-     * Main entry point to process an HQL request.
+     * Main entry point to process an HQL request (non-reactive).
      */
-    async process(request: HqlRequest, user: CapabilityUser | null): Promise<HqlResult> {
+    async process(request: HqlRequest): Promise<HqlResult> {
         this.schemaJsonCache.clear(); // Clear JSON cache
         try {
+            // Fetch user internally for this specific operation
+            const user = get(authClient.useSession()).data?.user as CapabilityUser | null;
+
             if (request.operation === 'query') {
                 return await this._handleQuery(request, user);
             } else if (request.operation === 'mutate') {
@@ -154,19 +162,16 @@ class HominioQLService {
                     matches = false;
                 } else {
                     const meta = jsonData?.meta as Record<string, unknown> | undefined;
-                    const schemaRef = meta?.schema as string | null | undefined; // Schema can be null for gismu
+                    const schemaRef = meta?.schema as string | null | undefined;
 
-                    // Handle potential name vs @pubkey (crude implementation)
+                    // Handle potential name vs @pubkey
                     const schemaFilterPubKey = fromSchemaFilter.startsWith('@') ? fromSchemaFilter.substring(1) : null;
                     const schemaFilterName = !fromSchemaFilter.startsWith('@') ? fromSchemaFilter : null;
 
                     if (schemaFilterPubKey) {
-                        // Compare based on PubKey
-                        const entitySchemaPubKey = typeof schemaRef === 'string' && schemaRef.startsWith('@') ? schemaRef.substring(1) : schemaRef;
-                        matches = entitySchemaPubKey === schemaFilterPubKey;
-                    } else if (schemaFilterName === 'gismu') {
-                        // Special case for gismu (null schema)
-                        matches = schemaRef === null;
+                        // Compare based on PubKey reference (e.g., meta.schema = "@0x123")
+                        const entitySchemaPubKeyRef = typeof schemaRef === 'string' && schemaRef.startsWith('@') ? schemaRef.substring(1) : null;
+                        matches = entitySchemaPubKeyRef === schemaFilterPubKey;
                     } else if (schemaFilterName) {
                         // Filtering by schema *name* - requires fetching schema doc itself to compare names (NOT IMPLEMENTED - ASSUME MISMATCH)
                         console.warn(`[HQL ApplyFilter] Filtering by schema name ('${schemaFilterName}') is not robustly implemented. Assuming mismatch for doc ${docMeta.pubKey}.`);
@@ -541,7 +546,63 @@ class HominioQLService {
         console.log(`[HQL Delete] Successfully deleted document ${pubKey}`);
         return { success: true };
     }
-}
+
+    // --- Reactive Query Handling ---
+    processReactive(
+        request: HqlQueryRequest
+    ): Readable<HqlQueryResult | null | undefined> {
+        // Define the actual query execution function
+        const executeQuery = async (): Promise<HqlQueryResult | null> => {
+            console.log(`[HQL Requery] Running query:`, request);
+            try {
+                // Fetch user internally EACH time query runs for capability checks
+                const user = get(authClient.useSession()).data?.user as CapabilityUser | null;
+                const result = await this._handleQuery(request, user); // Pass user to internal handler
+                return result;
+            } catch (error) {
+                console.error('[HQL Requery] Query failed:', error);
+                return null; // Return null on error
+            }
+        };
+
+        // Create the readable store
+        const store = readable<HqlQueryResult | null | undefined>(undefined, (set) => { // Start as undefined
+            console.log(`[HQL Reactive Store] Subscribed:`, request);
+            let isMounted = true;
+            let initialLoadComplete = false;
+
+            // Initial fetch
+            executeQuery().then(initialResult => {
+                if (isMounted) {
+                    set(initialResult); // Set initial result (or null if error)
+                    initialLoadComplete = true;
+                    console.log(`[HQL Reactive Store] Initial load complete.`);
+                }
+            });
+
+            // Subscribe to changes - *after* initial load starts
+            const unsubscribeNotifier = docChangeNotifier.subscribe(async () => {
+                // Avoid requery if initial load hasn't finished or component unmounted
+                if (!isMounted || !initialLoadComplete) return;
+
+                console.log(`[HQL Reactive Store] Notifier triggered, re-querying:`, request);
+                const newResult = await executeQuery();
+                if (isMounted) { // Check again after await
+                    set(newResult); // Set new result (or null if error)
+                }
+            });
+
+            // Cleanup
+            return () => {
+                console.log(`[HQL Reactive Store] Unsubscribed:`, request);
+                isMounted = false;
+                unsubscribeNotifier();
+            };
+        });
+
+        return store; // Return the readable store SYNCHRONOUSLY
+    }
+} // End of HominioQLService class
 
 // Export singleton instance
 export const hominioQLService = new HominioQLService();

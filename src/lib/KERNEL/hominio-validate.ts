@@ -64,11 +64,13 @@ export function validateSchemaJsonStructure(schemaJson: Record<string, unknown>)
         }
 
         if (name === 'gismu') {
-            if (schemaRef !== null) {
-                errors.push("Invalid 'meta.schema' for gismu (must be null).");
+            // Gismu schema must reference itself
+            if (schemaRef !== GISMU_SCHEMA_REF) {
+                errors.push(`Invalid 'meta.schema' for gismu (must be "${GISMU_SCHEMA_REF}"). Found: ${schemaRef}`);
                 isValid = false;
             }
         } else {
+            // Other schemas must reference Gismu
             if (typeof schemaRef !== 'string' || schemaRef !== GISMU_SCHEMA_REF) {
                 errors.push(`Invalid or missing 'meta.schema' (must be "${GISMU_SCHEMA_REF}"). Found: ${schemaRef}`);
                 isValid = false;

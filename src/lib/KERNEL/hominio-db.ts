@@ -7,6 +7,12 @@ import { getContentStorage, getDocsStorage, initStorage } from './hominio-storag
 import { authClient } from '$lib/client/auth-hominio'; // Assumed path for auth client
 import { canRead, canWrite, type CapabilityUser, canDelete } from './hominio-capabilities'; // Import capabilities
 
+// --- Reactivity Notifier ---
+// Simple store that increments when any tracked document changes.
+// Consumed by services like HQL to trigger re-queries.
+export const docChangeNotifier = writable(0);
+// --------------------------
+
 // Constants
 const CONTENT_TYPE_SNAPSHOT = 'snapshot';
 
@@ -166,13 +172,13 @@ class HominioDB {
      * @param options Document creation options
      * @returns PubKey of the created document
      */
-    async createDocument(options: { name?: string, description?: string } = {}): Promise<string> {
+    async createDocument(options: { name?: string; description?: string } = {}): Promise<string> {
         this.setStatus({ creatingDoc: true });
 
         try {
             const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
             if (!currentUser) {
-                throw new Error("Permission denied: User must be logged in to create documents.");
+                throw new Error('Permission denied: User must be logged in to create documents.');
             }
 
             const pubKey = await docIdService.generateDocId();
@@ -180,29 +186,29 @@ class HominioDB {
             const owner = currentUser.id;
 
             const now = new Date().toISOString();
-            const newDoc: Docs = {
+            const newDocMeta: Docs = {
                 pubKey,
                 owner, // Set owner to current user
                 updatedAt: now
             };
 
-            // Create a new Loro document
+            // Get or create the Loro document instance (this also sets up the subscription)
             const loroDoc = await this.getOrCreateLoroDoc(pubKey);
 
-            // Set initial metadata if provided
-            const meta = loroDoc.getMap("meta");
+            // Set initial metadata if provided (this triggers the Loro change event)
+            const meta = loroDoc.getMap('meta');
             if (options.name) {
-                meta.set("name", options.name);
+                meta.set('name', options.name);
             }
             if (options.description) {
-                meta.set("description", options.description);
+                meta.set('description', options.description);
             }
 
-            // Create initial snapshot
+            // Initial Snapshot Persistence (Still needed for new docs)
+            // Note: The Loro event handler might trigger *another* persistence for the meta updates,
+            //       this might need refinement later to only persist once or handle idempotency.
             const snapshot = loroDoc.export({ mode: 'snapshot' });
             const snapshotCid = await hashService.hashSnapshot(snapshot);
-
-            // Save snapshot to content storage
             const contentStorage = getContentStorage();
             await contentStorage.put(snapshotCid, snapshot, {
                 type: 'snapshot',
@@ -210,18 +216,30 @@ class HominioDB {
                 created: now
             });
 
-            // Update document metadata: Place initial snapshot in localState
-            newDoc.localState = { snapshotCid: snapshotCid };
+            // Update document metadata with snapshot info
+            newDocMeta.localState = { snapshotCid: snapshotCid }; // Mark for sync
+            newDocMeta.snapshotCid = snapshotCid; // Set initial snapshot CID
 
-            // Save document metadata to docs storage
+            // Save initial document metadata to docs storage
             const docsStorage = getDocsStorage();
-            await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(newDoc)));
+            await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(newDocMeta)));
 
-            // Update store
-            docs.update(docs => [...docs, newDoc]);
+            // --- REMOVED SVELTE STORE UPDATES --- 
+            // The Loro change handler (`_handleLoroChange`) will now update 
+            // the stores based on the Loro event triggered by meta.set().
+            // It will also handle selecting the new doc if needed.
+            // docs.update(docs => [...docs, newDocMeta]);
+            // await this.selectDoc(newDocMeta); // Selection handled by Loro event now?
+            // ------------------------------------ 
 
-            // Select the new document
-            await this.selectDoc(newDoc);
+            // We might still want to explicitly select the doc after creation?
+            // Let's keep this for now, but be aware the event handler also selects.
+            const finalDocMeta = await this.getDocument(pubKey); // Get potentially updated meta
+            if (finalDocMeta) {
+                await this.selectDoc(finalDocMeta);
+            } else {
+                console.warn(`[createDocument] Failed to get final metadata for ${pubKey} after creation.`);
+            }
 
             return pubKey;
         } catch (err) {
@@ -273,8 +291,10 @@ class HominioDB {
             return activeLoroDocuments.get(pubKey)!;
         }
 
+        console.log(`[Loro Management] Creating or loading LoroDoc for ${pubKey}...`);
         // Create a new LoroDoc instance
         const loroDoc = new LoroDoc();
+        let loadedFromStorage = false;
 
         // Try to load binary data if we have a snapshot CID
         if (snapshotCid) {
@@ -285,12 +305,36 @@ class HominioDB {
                 try {
                     // Initialize with stored data
                     loroDoc.import(binaryData);
-                    console.log(`Loaded Loro doc for ${pubKey} from storage`);
+                    console.log(`[Loro Management] Loaded Loro doc ${pubKey} from snapshot ${snapshotCid}`);
+                    loadedFromStorage = true;
                 } catch (err) {
-                    console.error(`Error importing binary data for doc ${pubKey}:`, err);
+                    console.error(`[Loro Management] Error importing binary data for doc ${pubKey}:`, err);
+                    // Proceed with an empty doc if import fails?
                 }
             }
         }
+
+        if (!loadedFromStorage) {
+            console.log(`[Loro Management] Initializing empty LoroDoc for ${pubKey}.`);
+        }
+
+        // *** Add Loro Subscription ***
+        // Subscribe to changes and trigger our handler
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        loroDoc.subscribe((_event) => {
+            // console.log(`[Loro Subscribe Callback] Event for ${pubKey}`); // Simple log to use _event context implicitly via pubKey
+            // TODO: Investigate event properties to see if we can reliably ignore local-only echoes
+            // if (_event.local) return; 
+
+            // Use a non-blocking way to handle the change to avoid blocking Loro
+            setTimeout(() => {
+                this._handleLoroChange(pubKey, loroDoc).catch(err => {
+                    console.error(`[Loro Subscribe Callback] Error handling change for ${pubKey}:`, err);
+                });
+            }, 0);
+        });
+        console.log(`[Loro Management] Subscribed to changes for ${pubKey}.`);
+        // ***************************
 
         // Store in the active documents map
         activeLoroDocuments.set(pubKey, loroDoc);
@@ -446,71 +490,44 @@ class HominioDB {
      * @returns CID of the update
      */
     async updateDocument(pubKey: string, mutationFn: (doc: LoroDoc) => void): Promise<string> {
-        try {
-            const allDocs = get(docs);
-            const docIndex = allDocs.findIndex(d => d.pubKey === pubKey);
-
-            if (docIndex === -1) {
-                throw new Error(`Document ${pubKey} not found`);
-            }
-            const doc = allDocs[docIndex];
-
-            // *** Capability Check ***
-            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
-            if (!canWrite(currentUser, doc)) {
-                throw new Error('Permission denied: Cannot write to this document');
-            }
-            // *** End Capability Check ***
-
-            // Get the Loro document
-            const loroDoc = await this.getOrCreateLoroDoc(pubKey, doc.snapshotCid);
-
-            // Apply the mutation
-            mutationFn(loroDoc);
-
-            // Create an update - LoroDoc.export requires { mode: 'update' } or { mode: 'snapshot' }
-            // There is no 'exportUpdate' method.
-            const updateData: Uint8Array = loroDoc.export({ mode: 'update' });
-            const updateCid: string = await hashService.hashSnapshot(updateData);
-
-            // Save update to content storage
-            const contentStorage = getContentStorage();
-            await contentStorage.put(updateCid, updateData, {
-                type: 'update',
-                documentPubKey: pubKey,
-                created: new Date().toISOString()
-            });
-
-            // Update the document metadata
-            const updatedDoc = { ...doc };
-            updatedDoc.updatedAt = new Date().toISOString();
-
-            // Safely update localState
-            updatedDoc.localState = updatedDoc.localState || {};
-            updatedDoc.localState.updateCids = updatedDoc.localState.updateCids || [];
-            updatedDoc.localState.updateCids.push(updateCid);
-
-            // Save updated document metadata
-            const docsStorage = getDocsStorage();
-            await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDoc)));
-
-            // Update the store
-            allDocs[docIndex] = updatedDoc;
-            docs.set([...allDocs]);
-
-            // If this is the selected document, update content store AND selected doc store
-            const selectedDocInfo = get(selectedDoc);
-            if (selectedDocInfo && selectedDocInfo.pubKey === pubKey) {
-                selectedDoc.set({ ...updatedDoc }); // Force reactivity update
-                await this.loadDocumentContent(updatedDoc);
-            }
-
-            return updateCid;
-        } catch (err) {
-            console.error('Error updating document:', err);
-            this.setError(`Failed to update document: ${err instanceof Error ? err.message : String(err)}`);
-            throw err;
+        // Get current metadata for capability check BEFORE getting LoroDoc
+        const docMeta = await this.getDocument(pubKey);
+        if (!docMeta) {
+            throw new Error(`Document ${pubKey} not found for update.`);
         }
+
+        // *** Capability Check ***
+        const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
+        if (!canWrite(currentUser, docMeta)) {
+            throw new Error('Permission denied: Cannot write to this document');
+        }
+        // *** End Capability Check ***
+
+        // Get the Loro document instance (this ensures it's active and subscribed)
+        const loroDoc = await this.getOrCreateLoroDoc(pubKey, docMeta.snapshotCid);
+
+        // Apply the mutation (this triggers the Loro change event)
+        mutationFn(loroDoc);
+
+        // --- REMOVED PERSISTENCE & SVELTE STORE UPDATES --- 
+        // The Loro change handler (`_handleLoroChange`) is now responsible for:
+        // 1. Exporting the update from the modified `loroDoc`.
+        // 2. Persisting the update via `persistLoroUpdate`.
+        // 3. Updating all relevant Svelte stores (`docs`, `selectedDoc`, `docContent`).
+
+        // We might need the update CID here for some reason? 
+        // If so, we'd have to export here, hash, but NOT persist/update stores.
+        // For now, assume the CID isn't immediately needed by the caller.
+        // const updateData: Uint8Array = loroDoc.export({ mode: 'update' });
+        // const updateCid: string = await hashService.hashSnapshot(updateData);
+        // return updateCid; // <--- Return CID if needed by caller
+        // ---------------------------------------------------- 
+
+        // Return something? Maybe pubKey or void?
+        // Returning pubKey seems reasonable.
+        return pubKey;
+
+        // Note: Error handling is implicitly handled by the caller or the top-level try/catch
     }
 
     /**
@@ -519,37 +536,39 @@ class HominioDB {
      * @returns True if successful
      */
     async addRandomPropertyToDocument(pubKey?: string): Promise<boolean> {
+        const targetPubKey = pubKey || get(selectedDoc)?.pubKey;
+        if (!targetPubKey) {
+            this.setError('No document selected');
+            return false;
+        }
+
+        // Capability check happens inside updateDocument call below
         try {
-            const targetPubKey = pubKey || get(selectedDoc)?.pubKey;
-            if (!targetPubKey) {
-                this.setError('No document selected');
-                return false;
-            }
-
-            // Capability check happens inside updateDocument call below
-
             await this.updateDocument(targetPubKey, (loroDoc) => {
                 // Generate random property key and value
                 const randomKey = `prop_${Math.floor(Math.random() * 10000)}`;
                 const randomValue = `value_${Math.floor(Math.random() * 10000)}`;
 
                 // Add to Loro document using the data map
-                const dataMap = loroDoc.getMap("data");
+                const dataMap = loroDoc.getMap('data');
                 dataMap.set(randomKey, randomValue);
 
-                console.log(`Added random property to document: ${randomKey}=${randomValue}`);
+                console.log(`[addRandomProperty] Added to LoroDoc: ${randomKey}=${randomValue}`);
             });
 
-            // Ensure we refresh the selected document content after adding the property
-            const currentSelectedDoc = get(selectedDoc);
-            if (currentSelectedDoc && currentSelectedDoc.pubKey === targetPubKey) {
-                await this.loadDocumentContent(currentSelectedDoc);
-            }
+            // --- REMOVED REFRESH LOGIC ---
+            // The Loro change handler will automatically update the content store 
+            // if the currently selected document was the one modified.
+            // const currentSelectedDoc = get(selectedDoc);
+            // if (currentSelectedDoc && currentSelectedDoc.pubKey === targetPubKey) {
+            // 	await this.loadDocumentContent(currentSelectedDoc);
+            // }
+            // ----------------------------
 
             return true;
         } catch (err) {
-            console.error('Error adding random property to document:', err);
-            this.setError(err instanceof Error ? err.message : 'Failed to update document');
+            console.error('[addRandomProperty] Error:', err);
+            this.setError(err instanceof Error ? err.message : 'Failed to add random property');
             return false;
         }
     }
@@ -1167,7 +1186,7 @@ class HominioDB {
         const now: string = new Date().toISOString();
 
         try {
-            const loroDoc: LoroDoc = new LoroDoc();
+            const loroDoc: LoroDoc = await this.getOrCreateLoroDoc(pubKey);
             const meta: LoroMap = loroDoc.getMap('meta');
             meta.set('schema', `@${schemaPubKey}`);
 
@@ -1339,83 +1358,136 @@ class HominioDB {
      * @returns The updated Docs metadata object.
      * @throws Error if the document is not found, update fails, or permission denied.
      */
-    public async updateEntityPlaces(pubKey: string, placesUpdate: Record<string, LoroJsonValue>): Promise<Docs> {
-        try {
-            const docMeta = await this.getDocument(pubKey);
-            if (!docMeta) {
-                throw new Error(`Document ${pubKey} not found for update.`);
+    public async updateEntityPlaces(
+        pubKey: string,
+        placesUpdate: Record<string, LoroJsonValue>
+    ): Promise<Docs> {
+        // Get current metadata for capability check and return value
+        const docMeta = await this.getDocument(pubKey);
+        if (!docMeta) {
+            throw new Error(`Document ${pubKey} not found for update.`);
+        }
+
+        // *** Capability Check ***
+        const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
+        if (!canWrite(currentUser, docMeta)) {
+            throw new Error(`Permission denied: Cannot write to document ${pubKey}`);
+        }
+        // *** End Capability Check ***
+
+        // Get the active LoroDoc instance (ensures it exists and is subscribed)
+        const loroDoc = await this.getLoroDoc(pubKey);
+        if (!loroDoc) {
+            throw new Error(`Failed to load LoroDoc for update: ${pubKey}`);
+        }
+
+        // Get the data map, then the places map (create if needed)
+        const dataMap = loroDoc.getMap('data');
+        let placesMap: LoroMap;
+        const potentialPlacesMap = dataMap.get('places');
+        if (potentialPlacesMap instanceof LoroMap) {
+            placesMap = potentialPlacesMap;
+        } else {
+            placesMap = dataMap.setContainer('places', new LoroMap());
+            console.log(`[updateEntityPlaces] Created 'places' map for doc ${pubKey}`);
+        }
+
+        // Apply updates to the LoroMap (this triggers Loro change event)
+        let changesMade = false;
+        for (const key in placesUpdate) {
+            if (Object.prototype.hasOwnProperty.call(placesUpdate, key)) {
+                // TODO: Add check if value actually changed? Loro might handle this internally.
+                placesMap.set(key, placesUpdate[key]);
+                changesMade = true; // Assume change if key exists in update
             }
+        }
 
-            // *** Capability Check ***
-            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
-            if (!canWrite(currentUser, docMeta)) {
-                throw new Error(`Permission denied: Cannot write to document ${pubKey}`);
-            }
-            // *** End Capability Check ***
+        if (!changesMade) {
+            console.log(`[updateEntityPlaces] No effective changes provided for doc ${pubKey}. Returning current metadata.`);
+            return docMeta; // Return original metadata if no changes applied
+        }
 
-            const loroDoc = await this.getLoroDoc(pubKey);
-            if (!loroDoc) {
-                // This case should ideally be covered by getDocument, but double-check
-                throw new Error(`Failed to load LoroDoc for update: ${pubKey}`);
-            }
+        // --- REMOVED PERSISTENCE & SVELTE STORE UPDATES ---
+        // The Loro change handler (`_handleLoroChange`) will now handle:
+        // 1. Exporting the update (only if byteLength > 0).
+        // 2. Persisting the update via `persistLoroUpdate`.
+        // 3. Updating relevant Svelte stores.
+        // ---------------------------------------------------- 
 
-            // Get the data map, then the places map (create if needed)
-            const dataMap = loroDoc.getMap('data');
-            let placesMap: LoroMap;
-            const potentialPlacesMap = dataMap.get('places');
+        console.log(`[updateEntityPlaces] Applied Loro changes for doc ${pubKey}. Event handler will persist.`);
 
-            if (potentialPlacesMap instanceof LoroMap) {
-                placesMap = potentialPlacesMap;
+        // Return the metadata *before* the event handler potentially updates it.
+        // The caller (HQL) might need this, and the UI will update reactively anyway.
+        return docMeta;
+    }
+
+    // --- Loro Event Handling --- 
+    private async _handleLoroChange(pubKey: string, loroDoc: LoroDoc) {
+        console.log(`[Loro Event] Handling change for doc: ${pubKey}`);
+
+        // 1. Increment global change notifier
+        docChangeNotifier.update(n => n + 1);
+
+        // 2. Fetch latest metadata (as it might have changed, e.g., updatedAt)
+        // Note: This reads from storage. We might need a cached/in-memory version 
+        // if direct Loro event doesn't provide enough context for metadata updates.
+        const docMeta = await this.getDocument(pubKey);
+        if (!docMeta) {
+            console.warn(`[Loro Event] Metadata not found for changed doc ${pubKey}. Cannot update stores.`);
+            return;
+        }
+
+        // Update updatedAt timestamp in the metadata object (reflecting the change)
+        // This assumes the handler runs shortly after the change.
+        // A more robust way might involve Loro'sLamport timestamps if available.
+        docMeta.updatedAt = new Date().toISOString();
+
+        // 3. Update the main 'docs' store
+        docs.update(currentDocs => {
+            const index = currentDocs.findIndex(d => d.pubKey === pubKey);
+            if (index !== -1) {
+                currentDocs[index] = { ...docMeta }; // Update with potentially new metadata
+                return [...currentDocs]; // Return new array reference
             } else {
-                // If places doesn't exist or isn't a map, create it.
-                placesMap = dataMap.setContainer("places", new LoroMap());
-                console.log(`[updateEntityPlaces] Created 'places' map for doc ${pubKey}`);
+                // Doc changed but wasn't in the list? Add it? Or log error?
+                console.warn(`[Loro Event] Changed doc ${pubKey} not found in docs store.`);
+                return currentDocs; // Return original array
             }
+        });
 
-            // Apply updates to the LoroMap
-            let changesMade = false;
-            for (const key in placesUpdate) {
-                if (Object.prototype.hasOwnProperty.call(placesUpdate, key)) {
-                    // TODO: Add check if value actually changed? Loro might handle this internally.
-                    placesMap.set(key, placesUpdate[key]);
-                    changesMade = true; // Assume change if key exists in update
-                }
-            }
+        // 4. Update 'selectedDoc' store if it's the one that changed
+        const currentSelected = get(selectedDoc);
+        if (currentSelected && currentSelected.pubKey === pubKey) {
+            selectedDoc.set({ ...docMeta }); // Update selected doc with new metadata
 
-            if (!changesMade) {
-                console.log(`[updateEntityPlaces] No effective changes provided for doc ${pubKey}. Returning current metadata.`);
-                return docMeta;
-            }
+            // 5. Reload content view for the selected document
+            // Pass the *updated* metadata. loadDocumentContent reads from the *live* loroDoc.
+            await this.loadDocumentContent(docMeta);
+        }
 
-            // Export the update binary
-            // Note: Loro might export an empty update if the state didn't actually change.
-            const updateData = loroDoc.export({ mode: 'update' });
+        // 6. Trigger Asynchronous Persistence (Decoupled)
+        // This should ideally be handled carefully to avoid race conditions 
+        // and ensure atomicity if possible. For now, a simple async call.
+        this._persistLoroUpdateAsync(pubKey, loroDoc).catch(err => {
+            console.error(`[Loro Event] Background persistence failed for ${pubKey}:`, err);
+            // Optionally notify user or set an error state?
+            this.setError(`Background save failed for ${pubKey}`);
+        });
+    }
 
-            if (updateData.byteLength === 0) {
-                console.log(`[updateEntityPlaces] Loro detected no state change for doc ${pubKey}. Returning current metadata.`);
-                // No need to persist, return the original metadata
-                return docMeta;
-            }
-
-            // Persist the update (handles CID generation, content storage, metadata update)
+    // Helper for async persistence triggered by Loro event
+    private async _persistLoroUpdateAsync(pubKey: string, loroDoc: LoroDoc): Promise<void> {
+        // Removed redundant try...catch, caller handles errors
+        const updateData = loroDoc.export({ mode: 'update' });
+        if (updateData.byteLength > 0) {
+            // Call the existing persistence logic (which also updates metadata)
             await this.persistLoroUpdate(pubKey, updateData);
-
-            // Refetch the metadata to ensure we return the latest state
-            const updatedDocMeta = await this.getDocument(pubKey);
-            if (!updatedDocMeta) {
-                // This shouldn't happen if persistLoroUpdate succeeded, but handle defensively
-                throw new Error(`Failed to refetch document metadata for ${pubKey} after update.`);
-            }
-
-            console.log(`[updateEntityPlaces] Successfully updated places for doc ${pubKey}`);
-            return updatedDocMeta;
-
-        } catch (err) {
-            console.error(`[updateEntityPlaces] Failed for doc ${pubKey}:`, err);
-            this.setError(`Failed to update places: ${err instanceof Error ? err.message : 'Unknown error'}`);
-            throw err; // Re-throw the error for HQL service to handle
+            console.log(`[Loro Event] Background persistence successful for ${pubKey}.`);
+        } else {
+            console.log(`[Loro Event] No effective changes detected by Loro for ${pubKey}. Skipping persistence.`);
         }
     }
+    // -------------------------
 }
 
 // Create and export singleton instance

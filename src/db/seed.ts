@@ -89,6 +89,45 @@ const schemasToSeed: Record<string, SchemaDefinition> = {
             { lang: "de", name: "Arbeit", description: "An etwas mit einem Zweck arbeiten", places: { x1: "Arbeiter", x2: "Aufgabe/Tätigkeit, an der gearbeitet wird", x3: "Zweck/Ziel der Arbeit" } }
         ]
     },
+    // Add tcini schema
+    "tcini": {
+        schema: "gismu", // References gismu by name
+        name: "tcini",
+        places: {
+            x1: {
+                description: "lo tcini",
+                required: true,
+                // Adapt validation structure
+                validation: { value: { options: ["todo", "in_progress", "done", "blocked"] } }
+            },
+            x2: {
+                description: "lo se tcini",
+                required: true,
+                // Reference schema by name for deterministic key generation
+                validation: { schema: ["gunka"] }
+            }
+        },
+        translations: [
+            {
+                lang: "en",
+                name: "Status",
+                description: "A situation, state or condition",
+                places: {
+                    x1: "Situation/state/condition",
+                    x2: "Entity in the situation/state/condition"
+                }
+            },
+            {
+                lang: "de",
+                name: "Status",
+                description: "Eine Situation, ein Zustand oder eine Bedingung",
+                places: {
+                    x1: "Situation/Zustand/Bedingung",
+                    x2: "Entität in der Situation/dem Zustand/der Bedingung"
+                }
+            }
+        ]
+    },
     // <<< Add other schemas here later >>>
 };
 
@@ -121,26 +160,30 @@ async function seedDocument(
     generatedKeys: Map<string, string>
 ) {
     let pubKey: string;
-    let schemaRef: string | null = null;
+    let schemaRef: string | null = null; // Initialize as null
     const isGismu = docKey === 'gismu' && docType === 'schema';
 
     // 1. Determine PubKey
     if (isGismu) {
         pubKey = GENESIS_PUBKEY;
-        // Explicitly set gismu key in map if not present (important for self-reference resolution)
+        // Explicitly set gismu key in map if not present
         if (!generatedKeys.has(docKey)) {
             generatedKeys.set(docKey, pubKey);
         }
     } else {
         pubKey = await generateDeterministicPubKey(docKey);
     }
-    // Store generated key if not already present (handles cases where gismu was pre-set)
+    // Store generated key if not already present
     if (!generatedKeys.has(docKey)) {
         generatedKeys.set(docKey, pubKey);
     }
 
     // 2. Determine Schema Reference (Format: @pubKey)
-    if ('schema' in docDefinition && docDefinition.schema) { // Check if schema field exists and is not null
+    if (isGismu) {
+        // Gismu references itself
+        schemaRef = `@${pubKey}`;
+    } else if ('schema' in docDefinition && docDefinition.schema) {
+        // Other docs reference the schema defined in their definition
         const schemaName = docDefinition.schema;
         const schemaPubKey = generatedKeys.get(schemaName);
         if (!schemaPubKey) {
@@ -152,14 +195,14 @@ async function seedDocument(
             schemaRef = `@${schemaPubKey}`;
         }
     } else if (!isGismu && docType === 'schema') {
-        // All non-gismu schemas should reference gismu
+        // Fallback for non-gismu schemas without explicit schema: reference gismu
         const gismuPubKey = generatedKeys.get("gismu");
         if (!gismuPubKey) {
             throw new Error(`Root schema "gismu" PubKey not found. Ensure 'gismu' is processed first in schemasToSeed.`);
         }
         schemaRef = `@${gismuPubKey}`;
     }
-    // For gismu itself, schemaRef remains null.
+    // If none of the above, schemaRef remains null (shouldn't happen for schemas/entities defined)
 
     console.log(`Processing ${docType}: ${docKey} -> PubKey: ${pubKey}, SchemaRef: ${schemaRef}`);
 
