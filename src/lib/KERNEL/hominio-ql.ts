@@ -436,7 +436,6 @@ class HominioQLService {
         // Notify AFTER the mutation logic completes, but yield first
         setTimeout(() => {
             docChangeNotifier.update(n => n + 1);
-            console.log(`[HQL Mutate] Notifier triggered after action: ${request.action} (delayed)`);
         }, 0); // Delay of 0ms yields to the event loop
 
         return result;
@@ -465,7 +464,6 @@ class HominioQLService {
                     const refLoroDoc = await hominioDB.getLoroDoc(refPubKey);
                     if (refLoroDoc) {
                         derivedName = refLoroDoc.getMap('meta').get('name') as string | undefined;
-                        console.log(`[HQL Create] Derived name '${derivedName}' from referenced doc ${refPubKey}`);
                     } else {
                         console.warn(`[HQL Create] Referenced doc ${refPubKey} for name not found.`);
                     }
@@ -515,7 +513,6 @@ class HominioQLService {
         // -------------------------------------
 
         // Perform actual creation via hominioDB
-        console.log(`[HQL Create] Validation passed. Creating entity with schema @${schemaPubKey} and name '${finalName}'...`); // Use finalName declared earlier
         const newDocMetadata = await hominioDB.createEntity(schemaPubKey, request.places || {}, user.id, { name: finalName }); // Pass final name
 
         return newDocMetadata;
@@ -615,7 +612,6 @@ class HominioQLService {
             }
 
             // Replace the entire 'places' container - This should trigger subscription
-            console.log(`[HQL Update mutationFn] Replacing places container for ${pubKey}`);
             dataMap.setContainer('places', newPlacesLoroMap);
         });
 
@@ -642,7 +638,6 @@ class HominioQLService {
         }
 
         await hominioDB.deleteDocument(pubKey);
-        console.log(`[HQL Delete] Successfully deleted document ${pubKey}`);
         return { success: true };
     }
 
@@ -652,7 +647,6 @@ class HominioQLService {
     ): Readable<HqlQueryResult | null | undefined> {
         // Define the actual query execution function
         const executeQuery = async (): Promise<HqlQueryResult | null> => {
-            console.log(`[HQL Requery] Running query:`, request);
             try {
                 // Fetch user internally EACH time query runs for capability checks
                 const user = get(authClient.useSession()).data?.user as CapabilityUser | null;
@@ -666,7 +660,6 @@ class HominioQLService {
 
         // Create the readable store
         const store = readable<HqlQueryResult | null | undefined>(undefined, (set) => { // Start as undefined
-            console.log(`[HQL Reactive Store] Subscribed:`, request);
             let isMounted = true;
             let initialLoadComplete = false;
 
@@ -675,7 +668,6 @@ class HominioQLService {
                 if (isMounted) {
                     set(initialResult); // Set initial result (or null if error)
                     initialLoadComplete = true;
-                    console.log(`[HQL Reactive Store] Initial load complete.`);
                 }
             });
 
@@ -684,7 +676,6 @@ class HominioQLService {
                 // Avoid requery if initial load hasn't finished or component unmounted
                 if (!isMounted || !initialLoadComplete) return;
 
-                console.log(`[HQL Reactive Store] Notifier triggered, re-querying:`, request);
                 const newResult = await executeQuery();
                 if (isMounted) { // Check again after await
                     set(newResult); // Set new result (or null if error)
@@ -693,7 +684,6 @@ class HominioQLService {
 
             // Cleanup
             return () => {
-                console.log(`[HQL Reactive Store] Unsubscribed:`, request);
                 isMounted = false;
                 unsubscribeNotifier();
             };

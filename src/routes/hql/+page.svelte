@@ -37,7 +37,6 @@
 	$effect(() => {
 		const currentPubKey = selectedSchemaPubKey; // Capture value for the effect
 		if (currentPubKey) {
-			console.log(`[Effect] Selected schema changed to: ${currentPubKey}. Fetching entities...`);
 			const entityQuery: HqlQueryRequest = {
 				operation: 'query',
 				filter: { meta: { schema: `@${currentPubKey}` } } // Find entities using the selected schema
@@ -46,7 +45,6 @@
 			entitiesReadable = hominioQLService.processReactive(entityQuery);
 			selectedEntityPubKey = null; // <-- Reset selected entity when schema changes
 		} else {
-			console.log(`[Effect] No schema selected. Resetting entities.`);
 			// If no schema selected, reset to an empty/loading state
 			entitiesReadable = readable(undefined);
 			selectedEntityPubKey = null; // <-- Reset selected entity when schema changes
@@ -88,7 +86,6 @@
 	async function createPrenu() {
 		if (isCreatingPrenu) return;
 		isCreatingPrenu = true;
-		console.log('[Action] Creating new Prenu...');
 		try {
 			const randomName = samplePrenuNames[Math.floor(Math.random() * samplePrenuNames.length)];
 			const prenuSchema = $schemasReadable?.find((s) => (s.meta as any)?.name === 'prenu');
@@ -109,7 +106,6 @@
 			};
 
 			const result = await hominioQLService.process(mutation);
-			console.log('[Action] Prenu creation result:', result);
 			// List will update automatically due to reactive query
 		} catch (err) {
 			console.error('[Action] Error creating Prenu:', err);
@@ -125,7 +121,6 @@
 	async function updatePrenuName(entityPubKey: string) {
 		if (currentlyUpdatingPrenu) return; // Prevent concurrent updates
 		currentlyUpdatingPrenu = entityPubKey;
-		console.log(`[Action] Updating name for Prenu ${entityPubKey}...`);
 		try {
 			const randomName = samplePrenuNames[Math.floor(Math.random() * samplePrenuNames.length)];
 
@@ -139,11 +134,8 @@
 			};
 
 			const result = await hominioQLService.process(mutation);
-			console.log(`[Action] Prenu ${entityPubKey} name update result:`, result);
-			// List should update automatically due to reactive query
 		} catch (err) {
 			console.error(`[Action] Error updating Prenu ${entityPubKey} name:`, err);
-			// TODO: Show error to user
 		} finally {
 			currentlyUpdatingPrenu = null;
 		}
@@ -153,14 +145,11 @@
 	let isCreatingSnapshot = $state(false);
 	async function handleCreateSnapshot(entityPubKey: string) {
 		if (isCreatingSnapshot || !entityPubKey) return;
-		console.log(`[Action] Requesting server snapshot for ${entityPubKey}...`);
 		isCreatingSnapshot = true;
 		try {
 			// Call the sync service method, which talks to the server
 			await hominioSync.createConsolidatedSnapshot(entityPubKey);
-			console.log(
-				`[Action] Server snapshot request completed for ${entityPubKey}. Client will pull updates.`
-			);
+
 			// No direct result needed here, sync relies on pullFromServer implicitly called after server success
 		} catch (err) {
 			console.error(`[Action] Error requesting server snapshot for ${entityPubKey}:`, err);
@@ -409,29 +398,6 @@
 					</div>
 				</details>
 			{/if}
-		{/if}
-
-		{#if selectedEntityData}
-			<!-- Show selected entity JSON -->
-			<details class="mb-4 rounded border border-gray-300 bg-white" open>
-				<summary class="cursor-pointer list-none p-3 font-medium text-gray-700 hover:bg-gray-50"
-					>Entity: {(selectedEntityData.meta as Record<string, any>)?.name ??
-						selectedEntityData.pubKey}</summary
-				>
-				<div class="border-t border-gray-300 p-3">
-					<pre
-						class="overflow-x-auto rounded bg-gray-50 p-3 font-mono text-xs whitespace-pre-wrap text-gray-700">{JSON.stringify(
-							selectedEntityData,
-							null,
-							2
-						)}</pre>
-				</div>
-			</details>
-		{:else if !selectedSchemaPubKey}
-			<!-- Show only if nothing is selected (Schema or Entity) -->
-			<div class="flex h-full items-center justify-center text-gray-500">
-				<p>Select a schema or entity to view details.</p>
-			</div>
 		{/if}
 	</aside>
 </div>
