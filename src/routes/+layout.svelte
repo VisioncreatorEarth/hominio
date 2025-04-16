@@ -107,10 +107,7 @@
 	let { children } = $props();
 </script>
 
-<div
-	class="relative min-h-screen w-full overflow-hidden bg-cover bg-center text-white"
-	style="background-image: url('/bg.jpg');"
->
+<div class="relative min-h-screen w-full overflow-hidden bg-cover bg-center text-white">
 	<div
 		class="absolute inset-0 bg-gradient-to-b from-blue-950/70 to-indigo-950/70 backdrop-blur-[2px]"
 	></div>

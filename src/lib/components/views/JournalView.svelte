@@ -43,20 +43,20 @@
 
 	// Mood colors map
 	function getMoodColor(mood?: string): string {
-		if (!mood) return 'bg-gray-500/30 text-gray-300';
+		if (!mood) return 'bg-gray-200 text-gray-700';
 
 		const colorMap: Record<string, string> = {
-			happy: 'bg-yellow-500/30 text-yellow-200',
-			sad: 'bg-blue-500/30 text-blue-200',
-			excited: 'bg-pink-500/30 text-pink-200',
-			angry: 'bg-red-500/30 text-red-200',
-			neutral: 'bg-gray-500/30 text-gray-200',
-			relaxed: 'bg-green-500/30 text-green-200',
-			anxious: 'bg-purple-500/30 text-purple-200',
-			thoughtful: 'bg-cyan-500/30 text-cyan-200'
+			happy: 'bg-yellow-100 text-yellow-800',
+			sad: 'bg-blue-100 text-blue-800',
+			excited: 'bg-pink-100 text-pink-800',
+			angry: 'bg-red-100 text-red-800',
+			neutral: 'bg-gray-200 text-gray-700',
+			relaxed: 'bg-green-100 text-green-800',
+			anxious: 'bg-purple-100 text-purple-800',
+			thoughtful: 'bg-cyan-100 text-cyan-800'
 		};
 
-		return colorMap[mood.toLowerCase()] || 'bg-gray-500/30 text-gray-300';
+		return colorMap[mood.toLowerCase()] || 'bg-gray-200 text-gray-700';
 	}
 
 	// Get capitalized mood text
@@ -91,21 +91,21 @@
 <div class="mx-auto max-w-7xl p-4 sm:p-6">
 	<!-- Header Section -->
 	<div class="mb-8 text-center">
-		<h1 class="text-3xl font-bold tracking-tight text-white">Journal</h1>
-		<p class="mt-2 text-lg text-white/70">Reflect on your thoughts and experiences</p>
+		<h1 class="text-3xl font-bold tracking-tight text-gray-800">Journal</h1>
+		<p class="mt-2 text-lg text-gray-600">Reflect on your thoughts and experiences</p>
 	</div>
 
 	<!-- Entry Detail Modal -->
 	{#if showDetail && selectedEntry}
 		<div
-			class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+			class="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/50 p-4 backdrop-blur-sm"
 		>
 			<div
-				class="relative max-h-[90vh] w-full max-w-4xl overflow-auto rounded-xl bg-gray-900 p-6 shadow-xl"
+				class="relative max-h-[90vh] w-full max-w-4xl overflow-auto rounded-xl border border-gray-300 bg-white p-6 shadow-xl"
 			>
 				<button
 					on:click={closeDetail}
-					class="absolute top-4 right-4 rounded-full bg-gray-800 p-2 text-white/70 hover:bg-gray-700 hover:text-white"
+					class="absolute top-4 right-4 rounded-full bg-gray-100 p-2 text-gray-600 hover:bg-gray-200 hover:text-gray-800"
 				>
 					<svg
 						xmlns="http://www.w3.org/2000/svg"
@@ -125,7 +125,7 @@
 
 				<div class="mt-2">
 					<div class="mb-4 flex items-center">
-						<h2 class="text-2xl font-semibold text-white">{selectedEntry[1].title}</h2>
+						<h2 class="text-2xl font-semibold text-gray-800">{selectedEntry[1].title}</h2>
 						{#if selectedEntry[1].mood}
 							<span
 								class={`ml-3 rounded-lg px-3 py-1 text-base font-medium ${getMoodColor(selectedEntry[1].mood)}`}
@@ -135,21 +135,21 @@
 						{/if}
 					</div>
 
-					<div class="mb-6 text-sm text-white/60">
+					<div class="mb-6 text-sm text-gray-500">
 						{formatDate(selectedEntry[1].createdAt)}
 					</div>
 
 					{#if selectedEntry[1].tags && selectedEntry[1].tags.length > 0}
 						<div class="mb-4 flex flex-wrap gap-1.5">
 							{#each selectedEntry[1].tags as tag}
-								<span class="rounded-md bg-indigo-500/20 px-2 py-0.5 text-xs text-indigo-200">
+								<span class="rounded-md bg-indigo-100 px-2 py-0.5 text-xs text-indigo-700">
 									{tag}
 								</span>
 							{/each}
 						</div>
 					{/if}
 
-					<div class="prose prose-invert mt-6 max-w-none whitespace-pre-wrap">
+					<div class="prose prose-gray mt-6 max-w-none whitespace-pre-wrap">
 						{selectedEntry[1].content}
 					</div>
 				</div>
@@ -161,20 +161,20 @@
 	<div class="space-y-4">
 		{#if sortedEntries.length === 0}
 			<div
-				class="flex items-center justify-center rounded-xl border border-white/10 bg-white/5 p-12 text-white/60 backdrop-blur-sm"
+				class="flex items-center justify-center rounded-xl border border-gray-200 bg-white p-12 text-gray-500"
 			>
 				No journal entries yet. Start by saying "Add a journal entry about..."
 			</div>
 		{:else}
 			{#each sortedEntries as entry (entry[0])}
 				<div
-					class="cursor-pointer rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm transition-colors hover:bg-white/10"
+					class="cursor-pointer rounded-xl border border-gray-200 bg-white backdrop-blur-sm transition-colors hover:bg-gray-50 hover:shadow-md"
 					on:click={() => viewEntry(entry)}
 				>
 					<div class="p-5">
 						<div class="mb-3 flex items-center justify-between">
 							<div class="flex items-center">
-								<h3 class="text-xl font-medium text-white/90">{entry[1].title}</h3>
+								<h3 class="text-xl font-medium text-gray-800">{entry[1].title}</h3>
 								{#if entry[1].mood}
 									<span
 										class={`ml-3 rounded-lg px-3 py-1 text-base font-medium ${getMoodColor(entry[1].mood)}`}
@@ -183,7 +183,7 @@
 									</span>
 								{/if}
 							</div>
-							<span class="text-xs text-white/40">
+							<span class="text-xs text-gray-400">
 								{formatDate(entry[1].createdAt)}
 							</span>
 						</div>
@@ -191,14 +191,14 @@
 						{#if entry[1].tags && entry[1].tags.length > 0}
 							<div class="mb-3 flex flex-wrap gap-1.5">
 								{#each entry[1].tags as tag}
-									<span class="rounded-md bg-indigo-500/20 px-2 py-0.5 text-xs text-indigo-200">
+									<span class="rounded-md bg-indigo-100 px-2 py-0.5 text-xs text-indigo-700">
 										{tag}
 									</span>
 								{/each}
 							</div>
 						{/if}
 
-						<p class="whitespace-pre-wrap text-white/70">
+						<p class="whitespace-pre-wrap text-gray-700">
 							{entry[1].content}
 						</p>
 					</div>
@@ -215,6 +215,6 @@
 	}
 	.rounded-xl:hover {
 		transform: translateY(-2px);
-		box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08); /* Lighter shadow for light theme */
 	}
 </style>

@@ -94,15 +94,15 @@
 <div class="mx-auto max-w-7xl p-4 sm:p-6">
 	<!-- Tags Filter -->
 	{#if $tagsList.length > 0}
-		<div class="mb-6 rounded-xl border border-white/10 bg-white/5 p-4 backdrop-blur-sm">
-			<h3 class="mb-2 text-sm font-medium text-white/70">Filter by tag:</h3>
+		<div class="mb-6 rounded-xl border border-gray-200 bg-white p-4">
+			<h3 class="mb-2 text-sm font-medium text-gray-600">Filter by tag:</h3>
 			<div class="flex flex-wrap gap-2">
 				<button
 					on:click={() => filterByTag(null)}
 					class={`rounded-lg px-3 py-1 text-sm transition-colors ${
 						$filterState.tag === null
-							? 'bg-blue-500/30 text-white'
-							: 'bg-white/10 text-white/70 hover:bg-white/20'
+							? 'bg-blue-500 text-white'
+							: 'bg-gray-100 text-gray-700 hover:bg-gray-200'
 					}`}
 				>
 					All
@@ -112,8 +112,8 @@
 						on:click={() => filterByTag(tag)}
 						class={`rounded-lg px-3 py-1 text-sm transition-colors ${
 							$filterState.tag === tag
-								? 'bg-blue-500/30 text-white'
-								: 'bg-white/10 text-white/70 hover:bg-white/20'
+								? 'bg-blue-500 text-white'
+								: 'bg-gray-100 text-gray-700 hover:bg-gray-200'
 						}`}
 					>
 						{tag}
@@ -127,23 +127,21 @@
 	<div class="space-y-3">
 		{#if $filteredTodos.length === 0}
 			<div
-				class="flex items-center justify-center rounded-xl border border-white/10 bg-white/5 p-12 text-white/60 backdrop-blur-sm"
+				class="flex items-center justify-center rounded-xl border border-gray-200 bg-white p-12 text-gray-500"
 			>
 				No todos yet. Start by saying "Create a todo to..."
 			</div>
 		{:else}
 			{#each $filteredTodos as [id, todo] (id)}
-				<div
-					class="rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm transition-colors hover:bg-white/10"
-				>
+				<div class="rounded-xl border border-gray-200 bg-white transition-colors hover:bg-gray-50">
 					<div class="flex flex-col p-4">
 						<div class="flex items-center justify-between">
 							<div class="flex min-w-0 flex-1 items-center gap-4">
 								<div
 									class={`flex h-6 w-6 items-center justify-center rounded-full border transition-colors ${
 										todo.completed
-											? 'border-green-500 bg-green-500/20 text-green-400'
-											: 'border-white/20 bg-white/5 text-transparent'
+											? 'border-green-500 bg-green-100 text-green-600'
+											: 'border-gray-300 bg-gray-100 text-transparent'
 									}`}
 								>
 									{#if todo.completed}
@@ -165,13 +163,13 @@
 								</div>
 								<span
 									class={todo.completed
-										? 'truncate text-white/50 line-through'
-										: 'truncate text-white/90'}
+										? 'truncate text-gray-400 line-through'
+										: 'truncate text-gray-800'}
 								>
 									{todo.text}
 								</span>
 							</div>
-							<span class="text-xs text-white/40">
+							<span class="text-xs text-gray-400">
 								{formatDate(todo.createdAt)}
 							</span>
 						</div>
@@ -179,7 +177,7 @@
 						{#if todo.tags && todo.tags.length > 0}
 							<div class="mt-2 flex flex-wrap gap-1.5">
 								{#each todo.tags as tag}
-									<span class="rounded-md bg-indigo-500/20 px-2 py-0.5 text-xs text-indigo-200">
+									<span class="rounded-md bg-indigo-100 px-2 py-0.5 text-xs text-indigo-700">
 										{tag}
 									</span>
 								{/each}
@@ -189,7 +187,7 @@
 				</div>
 			{:else}
 				<div
-					class="flex items-center justify-center rounded-xl border border-white/10 bg-white/5 p-12 text-white/60 backdrop-blur-sm"
+					class="flex items-center justify-center rounded-xl border border-gray-200 bg-white p-12 text-gray-500"
 				>
 					No todos match the selected filter
 				</div>
@@ -199,8 +197,5 @@
 </div>
 
 <style>
-	/* Add a subtle glow effect for buttons */
-	button:hover {
-		box-shadow: 0 0 15px rgba(59, 130, 246, 0.2);
-	}
+	/* Removed custom hover style */
 </style>

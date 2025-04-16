@@ -266,279 +266,283 @@
 	});
 </script>
 
-<div class="mx-auto grid max-w-full grid-cols-1 gap-6 text-white lg:grid-cols-12 lg:px-4">
+<div class="grid h-screen grid-cols-1 bg-gray-100 md:grid-cols-[250px_1fr_400px]">
 	<!-- Left sidebar for Skills -->
-	<div class="relative z-10 lg:col-span-2">
-		<div class="sticky top-6 p-4">
-			<!-- Vibe Tools Panel -->
-			<div class="rounded-xl border border-white/10 bg-white/5 p-4 backdrop-blur-sm">
-				<h3 class="mb-3 flex items-center text-lg font-semibold text-white/80">
-					Skills
-					{#if !loadingVibe}
-						<span class="ml-2 text-sm text-white/60">
-							({globalSkills.length + vibeSkills.length + Object.values(agentTools).flat().length})
-						</span>
-					{/if}
-				</h3>
-
-				{#if loadingVibe}
-					<div class="flex items-center justify-center py-6">
-						<div
-							class="h-6 w-6 animate-spin rounded-full border-2 border-white/20 border-t-white/80"
-						></div>
-						<span class="ml-3 text-sm text-white/70">Loading skills...</span>
-					</div>
-				{:else}
-					<!-- Global Skills Section -->
-					{#if globalSkills.length > 0}
-						<div class="mb-4">
-							<h4 class="mb-2 text-sm font-semibold text-white/60">
-								Global ({globalSkills.length})
-							</h4>
-							<div class="space-y-3">
-								{#each globalSkills as tool}
-									<div
-										class="rounded-lg border border-white/5 bg-cyan-900/20 p-3 transition-colors hover:bg-white/10"
-									>
-										<div class="flex items-center gap-2">
-											<div
-												class={`rounded-full bg-${toolColors[tool.name] || 'amber'}-500/20 p-1.5`}
-											>
-												<svg
-													xmlns="http://www.w3.org/2000/svg"
-													class="h-3.5 w-3.5"
-													fill="none"
-													viewBox="0 0 24 24"
-													stroke="currentColor"
-												>
-													<path
-														stroke-linecap="round"
-														stroke-linejoin="round"
-														stroke-width="2"
-														d={toolIcons[tool.name] ||
-															'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'}
-													/>
-												</svg>
-											</div>
-											<div class="text-xs font-medium text-white/80">{tool.name}</div>
-										</div>
-										<div class="mt-1 text-xs text-white/70">
-											{toolSkills[tool.name] || 'No description available'}
-										</div>
-									</div>
-								{/each}
-							</div>
-						</div>
-					{/if}
-
-					<!-- Vibe Skills Section - Only show if there are vibe skills -->
-					{#if vibeSkills.length > 0}
-						<div class="mb-4">
-							<h4 class="mb-2 text-sm font-semibold text-white/60">
-								Vibe ({vibeSkills.length})
-							</h4>
-							<div class="space-y-3">
-								{#each vibeSkills as tool}
-									<div
-										class="rounded-lg border border-white/5 bg-indigo-900/20 p-3 transition-colors hover:bg-white/10"
-									>
-										<div class="flex items-center gap-2">
-											<div
-												class={`rounded-full bg-${toolColors[tool.name] || 'amber'}-500/20 p-1.5`}
-											>
-												<svg
-													xmlns="http://www.w3.org/2000/svg"
-													class="h-3.5 w-3.5"
-													fill="none"
-													viewBox="0 0 24 24"
-													stroke="currentColor"
-												>
-													<path
-														stroke-linecap="round"
-														stroke-linejoin="round"
-														stroke-width="2"
-														d={toolIcons[tool.name] ||
-															'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'}
-													/>
-												</svg>
-											</div>
-											<div class="text-xs font-medium text-white/80">{tool.name}</div>
-										</div>
-										<div class="mt-1 text-xs text-white/70">
-											{toolSkills[tool.name] || 'No description available'}
-										</div>
-									</div>
-								{/each}
-							</div>
-						</div>
-					{/if}
-
-					<!-- Only render agent sections that have tools -->
-					{#each Object.entries(agentTools) as [agentName, tools]}
-						{#if tools.length > 0 || ($currentAgent && agentName === $currentAgent) || (activeManifest?.defaultAgent && agentName === activeManifest.defaultAgent)}
-							<div class="mt-5">
-								<h4 class="mb-2 text-sm font-semibold text-white/60">
-									{agentName} ({tools.length})
-								</h4>
-								<div class="space-y-3">
-									{#each tools as tool}
-										<div
-											class="rounded-lg border border-white/5 bg-white/5 p-3 transition-colors hover:bg-white/10"
-										>
-											<div class="flex items-center gap-2">
-												<div
-													class={`rounded-full bg-${toolColors[tool.name] || 'amber'}-500/20 p-1.5`}
-												>
-													<svg
-														xmlns="http://www.w3.org/2000/svg"
-														class="h-3.5 w-3.5"
-														fill="none"
-														viewBox="0 0 24 24"
-														stroke="currentColor"
-													>
-														<path
-															stroke-linecap="round"
-															stroke-linejoin="round"
-															stroke-width="2"
-															d={toolIcons[tool.name] ||
-																'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'}
-														/>
-													</svg>
-												</div>
-												<div class="text-xs font-medium text-white/80">{tool.name}</div>
-											</div>
-											<div class="mt-1 text-xs text-white/70">
-												{toolSkills[tool.name] || 'No description available'}
-											</div>
-										</div>
-									{/each}
-
-									{#if tools.length === 0}
-										<p class="text-center text-xs text-white/60 italic">
-											No specific tools available
-										</p>
-									{/if}
-								</div>
-							</div>
-						{/if}
-					{/each}
+	<aside class="col-span-1 overflow-y-auto border-r border-gray-300 bg-white p-4">
+		<!-- Vibe Tools Panel -->
+		<div class="space-y-6">
+			<h2 class="mb-4 text-lg font-semibold text-gray-700">
+				Skills
+				{#if !loadingVibe}
+					<span class="ml-2 text-sm text-gray-500">
+						({globalSkills.length + vibeSkills.length + Object.values(agentTools).flat().length})
+					</span>
 				{/if}
-			</div>
+			</h2>
+
+			{#if loadingVibe}
+				<div class="flex items-center justify-center py-6">
+					<div
+						class="h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-gray-600"
+					></div>
+					<span class="ml-3 text-sm text-gray-600">Loading skills...</span>
+				</div>
+			{:else}
+				<!-- Global Skills Section -->
+				{#if globalSkills.length > 0}
+					<div class="mb-4">
+						<h3 class="mb-2 text-sm font-medium text-gray-600">
+							Global ({globalSkills.length})
+						</h3>
+						<div class="space-y-2">
+							{#each globalSkills as tool}
+								<div
+									class="rounded border border-gray-200 bg-white p-3 transition-colors hover:bg-gray-100"
+								>
+									<div class="flex items-center gap-2">
+										<div
+											class={`flex h-5 w-5 items-center justify-center rounded-full bg-${toolColors[tool.name] || 'gray'}-100 p-1`}
+										>
+											<svg
+												xmlns="http://www.w3.org/2000/svg"
+												class={`h-3.5 w-3.5 text-${toolColors[tool.name] || 'gray'}-600`}
+												fill="none"
+												viewBox="0 0 24 24"
+												stroke="currentColor"
+											>
+												<path
+													stroke-linecap="round"
+													stroke-linejoin="round"
+													stroke-width="2"
+													d={toolIcons[tool.name] ||
+														'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'}
+												/>
+											</svg>
+										</div>
+										<div class="text-xs font-medium text-gray-800">{tool.name}</div>
+									</div>
+									<div class="mt-1 text-xs text-gray-600">
+										{toolSkills[tool.name] || 'No description available'}
+									</div>
+								</div>
+							{/each}
+						</div>
+					</div>
+				{/if}
+
+				<!-- Vibe Skills Section -->
+				{#if vibeSkills.length > 0}
+					<div class="mb-4">
+						<h3 class="mb-2 text-sm font-medium text-gray-600">
+							Vibe ({vibeSkills.length})
+						</h3>
+						<div class="space-y-2">
+							{#each vibeSkills as tool}
+								<div
+									class="rounded border border-gray-200 bg-white p-3 transition-colors hover:bg-gray-100"
+								>
+									<div class="flex items-center gap-2">
+										<div
+											class={`flex h-5 w-5 items-center justify-center rounded-full bg-${toolColors[tool.name] || 'gray'}-100 p-1`}
+										>
+											<svg
+												xmlns="http://www.w3.org/2000/svg"
+												class={`h-3.5 w-3.5 text-${toolColors[tool.name] || 'gray'}-600`}
+												fill="none"
+												viewBox="0 0 24 24"
+												stroke="currentColor"
+											>
+												<path
+													stroke-linecap="round"
+													stroke-linejoin="round"
+													stroke-width="2"
+													d={toolIcons[tool.name] ||
+														'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'}
+												/>
+											</svg>
+										</div>
+										<div class="text-xs font-medium text-gray-800">{tool.name}</div>
+									</div>
+									<div class="mt-1 text-xs text-gray-600">
+										{toolSkills[tool.name] || 'No description available'}
+									</div>
+								</div>
+							{/each}
+						</div>
+					</div>
+				{/if}
+
+				<!-- Agent Skills Sections -->
+				{#each Object.entries(agentTools) as [agentName, tools]}
+					{#if tools.length > 0 || ($currentAgent && agentName === $currentAgent) || (activeManifest?.defaultAgent && agentName === activeManifest.defaultAgent)}
+						<div class="mt-5">
+							<h3 class="mb-2 text-sm font-medium text-gray-600">
+								{agentName} ({tools.length})
+							</h3>
+							<div class="space-y-2">
+								{#each tools as tool}
+									<div
+										class="rounded border border-gray-200 bg-white p-3 transition-colors hover:bg-gray-100"
+									>
+										<div class="flex items-center gap-2">
+											<div
+												class={`flex h-5 w-5 items-center justify-center rounded-full bg-${toolColors[tool.name] || 'gray'}-100 p-1`}
+											>
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													class={`h-3.5 w-3.5 text-${toolColors[tool.name] || 'gray'}-600`}
+													fill="none"
+													viewBox="0 0 24 24"
+													stroke="currentColor"
+												>
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														stroke-width="2"
+														d={toolIcons[tool.name] ||
+															'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'}
+													/>
+												</svg>
+											</div>
+											<div class="text-xs font-medium text-gray-800">{tool.name}</div>
+										</div>
+										<div class="mt-1 text-xs text-gray-600">
+											{toolSkills[tool.name] || 'No description available'}
+										</div>
+									</div>
+								{/each}
+
+								{#if tools.length === 0}
+									<p class="text-center text-xs text-gray-500 italic">
+										No specific tools available for this agent.
+									</p>
+								{/if}
+							</div>
+						</div>
+					{/if}
+				{/each}
+			{/if}
 		</div>
-	</div>
+	</aside>
 
 	<!-- Main content area - Dynamically loaded vibe component -->
-	<div class="relative z-10 lg:col-span-8">
-		<!-- Centered glassmorphic title -->
-		<div class="mb-6 flex justify-center">
-			<div
-				class="inline-flex items-center space-x-2 rounded-t-none rounded-b-2xl border border-white/10 bg-white/5 px-4 pt-0.5 pb-1.5 backdrop-blur-md"
-			>
-				<h1 class="text-base font-medium text-white/90">
-					{activeManifest?.name || activeVibeName.charAt(0).toUpperCase() + activeVibeName.slice(1)}
-				</h1>
-			</div>
+	<main class="col-span-1 flex flex-col overflow-y-auto border-r border-gray-300 p-6">
+		<!-- Vibe Title -->
+		<div class="mb-6 flex-shrink-0">
+			<h1 class="text-2xl font-bold text-gray-800">
+				{activeManifest?.name || activeVibeName.charAt(0).toUpperCase() + activeVibeName.slice(1)}
+			</h1>
+			{#if activeManifest?.description}
+				<p class="mt-1 text-sm text-gray-600">{activeManifest.description}</p>
+			{/if}
 		</div>
 
-		{#if loadingVibe}
-			<div class="flex h-64 items-center justify-center">
-				<div class="flex flex-col items-center">
-					<div
-						class="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-white/80"
-					></div>
-					<p class="mt-4 text-white/60">Loading {vibeComponentName} component...</p>
+		<!-- Dynamic Content Area -->
+		<div class="flex-grow border-t border-gray-300 pt-6">
+			{#if loadingVibe || loadingComponent}
+				<div class="flex h-64 items-center justify-center">
+					<div class="flex flex-col items-center">
+						<div
+							class="h-10 w-10 animate-spin rounded-full border-2 border-gray-300 border-t-gray-600"
+						></div>
+						<p class="mt-4 text-gray-600">
+							Loading {vibeComponentName || 'vibe'} component...
+						</p>
+					</div>
 				</div>
-			</div>
-		{:else if componentError}
-			<div class="rounded-lg border border-red-500/30 bg-red-500/10 p-4">
-				<h3 class="text-lg font-bold text-red-400">Error Loading Component</h3>
-				<p class="text-white/70">{componentError}</p>
-			</div>
-		{:else if !vibeComponent}
-			<div class="py-8 text-center">
-				<p class="text-white/70">No component available for {activeVibeName} vibe</p>
-			</div>
-		{:else if loadingComponent}
-			<div class="flex h-64 items-center justify-center">
-				<div class="flex flex-col items-center">
-					<div
-						class="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-white/80"
-					></div>
-					<p class="mt-4 text-white/60">Loading {vibeComponentName} component...</p>
+			{:else if componentError}
+				<div class="rounded-lg border border-red-400 bg-red-50 p-4">
+					<h3 class="text-lg font-bold text-red-700">Error Loading Component</h3>
+					<p class="text-sm text-red-600">{componentError}</p>
 				</div>
-			</div>
-		{:else}
-			<!-- Component UI -->
-			<svelte:component
-				this={vibeComponent}
-				on:selectVibe={(e: VibeSelectEvent) => switchVibe(e.detail.vibeId)}
-			/>
-		{/if}
-	</div>
+			{:else if !vibeComponent}
+				<div class="py-8 text-center">
+					<p class="text-gray-600">No component available for {activeVibeName} vibe.</p>
+				</div>
+			{:else}
+				<!-- Component UI -->
+				<svelte:component
+					this={vibeComponent}
+					on:selectVibe={(e: VibeSelectEvent) => switchVibe(e.detail.vibeId)}
+				/>
+			{/if}
+		</div>
+	</main>
 
 	<!-- Right sidebar for schema information -->
-	<div class="relative z-10 lg:col-span-2">
-		<div class="sticky top-6 p-4">
-			<!-- Schema Display Area -->
-			<div class="rounded-xl border border-white/10 bg-white/5 p-4 backdrop-blur-sm">
-				<h3 class="mb-3 text-lg font-semibold text-white/80">Data</h3>
+	<aside class="col-span-1 space-y-6 overflow-y-auto bg-white p-6">
+		<!-- Schema Display Area -->
+		<div>
+			<h2 class="mb-4 text-lg font-semibold text-gray-700">Data Schema</h2>
 
-				<!-- Schema List -->
-				<div class="space-y-2">
-					<div
-						class="group flex cursor-pointer items-center justify-between rounded-lg border border-white/5 bg-white/5 p-3 transition-all hover:border-blue-500/30 hover:bg-white/10"
-					>
-						<div class="flex items-center space-x-2">
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								class="h-4 w-4 text-blue-300"
-								fill="none"
-								viewBox="0 0 24 24"
-								stroke="currentColor"
-							>
-								<path
-									stroke-linecap="round"
-									stroke-linejoin="round"
-									stroke-width="2"
-									d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
-								/>
-							</svg>
-							<span class="text-sm font-medium text-white/90">Todo</span>
-						</div>
-						<span class="text-xs text-white/50 group-hover:text-blue-300">4 fields</span>
+			<!-- Schema List (Placeholder) -->
+			<div class="space-y-2">
+				<!-- TODO: Replace with dynamic schema data based on the current vibe/component -->
+				<div
+					class="group flex cursor-pointer items-center justify-between rounded-lg border border-gray-200 bg-white p-3 transition-all hover:border-blue-400 hover:bg-gray-50"
+				>
+					<div class="flex items-center space-x-2">
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							class="h-4 w-4 text-blue-500"
+							fill="none"
+							viewBox="0 0 24 24"
+							stroke="currentColor"
+						>
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="2"
+								d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
+							/>
+						</svg>
+						<span class="text-sm font-medium text-gray-700">Todo</span>
 					</div>
-
-					<div
-						class="group flex cursor-pointer items-center justify-between rounded-lg border border-white/5 bg-white/5 p-3 transition-all hover:border-blue-500/30 hover:bg-white/10"
-					>
-						<div class="flex items-center space-x-2">
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								class="h-4 w-4 text-blue-300"
-								fill="none"
-								viewBox="0 0 24 24"
-								stroke="currentColor"
-							>
-								<path
-									stroke-linecap="round"
-									stroke-linejoin="round"
-									stroke-width="2"
-									d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
-								/>
-							</svg>
-							<span class="text-sm font-medium text-white/90">TodoList</span>
-						</div>
-						<span class="text-xs text-white/50 group-hover:text-blue-300">4 fields</span>
-					</div>
+					<span class="text-xs text-gray-400 group-hover:text-blue-500">4 fields</span>
 				</div>
+
+				<div
+					class="group flex cursor-pointer items-center justify-between rounded-lg border border-gray-200 bg-white p-3 transition-all hover:border-blue-400 hover:bg-gray-50"
+				>
+					<div class="flex items-center space-x-2">
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							class="h-4 w-4 text-blue-500"
+							fill="none"
+							viewBox="0 0 24 24"
+							stroke="currentColor"
+						>
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="2"
+								d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
+							/>
+						</svg>
+						<span class="text-sm font-medium text-gray-700">TodoList</span>
+					</div>
+					<span class="text-xs text-gray-400 group-hover:text-blue-500">4 fields</span>
+				</div>
+				<p class="pt-4 text-center text-xs text-gray-400 italic">
+					(Schema display is currently static)
+				</p>
 			</div>
 		</div>
-	</div>
+
+		<!-- Potentially add Raw Data view later like in hql/+page.svelte -->
+		<!--
+		<details class="rounded border border-gray-300 bg-white">
+			<summary class="cursor-pointer list-none p-3 font-medium text-gray-700 hover:bg-gray-50">Raw Data</summary>
+			<div class="border-t border-gray-300 p-3">
+				<pre class="overflow-x-auto rounded bg-gray-50 p-3 font-mono text-xs whitespace-pre-wrap text-gray-700">
+					{JSON.stringify(activeManifest, null, 2)}
+				</pre>
+			</div>
+		</details>
+		-->
+	</aside>
 </div>
 
 <style lang="postcss">
-	/* Add a subtle glow effect for buttons */
-	button:hover {
-		box-shadow: 0 0 15px rgba(59, 130, 246, 0.2);
-	}
+	/* Remove custom button hover style */
 </style>

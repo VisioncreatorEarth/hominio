@@ -85,18 +85,18 @@
 </script>
 
 {#if isInterfaceVisible}
-	<div class="fixed inset-x-0 bottom-0 z-40 flex justify-center">
+	<div class="fixed inset-x-0 bottom-0 z-40 flex justify-center p-4">
 		<div
-			class="w-full max-w-md rounded-2xl border border-white/5 bg-white/10 p-4 shadow-xl backdrop-blur-md dark:bg-slate-900/20"
+			class="w-full max-w-md rounded-2xl border border-gray-300 bg-white/80 p-4 shadow-xl backdrop-blur-md"
 		>
 			<div class="flex items-center justify-between">
 				<!-- Agent Info -->
 				<div class="flex-1">
-					<div class="flex items-center rounded-xl border border-teal-500/20 bg-teal-500/20 p-2">
-						<div class="mr-3 rounded-full bg-teal-500/30 p-2">
+					<div class="flex items-center rounded-xl border border-teal-500/20 bg-teal-100 p-2">
+						<div class="mr-3 rounded-full bg-teal-200 p-2">
 							<svg
 								xmlns="http://www.w3.org/2000/svg"
-								class="h-5 w-5 text-teal-300"
+								class="h-5 w-5 text-teal-700"
 								fill="none"
 								viewBox="0 0 24 24"
 								stroke="currentColor"
@@ -109,9 +109,9 @@
 								/>
 							</svg>
 						</div>
-						<div class="text-lg font-bold text-teal-100">{displayedAgent}</div>
+						<div class="text-lg font-bold text-teal-800">{displayedAgent}</div>
 						<span
-							class="ml-auto rounded-full bg-white/10 px-3 py-1 text-sm font-medium text-white/80"
+							class="ml-auto rounded-full bg-gray-200 px-3 py-1 text-sm font-medium text-gray-700"
 						>
 							{formatStatus(callStatus)}
 						</span>
@@ -120,7 +120,7 @@
 
 				<!-- End Call Button -->
 				<button
-					class="ml-4 flex items-center justify-center rounded-xl bg-red-500/20 px-4 py-2 text-white/90 backdrop-blur-sm transition-all duration-200 hover:bg-red-500/30"
+					class="ml-4 flex items-center justify-center rounded-xl border border-red-300 bg-red-100 px-4 py-2 text-red-700 transition-all duration-200 hover:bg-red-200"
 					onclick={closeInterface}
 				>
 					<svg
@@ -145,7 +145,5 @@
 {/if}
 
 <style lang="postcss">
-	button:hover {
-		box-shadow: 0 0 15px rgba(59, 130, 246, 0.2);
-	}
+	/* Removed custom hover style */
 </style>
