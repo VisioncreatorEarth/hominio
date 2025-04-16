@@ -1,10 +1,10 @@
 import { writable, get } from 'svelte/store';
 import { hominio } from '$lib/client/hominio';
-import { hominioDB, type Docs } from '$lib/KERNEL/hominio-db';
-import { getContentStorage, getDocsStorage } from '$lib/KERNEL/hominio-storage';
+import { hominioDB, docChangeNotifier, type Docs } from '$lib/KERNEL/hominio-db';
 import { browser } from '$app/environment';
 import { authClient } from '$lib/client/auth-hominio'; // Assumed path for auth client
 import { canWrite, type CapabilityUser } from './hominio-capabilities'; // Import capabilities
+import { getContentStorage } from '$lib/KERNEL/hominio-storage';
 
 // Helper type for API response structure
 type ApiResponse<T> = {
@@ -80,7 +80,6 @@ export class HominioSync {
             }
 
             console.log(`Found ${localDocsToSync.length} documents with local changes to push.`);
-            const contentStorage = getContentStorage();
             const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
 
             for (const doc of localDocsToSync) {
@@ -111,31 +110,22 @@ export class HominioSync {
                 if (doc.localState?.snapshotCid) {
                     const localSnapshotCid = doc.localState.snapshotCid;
                     console.log(`  - Pushing local snapshot ${localSnapshotCid} for ${doc.pubKey}...`);
-                    const snapshotData = await contentStorage.get(localSnapshotCid);
+                    const snapshotData = await hominioDB.getRawContent(localSnapshotCid);
 
                     if (snapshotData) {
                         try {
                             if (!docExistsOnServer) {
                                 // Create doc on server
-                                // @ts-expect-error // Eden Treaty typing issue with base route POST
-                                const createResult = await hominio.api.docs.post({
-                                    pubKey: doc.pubKey,
-                                    binarySnapshot: Array.from(snapshotData)
-                                });
-                                if (createResult.error) {
-                                    throw new Error(`Server error creating doc: ${createResult.error.value?.message ?? 'Unknown error'}`);
-                                }
-                                docExistsOnServer = true; // Now it exists
+                                // @ts-expect-error Eden Treaty doesn't fully type dynamic route POST bodies
+                                const createResult = await hominio.api.docs.post({ pubKey: doc.pubKey, binarySnapshot: Array.from(snapshotData) });
+                                if (createResult.error) throw new Error(`Server error creating doc: ${createResult.error.value?.message ?? 'Unknown error'}`);
+                                docExistsOnServer = true;
                                 console.log(`  - Created doc ${doc.pubKey} on server with snapshot.`);
                             } else {
                                 // Update snapshot on existing doc
-                                // @ts-expect-error // Eden Treaty typing issue with nested routes
-                                const snapshotResult = await hominio.api.docs({ pubKey: doc.pubKey }).snapshot.post({
-                                    binarySnapshot: Array.from(snapshotData)
-                                });
-                                if (snapshotResult.error && !(snapshotResult.error.value?.message?.includes('duplicate key'))) {
-                                    throw new Error(`Server error updating snapshot: ${snapshotResult.error.value?.message ?? 'Unknown error'}`);
-                                }
+                                // @ts-expect-error Eden Treaty doesn't fully type dynamic route POST bodies
+                                const snapshotResult = await hominio.api.docs({ pubKey: doc.pubKey }).snapshot.post({ binarySnapshot: Array.from(snapshotData) });
+                                if (snapshotResult.error && !(snapshotResult.error.value?.message?.includes('duplicate key'))) throw new Error(`Server error updating snapshot: ${snapshotResult.error.value?.message ?? 'Unknown error'}`);
                                 console.log(`  - Updated snapshot for ${doc.pubKey} on server.`);
                             }
                             // Mark snapshot as synced
@@ -148,7 +138,7 @@ export class HominioSync {
                             continue;
                         }
                     } else {
-                        console.warn(`  - Could not load local snapshot data for ${localSnapshotCid}`);
+                        console.warn(`  - Could not load local snapshot data for ${localSnapshotCid} via hominioDB.`);
                     }
                 }
 
@@ -159,7 +149,7 @@ export class HominioSync {
 
                     const updatesToUpload: Array<{ cid: string, type: string, binaryData: number[] }> = [];
                     for (const cid of localUpdateCids) {
-                        const updateData = await contentStorage.get(cid);
+                        const updateData = await hominioDB.getRawContent(cid);
                         if (updateData) {
                             updatesToUpload.push({
                                 cid,
@@ -167,28 +157,22 @@ export class HominioSync {
                                 binaryData: Array.from(updateData)
                             });
                         } else {
-                            console.warn(`  - Could not load local update data for ${cid}`);
+                            console.warn(`  - Could not load local update data for ${cid} via hominioDB`);
                         }
                     }
 
                     if (updatesToUpload.length > 0) {
                         try {
                             // Batch upload content first
-                            // @ts-expect-error // Eden Treaty typing issue with nested batch routes
+                            // @ts-expect-error Eden Treaty doesn't fully type nested batch route bodies
                             const contentResult = await hominio.api.content.batch.upload.post({ items: updatesToUpload });
-                            if (contentResult.error) {
-                                throw new Error(`Server error uploading update content: ${contentResult.error.value?.message ?? 'Unknown error'}`);
-                            }
+                            if (contentResult.error) throw new Error(`Server error uploading update content: ${contentResult.error.value?.message ?? 'Unknown error'}`);
                             console.log(`  - Uploaded ${updatesToUpload.length} update content items.`);
 
                             // Batch register updates with document
-                            // @ts-expect-error // Eden Treaty typing issue with nested batch routes
-                            const registerResult = await hominio.api.docs({ pubKey: doc.pubKey }).update.batch.post({
-                                updateCids: updatesToUpload.map(u => u.cid)
-                            });
-                            if (registerResult.error) {
-                                throw new Error(`Server error registering updates: ${registerResult.error.value?.message ?? 'Unknown error'}`);
-                            }
+                            // @ts-expect-error Eden Treaty doesn't fully type nested dynamic route POST bodies
+                            const registerResult = await hominio.api.docs({ pubKey: doc.pubKey }).update.batch.post({ updateCids: updatesToUpload.map(u => u.cid) });
+                            if (registerResult.error) throw new Error(`Server error registering updates: ${registerResult.error.value?.message ?? 'Unknown error'}`);
                             console.log(`  - Registered ${updatesToUpload.length} updates with doc ${doc.pubKey}.`);
 
                             // Mark updates as synced
@@ -233,31 +217,6 @@ export class HominioSync {
     // Based on legacy sync-service.ts
 
     /**
-     * Check which content CIDs exist on the server (batch operation)
-     */
-    private async checkContentExistenceBatch(cids: string[]): Promise<Set<string>> {
-        if (!cids.length) return new Set();
-        try {
-            // @ts-expect-error // Eden Treaty typing issue with nested batch routes
-            const response = await hominio.api.content.batch.exists.post({ cids });
-            if (response.error) {
-                throw new Error(`Failed to check content existence: ${response.error.value?.message ?? 'Unknown error'}`);
-            }
-            const data = (response as ApiResponse<{ results: Array<{ cid: string, exists: boolean }> }>).data;
-            const existingCids = new Set<string>();
-            for (const result of data.results) {
-                if (result.exists) {
-                    existingCids.add(result.cid);
-                }
-            }
-            return existingCids;
-        } catch (error) {
-            console.error('Error checking content existence:', error);
-            throw error; // Re-throw to be handled by the caller
-        }
-    }
-
-    /**
      * Sync multiple content items from server to local storage at once
      */
     private async syncContentBatchFromServer(
@@ -265,11 +224,10 @@ export class HominioSync {
     ): Promise<void> {
         if (!contentItems || contentItems.length === 0) return;
         try {
-            const contentStorage = getContentStorage();
             const allCids = contentItems.map(item => item.cid);
 
-            // 1. Check which content we already have locally using the storage adapter
-            const existingLocalCids = await contentStorage.batchExists(allCids);
+            // 1. Check local existence using hominioDB
+            const existingLocalCids = await hominioDB.batchCheckContentExists(allCids);
 
             // 2. Filter to content we need to fetch
             const cidsToFetch = contentItems.filter(item => !existingLocalCids.has(item.cid))
@@ -282,41 +240,55 @@ export class HominioSync {
 
             console.log(`Fetching ${cidsToFetch.length} content items from server...`);
 
-            // 3. Check which CIDs exist on server (redundant check? maybe remove if server GET /binary handles 404)
-            const existingServerCids = await this.checkContentExistenceBatch(cidsToFetch);
+            // 3. Check server existence (remains same, uses API)
+            // @ts-expect-error Eden Treaty doesn't fully type nested batch route POST bodies
+            const checkResult = await hominio.api.content.batch.exists.post({ cids: cidsToFetch });
+            if (checkResult.error) {
+                throw new Error(`Failed to check content existence on server: ${checkResult.error.value?.message ?? 'Unknown error'}`);
+            }
+            const serverData = (checkResult as ApiResponse<{ results: Array<{ cid: string, exists: boolean }> }>).data;
+            const existingServerCids = new Set<string>();
+            for (const result of serverData.results) {
+                if (result.exists) {
+                    existingServerCids.add(result.cid);
+                }
+            }
 
-            // 4. Fetch binary content for each existing CID
-            const contentToSave: Array<{ key: string, value: Uint8Array, meta: Record<string, unknown> }> = [];
-            for (const cid of existingServerCids) {
+            // 4. Fetch binary content for each existing CID (remains same, uses API)
+            const fetchPromises = Array.from(existingServerCids).map(async (cid) => {
                 try {
                     const contentItemMeta = contentItems.find(item => item.cid === cid)!;
-                    // Use Eden client to get binary data
-                    // @ts-expect-error // Eden Treaty typing issue with nested routes
+                    // @ts-expect-error Eden Treaty doesn't fully type nested dynamic route GETs
                     const binaryResponse = await hominio.api.content({ cid }).binary.get();
                     if (binaryResponse.error) {
                         console.warn(`Error fetching binary data for ${cid}: ${binaryResponse.error.value?.message ?? 'Unknown error'}`);
-                        continue;
+                        return null;
                     }
                     const data = (binaryResponse as ApiResponse<{ binaryData: number[] }>).data;
                     if (data?.binaryData) {
                         const binaryData = new Uint8Array(data.binaryData);
-                        contentToSave.push({
-                            key: cid,
-                            value: binaryData,
-                            meta: { type: contentItemMeta.type, documentPubKey: contentItemMeta.docPubKey }
-                        });
+                        return { cid, binaryData, meta: { type: contentItemMeta.type, documentPubKey: contentItemMeta.docPubKey } };
                     } else {
                         console.warn(`No binary data returned for CID ${cid}`);
+                        return null;
                     }
                 } catch (err) {
                     console.error(`Error processing content ${cid}:`, err);
+                    return null;
                 }
-            }
+            });
 
-            // 5. Save all fetched content to local storage in one batch
+            const fetchedContentResults = await Promise.all(fetchPromises);
+            const contentToSave = fetchedContentResults.filter(result => result !== null) as Array<{ cid: string, binaryData: Uint8Array, meta: Record<string, unknown> }>;
+
+            // 5. Save fetched content using hominioDB
             if (contentToSave.length > 0) {
-                await contentStorage.batchPut(contentToSave);
-                console.log(`Saved ${contentToSave.length} content items to local storage.`);
+                // Loop and call saveRawContent
+                const savePromises = contentToSave.map(item =>
+                    hominioDB.saveRawContent(item.cid, item.binaryData, item.meta)
+                );
+                await Promise.all(savePromises);
+                console.log(`Saved ${contentToSave.length} content items via hominioDB.`);
             }
 
         } catch (err) {
@@ -326,69 +298,37 @@ export class HominioSync {
     }
 
     /**
-     * Sync a single document from server to local storage
-     * Returns true if the document was updated, false if no changes were made
+     * Sync a single document metadata from server to local state (using hominioDB)
+     * Returns true if the document was processed, false otherwise.
      */
-    private async syncDocFromServer(serverDoc: Docs, localDocs: Docs[]): Promise<boolean> {
-        const docsStorage = getDocsStorage();
-        console.log(`Syncing document ${serverDoc.pubKey} from server.`);
+    private async syncDocMetadataFromServer(serverDoc: Docs, localDocs: Docs[]): Promise<boolean> {
+        console.log(`Processing server metadata for document ${serverDoc.pubKey}.`);
 
         const localDoc = localDocs.find(doc => doc.pubKey === serverDoc.pubKey);
 
-        // Determine if an update is *actually* needed by comparing critical fields
+        // Determine if an update is needed (comparison logic remains the same)
         const needsUpdate = !localDoc ||
             serverDoc.snapshotCid !== localDoc.snapshotCid ||
             JSON.stringify(serverDoc.updateCids?.sort()) !== JSON.stringify(localDoc.updateCids?.sort()) ||
-            serverDoc.owner !== localDoc.owner; // Ensure owner changes are reflected
-        // updatedAt check might be too noisy, omitted for now
+            serverDoc.owner !== localDoc.owner;
 
         if (!needsUpdate) {
-            console.log(`Document ${serverDoc.pubKey} is already up-to-date locally.`);
-            return false; // No changes made
+            console.log(`Document metadata ${serverDoc.pubKey} is already up-to-date locally.`);
+            return false; // No changes needed
         }
 
-        // Prepare merged doc - start with server doc data
-        const mergedDoc: Docs = { ...serverDoc };
+        // Prepare merged doc (logic moved to saveSyncedDocument, just pass server data)
+        // The merge logic happens inside hominioDB.saveSyncedDocument now
 
-        // If local doc exists, *only preserve local updates* (not local snapshot)
-        if (localDoc?.localState?.updateCids && localDoc.localState.updateCids.length > 0) {
-            // Initialize localState if it doesn't exist on mergedDoc yet
-            if (!mergedDoc.localState) {
-                mergedDoc.localState = {};
-            }
-            // Only copy updateCids. Discard localState.snapshotCid.
-            mergedDoc.localState.updateCids = [...localDoc.localState.updateCids];
-            console.log(`Preserved ${mergedDoc.localState.updateCids.length} local updates for ${serverDoc.pubKey}. Local snapshot was discarded.`);
-        } else {
-            // If no local updates to preserve, ensure localState is removed
-            delete mergedDoc.localState;
-        }
-
-        // Save merged doc to local storage
+        // Save merged doc using hominioDB method (handles storage, stores, and notification)
         try {
-            await docsStorage.put(serverDoc.pubKey, new TextEncoder().encode(JSON.stringify(mergedDoc)));
-            console.log(`Saved merged state for doc ${serverDoc.pubKey} to local storage.`);
+            await hominioDB.saveSyncedDocument(serverDoc); // Pass server data directly
+            console.log(`Called hominioDB.saveSyncedDocument for ${serverDoc.pubKey}.`);
+            return true; // Document was processed
         } catch (saveErr) {
-            console.error(`Failed to save merged doc ${serverDoc.pubKey} locally:`, saveErr);
-            // If saving fails, we didn't truly update, return false
-            return false;
+            console.error(`Failed to save synced doc metadata ${serverDoc.pubKey} via hominioDB:`, saveErr);
+            return false; // Saving failed
         }
-
-        // Collect content CIDs that need to be synced (snapshot + updates)
-        const contentCidsToSync: Array<{ cid: string, type: 'snapshot' | 'update', docPubKey: string }> = [];
-        if (serverDoc.snapshotCid) {
-            contentCidsToSync.push({ cid: serverDoc.snapshotCid, type: 'snapshot', docPubKey: serverDoc.pubKey });
-        }
-        if (serverDoc.updateCids) {
-            serverDoc.updateCids.forEach(cid => contentCidsToSync.push({ cid, type: 'update', docPubKey: serverDoc.pubKey }));
-        }
-
-        // Sync required content
-        if (contentCidsToSync.length > 0) {
-            await this.syncContentBatchFromServer(contentCidsToSync);
-        }
-
-        return true; // Document was updated locally
     }
 
     /**
@@ -452,51 +392,62 @@ export class HominioSync {
 
             console.log(`Retrieved and mapped ${serverDocs.length} documents from server`);
 
-            const localDocs = get(hominioDB.docs);
-            const updatedDocPubKeys: string[] = [];
+            // --- Fetch local docs using loadAllDocsReturn --- 
+            // const localDocs = get(hominioDB.docs); // Removed store access
+            const localDocs = await hominioDB.loadAllDocsReturn();
+            // -------------------------------------------------
+            const allRequiredContentCids = new Map<string, { type: 'snapshot' | 'update', docPubKey: string }>();
             const oldUpdateCids = new Set<string>();
-            localDocs.forEach(doc => {
+            localDocs.forEach((doc: Docs) => { // Added explicit type for doc
                 doc.updateCids?.forEach(cid => oldUpdateCids.add(cid));
                 doc.localState?.updateCids?.forEach(cid => oldUpdateCids.add(cid));
             });
 
-            // 3. Sync each server document to local storage
+            // 1. Process metadata for all server documents FIRST
+            console.log(`Processing metadata for ${serverDocs.length} server documents...`);
             for (const serverDoc of serverDocs) {
-                // Pass localDocs array for comparison within syncDocFromServer
-                const wasUpdated = await this.syncDocFromServer(serverDoc, localDocs);
-                if (wasUpdated) {
-                    updatedDocPubKeys.push(serverDoc.pubKey);
+                // Pass the correctly fetched localDocs array
+                await this.syncDocMetadataFromServer(serverDoc, localDocs);
+
+                // Collect required CIDs from server data for batch content sync later
+                if (serverDoc.snapshotCid) {
+                    allRequiredContentCids.set(serverDoc.snapshotCid, { type: 'snapshot', docPubKey: serverDoc.pubKey });
                 }
+                serverDoc.updateCids?.forEach(cid => {
+                    allRequiredContentCids.set(cid, { type: 'update', docPubKey: serverDoc.pubKey });
+                });
+            }
+            console.log(`Finished processing server metadata.`);
+
+            // 2. Sync all required content in one batch AFTER processing metadata
+            if (allRequiredContentCids.size > 0) {
+                console.log(`Preparing to sync ${allRequiredContentCids.size} unique content items...`);
+                await this.syncContentBatchFromServer(Array.from(allRequiredContentCids.entries()).map(([cid, meta]) => ({ cid, ...meta })));
             }
 
-            // 4. Refresh the main docs store in hominioDB after all updates
-            // This is simpler than updating one by one during the loop
-            await hominioDB.loadAllDocs(); // Reload all docs from storage
-            console.log(`Refreshed local document list.`);
-
             // --- Cleanup Logic Start ---
-            // 4. Collect all update CIDs referenced *after* sync
-            const refreshedLocalDocs = get(hominioDB.docs); // Get the latest state
+            console.log('Starting local content cleanup...');
+            // Collect all update CIDs referenced *after* sync and content download
+            const refreshedLocalDocs = await hominioDB.loadAllDocsReturn(); // Fetch latest state directly
             const stillReferencedCids = new Set<string>();
             refreshedLocalDocs.forEach(doc => {
                 doc.updateCids?.forEach(cid => stillReferencedCids.add(cid));
                 doc.localState?.updateCids?.forEach(cid => stillReferencedCids.add(cid));
             });
 
-            // 5. Determine which old CIDs are no longer referenced
+            // Determine which old CIDs are no longer referenced
             const unreferencedUpdateCids = Array.from(oldUpdateCids).filter(
                 cid => !stillReferencedCids.has(cid)
             );
 
-            // 6. Delete unreferenced update CIDs from local content storage
+            // Delete unreferenced update CIDs from local content storage
             if (unreferencedUpdateCids.length > 0) {
                 console.log(`Cleaning up ${unreferencedUpdateCids.length} unreferenced update CIDs from local storage...`);
+                // Keep direct access for cleanup ONLY
                 const contentStorage = getContentStorage();
                 for (const cidToDelete of unreferencedUpdateCids) {
                     try {
-                        // We only delete if it's an update, although snapshots shouldn't be in these lists anyway
-                        // A check against content metadata might be needed in a more complex system
-                        // For now, assume if it was in oldUpdateCids and not referenced, it's safe to delete
+                        // Only delete updates, not snapshots, based on this logic
                         const deleted = await contentStorage.delete(cidToDelete);
                         if (deleted) {
                             console.log(`  - Deleted unreferenced update ${cidToDelete}`);
@@ -506,14 +457,18 @@ export class HominioSync {
                     }
                 }
                 console.log(`Local update CID cleanup finished.`);
+            } else {
+                console.log('No unreferenced update CIDs found for cleanup.');
             }
             // --- Cleanup Logic End ---
 
-            // 5. Set success status
+            // Set success status
+            // Trigger reactivity AFTER metadata and content sync is complete
+            docChangeNotifier.update(n => n + 1);
             this.status.update(s => ({ ...s, lastSynced: new Date() }));
             console.log('Pull from server completed successfully.');
 
-        } catch (err: unknown) { // Type the error
+        } catch (err: unknown) {
             console.error('Error during pull from server:', err);
             this.setSyncError(err instanceof Error ? err.message : 'Pull from server failed');
         } finally {
@@ -577,7 +532,7 @@ export class HominioSync {
 
         try {
             // Call the server's delete endpoint
-            // @ts-expect-error Eden Treaty typing issue with dynamic routes
+            // REMOVED Unused @ts-expect-error 
             const result = await hominio.api.docs({ pubKey }).delete();
             const response = result as ApiResponse<{ success: boolean; message?: string }>;
 
@@ -605,21 +560,24 @@ export class HominioSync {
         }
     }
 
-    async createConsolidatedSnapshot(): Promise<void> {
-        const selected = get(hominioDB.selectedDoc);
-        if (!selected?.pubKey) {
-            this.setSyncError("No document selected to create snapshot for.");
+    /**
+     * Requests the server to create a consolidated snapshot for a given document.
+     * Triggers a pull afterwards to refresh local state.
+     * @param pubKey The public key of the document to snapshot.
+     */
+    async createConsolidatedSnapshot(pubKey: string): Promise<void> { // Added pubKey parameter
+        if (!pubKey) { // Add basic check for provided pubKey
+            this.setSyncError("No document pubKey provided to create snapshot for.");
             return;
         }
 
-        const pubKey = selected.pubKey;
         console.log(`Requesting SERVER consolidated snapshot creation for ${pubKey}...`);
         this.setSyncStatus(true);
         this.setSyncError(null);
 
         try {
             // Call the server endpoint FIRST
-            // @ts-expect-error // Eden Treaty typing issue with nested routes
+            // @ts-expect-error Eden Treaty doesn't fully type nested dynamic route POST bodies
             const result = await hominio.api.docs({ pubKey }).snapshot.create.post({});
             const response = result as ApiResponse<{ success: boolean; message?: string; newSnapshotCid?: string;[key: string]: unknown }>;
 

@@ -61,23 +61,6 @@ export interface DocContentState {
     appliedUpdates?: number; // Number of updates applied to the content
 }
 
-// Svelte stores for reactive UI
-const docs = writable<Docs[]>([]);
-const selectedDoc = writable<Docs | null>(null);
-const status = writable({
-    loading: false,
-    error: false,
-    creatingDoc: false
-});
-const error = writable<string | null>(null);
-const docContent = writable<DocContentState>({
-    content: null,
-    loading: false,
-    error: null,
-    sourceCid: null,
-    isLocalSnapshot: false
-});
-
 // Map to hold active Loro document instances
 const activeLoroDocuments = new Map<string, LoroDoc>();
 
@@ -85,18 +68,16 @@ const activeLoroDocuments = new Map<string, LoroDoc>();
  * HominioDB class implements the Content layer functionality
  */
 class HominioDB {
-    // Expose Svelte stores for reactive UI
-    docs = docs;
-    selectedDoc = selectedDoc;
-    status = status;
-    error = error;
-    docContent = docContent;
+    // Internal state for loading/errors, perhaps move to a dedicated status service later
+    private _isLoading: boolean = false;
+    private _isCreatingDoc: boolean = false;
+    private _lastError: string | null = null;
 
     constructor() {
         if (browser) {
             this.initialize().catch(err => {
                 console.error('Failed to initialize HominioDB:', err);
-                this.setError(`Failed to initialize: ${err instanceof Error ? err.message : String(err)}`);
+                this._setError(`Failed to initialize: ${err instanceof Error ? err.message : String(err)}`);
             });
         }
     }
@@ -106,64 +87,37 @@ class HominioDB {
      */
     private async initialize(): Promise<void> {
         try {
-            this.setStatus({ loading: true });
+            this._setStatus({ loading: true });
 
             // Initialize storage adapters
             await initStorage();
 
-            // Load all documents
-            await this.loadAllDocs();
+            // Load all documents (optional: could pre-load LoroDocs here too)
+            // await this.loadAllDocs(); // This was updating a store, remove direct call
 
-            this.setStatus({ loading: false });
+            this._setStatus({ loading: false });
+            // Notify that DB is ready (optional)
+            docChangeNotifier.update(n => n + 1);
         } catch (err) {
-            this.setError(`Initialization error: ${err instanceof Error ? err.message : String(err)}`);
-            this.setStatus({ loading: false });
+            this._setError(`Initialization error: ${err instanceof Error ? err.message : String(err)}`);
+            this._setStatus({ loading: false });
             throw err;
         }
     }
 
     /**
-     * Load all documents from storage
+     * Load all documents from storage (REMOVED store update)
      */
     public async loadAllDocs(): Promise<void> {
+        // This method is now less useful internally as we don't maintain a store.
+        // Use loadAllDocsReturn() instead when needing the data.
+        // Kept for potential external use or future refinement.
+        console.warn("loadAllDocs() called, but no longer updates internal stores. Use loadAllDocsReturn() for data.");
         try {
-            const docsStorage = getDocsStorage();
-            const allItems = await docsStorage.getAll();
-
-            const loadedDocs: Docs[] = [];
-
-            for (const item of allItems) {
-                try {
-                    if (item.value) {
-                        // Get the Uint8Array value
-                        const data = await docsStorage.get(item.key);
-                        if (data) {
-                            // Convert binary data to string and parse JSON
-                            const docString = new TextDecoder().decode(data);
-                            const doc = JSON.parse(docString) as Docs;
-                            loadedDocs.push(doc);
-                        }
-                    }
-                } catch (parseErr) {
-                    console.error(`Error parsing document ${item.key}:`, parseErr);
-                }
-            }
-
-            // Set loaded docs to store with a new array reference to trigger reactivity
-            docs.set([...loadedDocs]);
-
-            // If we have a selected document, make sure we reload its content
-            const currentSelectedDoc = get(selectedDoc);
-            if (currentSelectedDoc) {
-                const refreshedDoc = loadedDocs.find(d => d.pubKey === currentSelectedDoc.pubKey);
-                if (refreshedDoc) {
-                    selectedDoc.set({ ...refreshedDoc });  // Force reactivity update
-                    await this.loadDocumentContent(refreshedDoc);
-                }
-            }
+            await this.loadAllDocsReturn(); // Just loads data, doesn't store it class-wide
         } catch (err) {
-            console.error('Error loading documents:', err);
-            this.setError(`Failed to load documents: ${err instanceof Error ? err.message : String(err)}`);
+            console.error('Error loading documents in loadAllDocs:', err);
+            this._setError(`Failed to load documents: ${err instanceof Error ? err.message : String(err)}`);
         }
     }
 
@@ -173,40 +127,34 @@ class HominioDB {
      * @returns PubKey of the created document
      */
     async createDocument(options: { name?: string; description?: string } = {}): Promise<string> {
-        this.setStatus({ creatingDoc: true });
+        this._setStatus({ creatingDoc: true });
+        this._setError(null); // Clear previous error
 
         try {
+            // Capability check still uses get() on authClient, assuming it's external
             const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
             if (!currentUser) {
                 throw new Error('Permission denied: User must be logged in to create documents.');
             }
 
             const pubKey = await docIdService.generateDocId();
-            // Use the actual logged-in user ID as the owner
             const owner = currentUser.id;
-
             const now = new Date().toISOString();
+
             const newDocMeta: Docs = {
                 pubKey,
-                owner, // Set owner to current user
+                owner,
                 updatedAt: now
             };
 
-            // Get or create the Loro document instance (this also sets up the subscription)
-            const loroDoc = await this.getOrCreateLoroDoc(pubKey);
+            const loroDoc = await this.getOrCreateLoroDoc(pubKey); // Creates/loads LoroDoc, adds to map, subscribes
 
-            // Set initial metadata if provided (this triggers the Loro change event)
             const meta = loroDoc.getMap('meta');
-            if (options.name) {
-                meta.set('name', options.name);
-            }
-            if (options.description) {
-                meta.set('description', options.description);
-            }
+            if (options.name) meta.set('name', options.name);
+            if (options.description) meta.set('description', options.description);
+            // Applying meta triggers the Loro change event
 
-            // Initial Snapshot Persistence (Still needed for new docs)
-            // Note: The Loro event handler might trigger *another* persistence for the meta updates,
-            //       this might need refinement later to only persist once or handle idempotency.
+            // Snapshotting and initial save logic remains largely the same
             const snapshot = loroDoc.export({ mode: 'snapshot' });
             const snapshotCid = await hashService.hashSnapshot(snapshot);
             const contentStorage = getContentStorage();
@@ -216,67 +164,56 @@ class HominioDB {
                 created: now
             });
 
-            // Update document metadata with snapshot info
-            newDocMeta.localState = { snapshotCid: snapshotCid }; // Mark for sync
-            newDocMeta.snapshotCid = snapshotCid; // Set initial snapshot CID
+            newDocMeta.localState = { snapshotCid: snapshotCid };
+            newDocMeta.snapshotCid = snapshotCid;
 
-            // Save initial document metadata to docs storage
             const docsStorage = getDocsStorage();
             await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(newDocMeta)));
 
-            // --- REMOVED SVELTE STORE UPDATES --- 
-            // The Loro change handler (`_handleLoroChange`) will now update 
-            // the stores based on the Loro event triggered by meta.set().
-            // It will also handle selecting the new doc if needed.
-            // docs.update(docs => [...docs, newDocMeta]);
-            // await this.selectDoc(newDocMeta); // Selection handled by Loro event now?
-            // ------------------------------------ 
-
-            // We might still want to explicitly select the doc after creation?
-            // Let's keep this for now, but be aware the event handler also selects.
-            const finalDocMeta = await this.getDocument(pubKey); // Get potentially updated meta
-            if (finalDocMeta) {
-                await this.selectDoc(finalDocMeta);
-            } else {
-                console.warn(`[createDocument] Failed to get final metadata for ${pubKey} after creation.`);
-            }
+            // Trigger reactivity *after* metadata is saved
+            docChangeNotifier.update(n => n + 1);
 
             return pubKey;
         } catch (err) {
             console.error('Error creating document:', err);
-            this.setError(`Failed to create document: ${err instanceof Error ? err.message : String(err)}`);
-            throw err;
+            this._setError(`Failed to create document: ${err instanceof Error ? err.message : String(err)}`);
+            throw err; // Re-throw error
         } finally {
-            this.setStatus({ creatingDoc: false });
+            this._setStatus({ creatingDoc: false });
         }
     }
 
     /**
-     * Select a document and load its content
-     * @param doc Document to select
+     * Ensures a LoroDoc instance is loaded/created for the given document.
+     * Does NOT load the content into a store anymore.
+     * @param doc Document metadata
      */
     async selectDoc(doc: Docs): Promise<void> {
-        selectedDoc.set(doc);
+        // Removed: selectedDoc.set(doc);
+        if (!doc) {
+            console.warn("[selectDoc] Received null document.");
+            return;
+        }
 
-        if (doc) {
-            try {
-                // Determine which snapshot CID to use
-                const snapshotCid = doc.localState?.snapshotCid || doc.snapshotCid;
+        try {
+            // Determine which snapshot CID to use
+            const snapshotCid = doc.localState?.snapshotCid || doc.snapshotCid;
 
-                // Get or create a Loro doc instance for this document
-                await this.getOrCreateLoroDoc(doc.pubKey, snapshotCid);
+            // Get or create a Loro doc instance for this document
+            // This ensures the LoroDoc is cached in activeLoroDocuments and subscribed
+            await this.getOrCreateLoroDoc(doc.pubKey, snapshotCid);
+            console.log(`[selectDoc] Ensured LoroDoc instance exists for ${doc.pubKey}`);
 
-                // Load content (capability check is inside this method)
-                await this.loadDocumentContent(doc);
-            } catch (err) {
-                console.error(`Error selecting doc ${doc.pubKey}:`, err);
-                this.setError('Failed to load document data');
-                // Error might be due to permissions from loadDocumentContent
-                const currentContent = get(docContent);
-                if (currentContent.error?.includes('Permission denied')) {
-                    this.setError(currentContent.error);
-                }
-            }
+            // --- REMOVED loadDocumentContent call ---
+            // Loading content is now the responsibility of the UI/consumer,
+            // triggered by the docChangeNotifier or direct request.
+            // await this.loadDocumentContent(doc); // Removed
+            // ----------------------------------------
+
+        } catch (err) {
+            console.error(`Error preparing LoroDoc for ${doc.pubKey} during selectDoc:`, err);
+            this._setError(`Failed to prepare document instance: ${err instanceof Error ? err.message : String(err)}`);
+            // Removed error setting related to docContent store
         }
     }
 
@@ -322,16 +259,12 @@ class HominioDB {
         // Subscribe to changes and trigger our handler
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         loroDoc.subscribe((_event) => {
-            // console.log(`[Loro Subscribe Callback] Event for ${pubKey}`); // Simple log to use _event context implicitly via pubKey
-            // TODO: Investigate event properties to see if we can reliably ignore local-only echoes
-            // if (_event.local) return; 
-
-            // Use a non-blocking way to handle the change to avoid blocking Loro
-            setTimeout(() => {
-                this._handleLoroChange(pubKey, loroDoc).catch(err => {
-                    console.error(`[Loro Subscribe Callback] Error handling change for ${pubKey}:`, err);
-                });
-            }, 0);
+            // console.log(`[Loro Subscribe Callback] Event for ${pubKey}`);
+            // Directly trigger async persistence on change
+            this._persistLoroUpdateAsync(pubKey, loroDoc).catch((err: unknown) => {
+                console.error(`[Loro Subscribe Callback] Background persistence failed for ${pubKey}:`, err);
+                this._setError(`Background save failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+            });
         });
         console.log(`[Loro Management] Subscribed to changes for ${pubKey}.`);
         // ***************************
@@ -344,143 +277,29 @@ class HominioDB {
 
     /**
      * Load document content including all updates
+     * THIS METHOD IS DEPRECATED as content loading is now externalized.
+     * Use getLoroDoc(pubKey) and then loroDoc.toJSON() instead.
      * @param doc Document to load content for
      */
     async loadDocumentContent(doc: Docs): Promise<void> {
+        console.warn("[DEPRECATED] loadDocumentContent called. Use getLoroDoc(pubKey).then(d => d?.toJSON()) instead.");
+
         // *** Capability Check ***
-        const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
+        const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null; // Still uses external store getter
         if (!canRead(currentUser, doc)) {
             console.warn(`Permission denied: User ${currentUser?.id ?? 'anonymous'} cannot read doc ${doc.pubKey} owned by ${doc.owner}`);
-            docContent.set({
-                content: null,
-                loading: false,
-                error: `Permission denied: Cannot read this document.`,
-                sourceCid: null,
-                isLocalSnapshot: false
-            });
-            return; // Don't proceed if read permission denied
+            // Removed docContent.set error
+            this._setError(`Permission denied: Cannot read document ${doc.pubKey}.`);
+            return;
         }
         // *** End Capability Check ***
 
-        docContent.update(state => ({ ...state, loading: true, error: null }));
-
-        try {
-            // Determine which snapshot CID to use - prioritize local snapshot
-            const snapshotCid = doc.localState?.snapshotCid || doc.snapshotCid;
-            const isLocalSnapshot = !!doc.localState?.snapshotCid;
-
-            if (!snapshotCid) {
-                docContent.set({
-                    content: { note: "No snapshot available for this document" },
-                    loading: false,
-                    error: null,
-                    sourceCid: null,
-                    isLocalSnapshot: false
-                });
-                return;
-            }
-
-            console.log(`Loading snapshot with CID: ${snapshotCid}, isLocal: ${isLocalSnapshot}`);
-
-            // Load snapshot binary data
-            const contentStorage = getContentStorage();
-            const snapshotData = await contentStorage.get(snapshotCid);
-
-            if (!snapshotData) {
-                docContent.set({
-                    content: null,
-                    loading: false,
-                    error: `Could not load snapshot content for CID: ${snapshotCid}`,
-                    sourceCid: snapshotCid,
-                    isLocalSnapshot
-                });
-                return;
-            }
-
-            console.log(`Loaded snapshot data, size: ${snapshotData.byteLength} bytes`);
-
-            // Create a temporary LoroDoc to import the data
-            const tempDoc = new LoroDoc();
-
-            try {
-                // Import the snapshot with proper error handling
-                tempDoc.import(snapshotData);
-                console.log(`Loaded base snapshot from CID: ${snapshotCid}`);
-            } catch (importErr) {
-                console.error(`Error importing snapshot data:`, importErr);
-                docContent.set({
-                    content: null,
-                    loading: false,
-                    error: `Failed to import snapshot: ${importErr instanceof Error ? importErr.message : 'Unknown error'}`,
-                    sourceCid: snapshotCid,
-                    isLocalSnapshot
-                });
-                return;
-            }
-
-            // Track number of updates applied
-            let appliedUpdates = 0;
-
-            // Gather all update CIDs (both from server and local)
-            const allUpdateCids = [
-                ...(doc.updateCids || []),
-                ...(doc.localState?.updateCids || [])
-            ];
-
-            // Apply all updates in order
-            for (const updateCid of allUpdateCids) {
-                const updateData = await contentStorage.get(updateCid);
-                if (updateData) {
-                    try {
-                        tempDoc.import(updateData);
-                        appliedUpdates++;
-                        console.log(`Applied update from CID: ${updateCid}`);
-                    } catch (err) {
-                        console.error(`Error applying update ${updateCid}:`, err);
-                    }
-                } else {
-                    console.warn(`Could not load update data for CID: ${updateCid}`);
-                }
-            }
-
-            // Get JSON representation of the fully updated document
-            let content;
-            try {
-                content = tempDoc.toJSON();
-                console.log(`Successfully converted Loro doc to JSON:`, content);
-            } catch (jsonErr) {
-                console.error(`Error converting Loro doc to JSON:`, jsonErr);
-                docContent.set({
-                    content: null,
-                    loading: false,
-                    error: `Failed to convert document to JSON: ${jsonErr instanceof Error ? jsonErr.message : 'Unknown error'}`,
-                    sourceCid: snapshotCid,
-                    isLocalSnapshot
-                });
-                return;
-            }
-
-            docContent.set({
-                content,
-                loading: false,
-                error: null,
-                sourceCid: snapshotCid,
-                isLocalSnapshot,
-                appliedUpdates // Add number of updates applied
-            });
-
-            console.log(`Document content loaded with ${appliedUpdates} updates applied`);
-        } catch (err) {
-            console.error('Error loading document content:', err);
-            const errorMessage = err instanceof Error ? err.message : 'Failed to load document content';
-            docContent.set({
-                content: null,
-                loading: false,
-                error: errorMessage,
-                sourceCid: null,
-                isLocalSnapshot: false
-            });
-        }
+        // --- REMOVED Store Updates ---
+        // docContent.update(state => ({ ...state, loading: true, error: null }));
+        // ... logic ...
+        // docContent.set(...)
+        // --- End Removed Store Updates ---
+        this._setError("loadDocumentContent is deprecated."); // Set general error
     }
 
     /**
@@ -497,7 +316,7 @@ class HominioDB {
         }
 
         // *** Capability Check ***
-        const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
+        const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null; // Still uses external store getter
         if (!canWrite(currentUser, docMeta)) {
             throw new Error('Permission denied: Cannot write to this document');
         }
@@ -531,138 +350,77 @@ class HominioDB {
     }
 
     /**
-     * Add a random property to a document (for testing purposes)
-     * @param pubKey Document public key
-     * @returns True if successful
-     */
-    async addRandomPropertyToDocument(pubKey?: string): Promise<boolean> {
-        const targetPubKey = pubKey || get(selectedDoc)?.pubKey;
-        if (!targetPubKey) {
-            this.setError('No document selected');
-            return false;
-        }
-
-        // Capability check happens inside updateDocument call below
-        try {
-            await this.updateDocument(targetPubKey, (loroDoc) => {
-                // Generate random property key and value
-                const randomKey = `prop_${Math.floor(Math.random() * 10000)}`;
-                const randomValue = `value_${Math.floor(Math.random() * 10000)}`;
-
-                // Add to Loro document using the data map
-                const dataMap = loroDoc.getMap('data');
-                dataMap.set(randomKey, randomValue);
-
-                console.log(`[addRandomProperty] Added to LoroDoc: ${randomKey}=${randomValue}`);
-            });
-
-            // --- REMOVED REFRESH LOGIC ---
-            // The Loro change handler will automatically update the content store 
-            // if the currently selected document was the one modified.
-            // const currentSelectedDoc = get(selectedDoc);
-            // if (currentSelectedDoc && currentSelectedDoc.pubKey === targetPubKey) {
-            // 	await this.loadDocumentContent(currentSelectedDoc);
-            // }
-            // ----------------------------
-
-            return true;
-        } catch (err) {
-            console.error('[addRandomProperty] Error:', err);
-            this.setError(err instanceof Error ? err.message : 'Failed to add random property');
-            return false;
-        }
-    }
-
-    /**
      * Create a consolidated snapshot by applying all updates
-     * @param pubKey Document public key
+     * @param pubKey Document public key (Now Required)
      * @returns The new snapshot CID or null if failed
      */
-    async createConsolidatedSnapshot(pubKey?: string): Promise<string | null> {
+    async createConsolidatedSnapshot(pubKey: string): Promise<string | null> { // Made pubKey required
+        this._setStatus({ loading: true });
+        this._setError(null);
         try {
-            const targetPubKey = pubKey || get(selectedDoc)?.pubKey;
-            if (!targetPubKey) {
-                this.setError('No document selected');
-                return null;
-            }
-
-            const doc = get(docs).find(d => d.pubKey === targetPubKey);
+            // --- Fetch doc metadata directly using getDocument ---
+            const doc = await this.getDocument(pubKey); // Fetch directly
             if (!doc) {
-                this.setError('Document not found');
-                return null;
+                throw new Error(`Document ${pubKey} not found for snapshot creation.`); // Throw error instead of setError
             }
+            // --------------------------------------------------
 
             // *** Capability Check ***
-            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
+            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null; // Still uses external store getter
             if (!canWrite(currentUser, doc)) {
-                this.setError('Permission denied: Cannot create snapshot for this document');
-                return null;
+                throw new Error('Permission denied: Cannot create snapshot for this document'); // Throw error
             }
             // *** End Capability Check ***
 
             // Check if document has updates to consolidate
             if (!doc.updateCids || doc.updateCids.length === 0) {
-                this.setError('No updates available to create a snapshot');
-                return null;
+                throw new Error('No updates available to create a snapshot'); // Throw error
             }
 
-            this.setStatus({ loading: true });
-
             // Get or create the LoroDoc instance with all updates applied
-            const loroDoc = await this.getOrCreateLoroDoc(targetPubKey);
+            // Use getLoroDoc which loads snapshot + updates
+            const loroDoc = await this.getLoroDoc(pubKey);
+            if (!loroDoc) {
+                throw new Error(`Could not load LoroDoc instance for ${pubKey}`);
+            }
 
             // Export as a new snapshot
             const snapshotData = loroDoc.export({ mode: 'snapshot' });
-
-            // Generate content hash for the snapshot
             const snapshotCid = await hashService.hashSnapshot(snapshotData);
 
             // Save snapshot binary
             const contentStorage = getContentStorage();
             await contentStorage.put(snapshotCid, snapshotData, {
                 type: CONTENT_TYPE_SNAPSHOT,
-                documentPubKey: targetPubKey
+                documentPubKey: pubKey // Use pubKey directly
             });
 
-            // Create updated doc with new snapshot and no updates
+            // Create updated doc metadata
             const updatedDoc: Docs = {
                 ...doc,
                 updatedAt: new Date().toISOString(),
-                snapshotCid,      // Update main snapshot CID
-                updateCids: [],   // Clear update CIDs since they're consolidated
+                snapshotCid,
+                updateCids: [], // Clear updates
                 localState: {
                     ...(doc.localState || {}),
-                    snapshotCid     // Mark new snapshot for syncing
+                    snapshotCid // Mark new snapshot for syncing
                 }
             };
 
             // Save updated document metadata
             const docsStorage = getDocsStorage();
-            await docsStorage.put(targetPubKey, new TextEncoder().encode(JSON.stringify(updatedDoc)));
+            await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDoc))); // Use pubKey directly
 
-            // Update the docs store
-            docs.update(docList => {
-                const index = docList.findIndex(d => d.pubKey === targetPubKey);
-                if (index !== -1) {
-                    docList[index] = updatedDoc;
-                }
-                return docList;
-            });
-
-            // Update selected doc if this is the current one
-            const currentSelectedDoc = get(selectedDoc);
-            if (currentSelectedDoc && currentSelectedDoc.pubKey === targetPubKey) {
-                selectedDoc.set({ ...updatedDoc }); // Force reactivity update
-                await this.loadDocumentContent(updatedDoc);
-            }
+            // Trigger general reactivity notifier
+            docChangeNotifier.update(n => n + 1);
 
             return snapshotCid;
         } catch (err) {
-            console.error('Error creating consolidated snapshot:', err);
-            this.setError(err instanceof Error ? err.message : 'Failed to create snapshot');
-            return null;
+            console.error(`Error creating consolidated snapshot for ${pubKey}:`, err);
+            this._setError(err instanceof Error ? err.message : 'Failed to create snapshot');
+            return null; // Return null on error as before
         } finally {
-            this.setStatus({ loading: false });
+            this._setStatus({ loading: false });
         }
     }
 
@@ -672,7 +430,10 @@ class HominioDB {
      */
     async getDocumentsWithLocalChanges(): Promise<Docs[]> {
         try {
-            const allDocs = get(docs);
+            // --- Fetch directly instead of using store ---
+            // const allDocs = get(docs); // Removed
+            const allDocs = await this.loadAllDocsReturn(); // Fetch directly
+            // --------------------------------------------
             return allDocs.filter(doc =>
                 doc.localState && (
                     doc.localState.snapshotCid ||
@@ -681,6 +442,7 @@ class HominioDB {
             );
         } catch (err) {
             console.error('Error getting documents with local changes:', err);
+            this._setError(`Failed to get pending changes: ${err instanceof Error ? err.message : String(err)}`);
             return [];
         }
     }
@@ -695,15 +457,15 @@ class HominioDB {
         updateCids?: string[]
     }): Promise<void> {
         try {
-            // Get the document metadata
-            const allDocs = get(docs);
-            const docIndex = allDocs.findIndex(d => d.pubKey === pubKey);
+            // --- Fetch directly instead of using store ---
+            // const allDocs = get(docs); // Removed
+            // const docIndex = allDocs.findIndex(d => d.pubKey === pubKey); // Removed
+            const doc = await this.getDocument(pubKey); // Fetch directly
+            // --------------------------------------------
 
-            if (docIndex === -1) {
-                throw new Error(`Document ${pubKey} not found`);
+            if (!doc) { // Check if doc was found
+                throw new Error(`Document ${pubKey} not found for clearing local changes`);
             }
-
-            const doc = allDocs[docIndex];
 
             // Skip if no local state
             if (!doc.localState) {
@@ -711,8 +473,6 @@ class HominioDB {
             }
 
             let updatedDoc: Docs;
-
-            // Create new local state object
             const newLocalState = { ...doc.localState };
 
             // Clear snapshot if needed
@@ -730,12 +490,10 @@ class HominioDB {
             // Check if localState should be removed entirely
             if (!newLocalState.snapshotCid &&
                 (!newLocalState.updateCids || newLocalState.updateCids.length === 0)) {
-                // Create a new object without the localState property
                 // eslint-disable-next-line @typescript-eslint/no-unused-vars
                 const { localState, ...docWithoutLocalState } = doc;
                 updatedDoc = docWithoutLocalState;
             } else {
-                // Keep the updated localState
                 updatedDoc = { ...doc, localState: newLocalState };
             }
 
@@ -743,12 +501,13 @@ class HominioDB {
             const docsStorage = getDocsStorage();
             await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDoc)));
 
-            // Update the store
-            allDocs[docIndex] = updatedDoc;
-            docs.set([...allDocs]);
+            // Trigger general reactivity notifier
+            docChangeNotifier.update(n => n + 1);
+
         } catch (err) {
-            console.error('Error clearing local changes:', err);
-            throw err;
+            console.error(`Error clearing local changes for ${pubKey}:`, err);
+            this._setError(`Failed to clear local changes: ${err instanceof Error ? err.message : String(err)}`);
+            throw err; // Re-throw error
         }
     }
 
@@ -763,14 +522,17 @@ class HominioDB {
         updateCids?: string[]
     }): Promise<void> {
         try {
-            const allDocs = get(docs);
-            const docIndex = allDocs.findIndex(d => d.pubKey === pubKey);
-            if (docIndex === -1) {
+            // --- Fetch directly instead of using store ---
+            // const allDocs = get(docs); // Removed
+            // const docIndex = allDocs.findIndex(d => d.pubKey === pubKey); // Removed
+            const originalDoc = await this.getDocument(pubKey); // Fetch directly
+            // --------------------------------------------
+
+            if (!originalDoc) { // Check if doc exists
                 console.warn(`[updateDocStateAfterSync] Doc ${pubKey} not found.`);
                 return;
             }
 
-            const originalDoc = allDocs[docIndex];
             const updatedDoc = { ...originalDoc }; // Create a mutable copy
             let needsSave = false;
 
@@ -819,20 +581,14 @@ class HominioDB {
                 const docsStorage = getDocsStorage();
                 await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDoc)));
 
-                // Update the store
-                allDocs[docIndex] = updatedDoc;
-                docs.set([...allDocs]);
+                // Trigger general reactivity notifier
+                docChangeNotifier.update(n => n + 1);
                 console.log(`[updateDocStateAfterSync] Saved updated state for ${pubKey}`);
-
-                // If this is the selected document, update it too
-                const currentSelected = get(selectedDoc);
-                if (currentSelected && currentSelected.pubKey === pubKey) {
-                    selectedDoc.set({ ...updatedDoc });
-                }
             }
 
         } catch (err) {
-            console.error('[updateDocStateAfterSync] Error:', err);
+            console.error(`[updateDocStateAfterSync] Error updating state for ${pubKey}:`, err);
+            this._setError(`Failed sync state update: ${err instanceof Error ? err.message : String(err)}`);
             // Don't throw, log the error
         }
     }
@@ -848,7 +604,7 @@ class HominioDB {
         owner?: string
     } = {}): Promise<{ pubKey: string, snapshotCid: string }> {
         try {
-            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
+            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null; // Still uses external store getter
             if (!currentUser) {
                 throw new Error("Permission denied: User must be logged in to import content.");
             }
@@ -910,13 +666,15 @@ class HominioDB {
             const docsStorage = getDocsStorage();
             await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(newDoc)));
 
-            // Update the docs store
-            docs.update(docList => [newDoc, ...docList]);
+            // Trigger general reactivity notifier
+            docChangeNotifier.update(n => n + 1);
 
             return { pubKey, snapshotCid };
         } catch (err) {
             console.error('Error importing content:', err);
-            this.setError(err instanceof Error ? err.message : 'Failed to import content');
+            // Removed setError as it used a store
+            // this.setError(err instanceof Error ? err.message : 'Failed to import content');
+            this._setError(err instanceof Error ? err.message : 'Failed to import content'); // Use internal method
             throw err;
         }
     }
@@ -929,45 +687,61 @@ class HominioDB {
      */
     async exportContent(pubKey: string, options: { mode?: 'snapshot' | 'update' } = {}): Promise<Uint8Array> {
         try {
-            const doc = get(docs).find(d => d.pubKey === pubKey);
+            // --- Fetch directly instead of using store ---
+            // const doc = get(docs).find(d => d.pubKey === pubKey); // Removed
+            const doc = await this.getDocument(pubKey); // Fetch directly
+            // --------------------------------------------
             if (!doc) {
-                throw new Error('Document not found');
+                throw new Error(`Document ${pubKey} not found for export`);
             }
 
             // *** Capability Check ***
-            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
+            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null; // Still uses external store getter
             if (!canRead(currentUser, doc)) {
                 throw new Error('Permission denied: Cannot read this document to export');
             }
             // *** End Capability Check ***
 
             // Get the LoroDoc instance
-            const loroDoc = await this.getOrCreateLoroDoc(pubKey);
+            const loroDoc = await this.getLoroDoc(pubKey); // Use getLoroDoc which loads if needed
+            if (!loroDoc) {
+                throw new Error(`Could not load LoroDoc instance for export: ${pubKey}`);
+            }
 
             // Export based on requested mode
             return loroDoc.export({ mode: options.mode || 'snapshot' });
         } catch (err) {
-            console.error('Error exporting content:', err);
-            this.setError(err instanceof Error ? err.message : 'Failed to export content');
+            console.error(`Error exporting content for ${pubKey}:`, err);
+            this._setError(err instanceof Error ? err.message : 'Failed to export content'); // Use internal method
             throw err;
         }
     }
 
     /**
-     * Set status
+     * Set internal status flags
      * @param newStatus Status update
      */
-    private setStatus(newStatus: Partial<{ loading: boolean; error: boolean; creatingDoc: boolean }>): void {
-        status.update(s => ({ ...s, ...newStatus }));
+    private _setStatus(newStatus: Partial<{ loading: boolean; creatingDoc: boolean }>): void {
+        // status.update(s => ({ ...s, ...newStatus })); // Removed store update
+        if (newStatus.loading !== undefined) this._isLoading = newStatus.loading;
+        if (newStatus.creatingDoc !== undefined) this._isCreatingDoc = newStatus.creatingDoc;
+        // Consider adding a notifier update here if UI needs to react to loading states
     }
 
     /**
-     * Set error message
+     * Set internal error message
      * @param message Error message
      */
-    private setError(message: string | null): void {
-        error.set(message);
+    private _setError(message: string | null): void {
+        // error.set(message); // Removed store update
+        this._lastError = message;
+        // Consider adding a notifier update here if UI needs to react to errors
     }
+
+    // Public getters for internal state (optional, if needed externally)
+    public get isLoading(): boolean { return this._isLoading; }
+    public get isCreatingDoc(): boolean { return this._isCreatingDoc; }
+    public get lastError(): string | null { return this._lastError; }
 
     /**
      * Delete a document
@@ -975,56 +749,44 @@ class HominioDB {
      * @returns True if successful, otherwise throws an error
      */
     async deleteDocument(pubKey: string): Promise<boolean> {
+        this._setError(null); // Clear error
         try {
-            const allDocs = get(docs);
-            const docIndex = allDocs.findIndex(d => d.pubKey === pubKey);
+            // --- Fetch directly instead of using store ---
+            // const allDocs = get(docs); // Removed
+            // const docIndex = allDocs.findIndex(d => d.pubKey === pubKey); // Removed
+            const doc = await this.getDocument(pubKey); // Fetch directly
+            // --------------------------------------------
 
-            if (docIndex === -1) {
-                throw new Error(`Document ${pubKey} not found`);
+            if (!doc) { // Check if doc exists
+                throw new Error(`Document ${pubKey} not found for deletion`);
             }
-            const doc = allDocs[docIndex];
 
             // *** Capability Check ***
-            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
+            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null; // Still uses external store getter
             if (!canDelete(currentUser, doc)) {
                 throw new Error('Permission denied: Cannot delete this document');
             }
             // *** End Capability Check ***
 
-            // Remove from the docs store
-            allDocs.splice(docIndex, 1);
-            docs.set([...allDocs]);
-
-            // Clear selected doc if it's the one being deleted
-            const currentSelected = get(selectedDoc);
-            if (currentSelected && currentSelected.pubKey === pubKey) {
-                selectedDoc.set(null);
-                docContent.set({
-                    content: null,
-                    loading: false,
-                    error: null,
-                    sourceCid: null,
-                    isLocalSnapshot: false
-                });
-            }
-
             // Close and cleanup any active LoroDoc instance
             if (activeLoroDocuments.has(pubKey)) {
                 activeLoroDocuments.delete(pubKey);
+                console.log(`[deleteDocument] Removed active LoroDoc instance for ${pubKey}`);
             }
 
             // Delete from local storage
             const docsStorage = getDocsStorage();
             await docsStorage.delete(pubKey);
 
-            // Note: We don't delete content CIDs here as they might be reused
-            // The server handles content cleanup based on reference checks
+            // Trigger general reactivity notifier
+            docChangeNotifier.update(n => n + 1);
 
+            console.log(`[deleteDocument] Deleted document ${pubKey} from storage.`);
             return true;
         } catch (err) {
-            console.error('Error deleting document:', err);
-            this.setError(`Failed to delete document: ${err instanceof Error ? err.message : String(err)}`);
-            throw err;
+            console.error(`Error deleting document ${pubKey}:`, err);
+            this._setError(`Failed to delete document: ${err instanceof Error ? err.message : String(err)}`); // Use internal method
+            throw err; // Re-throw error
         }
     }
 
@@ -1178,10 +940,11 @@ class HominioDB {
      * @param schemaPubKey PubKey of the schema this entity conforms to (without the '@').
      * @param initialPlaces Initial data for the entity's 'places' map.
      * @param ownerId The ID of the user creating the entity.
+     * @param options Optional data like name.
      * @returns The metadata (Docs object) of the newly created entity document.
      * @throws Error if creation fails.
      */
-    public async createEntity(schemaPubKey: string, initialPlaces: Record<string, LoroJsonValue>, ownerId: string): Promise<Docs> {
+    public async createEntity(schemaPubKey: string, initialPlaces: Record<string, LoroJsonValue>, ownerId: string, options: { name?: string } = {}): Promise<Docs> {
         const pubKey: string = docIdService.generateDocId();
         const now: string = new Date().toISOString();
 
@@ -1189,6 +952,7 @@ class HominioDB {
             const loroDoc: LoroDoc = await this.getOrCreateLoroDoc(pubKey);
             const meta: LoroMap = loroDoc.getMap('meta');
             meta.set('schema', `@${schemaPubKey}`);
+            if (options.name) meta.set('name', options.name);
 
             // Correctly create the nested places map
             const dataMap: LoroMap = loroDoc.getMap('data');
@@ -1203,7 +967,7 @@ class HominioDB {
             }
 
             const snapshot: Uint8Array = loroDoc.export({ mode: 'snapshot' });
-            const snapshotCid: string = await hashService.hashSnapshot(snapshot);
+            const snapshotCid = await hashService.hashSnapshot(snapshot);
             const contentStorage = getContentStorage();
             await contentStorage.put(snapshotCid, snapshot, {
                 type: 'snapshot',
@@ -1215,6 +979,7 @@ class HominioDB {
                 pubKey,
                 owner: ownerId,
                 updatedAt: now,
+                snapshotCid,
                 updateCids: [],
                 localState: {
                     snapshotCid: snapshotCid
@@ -1222,8 +987,10 @@ class HominioDB {
             };
             const docsStorage = getDocsStorage();
             await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(newDoc)));
-            docs.update(currentDocs => [...currentDocs, newDoc]);
             activeLoroDocuments.set(pubKey, loroDoc);
+
+            // Explicitly trigger reactivity *after* metadata is saved
+            docChangeNotifier.update(n => n + 1);
 
             console.log(`[createEntity] Created entity ${pubKey} with schema @${schemaPubKey}`);
             return newDoc;
@@ -1289,190 +1056,17 @@ class HominioDB {
             const docsStorage = getDocsStorage();
             await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDocData)));
 
-            // 6. Update Svelte store (for local UI consistency)
-            docs.update(currentDocs => {
-                const index = currentDocs.findIndex(d => d.pubKey === pubKey);
-                if (index !== -1) {
-                    currentDocs[index] = updatedDocData;
-                    return [...currentDocs];
-                }
-                return currentDocs; // Should not happen if getDocument succeeded
-            });
-            // Update selectedDoc store if it's the current one
-            const currentSelected = get(selectedDoc);
-            if (currentSelected && currentSelected.pubKey === pubKey) {
-                selectedDoc.set({ ...updatedDocData });
-            }
+            // Trigger general reactivity notifier
+            docChangeNotifier.update(n => n + 1);
 
             console.log(`[persistLoroUpdate] Appended update CID ${updateCid} to doc ${pubKey}`);
             return updateCid;
 
         } catch (err) {
             console.error(`[persistLoroUpdate] Failed for doc ${pubKey}:`, err);
-            throw new Error(`Failed to persist update: ${err instanceof Error ? err.message : 'Unknown error'}`);
+            this._setError(`Failed to persist update: ${err instanceof Error ? err.message : 'Unknown error'}`);
+            throw err; // Re-throw error
         }
-    }
-
-    /**
-     * Retrieves the full JSON representation of a document by its pubKey.
-     * Handles LoroDoc loading and conversion to JSON.
-     * @param pubKey The public key of the document.
-     * @returns The document content as a JSON object, or null if not found or error.
-     */
-    public async getDocumentDataAsJson(pubKey: string): Promise<Record<string, unknown> | null> {
-        try {
-            const loroDoc = await this.getLoroDoc(pubKey);
-            if (!loroDoc) {
-                return null;
-            }
-            // Add pubKey to the JSON representation for consistency
-            const jsonData = loroDoc.toJSON() as Record<string, unknown>;
-            jsonData.pubKey = pubKey;
-            return jsonData;
-        } catch (err) {
-            console.error(`[getDocumentDataAsJson] Error fetching/parsing doc ${pubKey}:`, err);
-            return null;
-        }
-    }
-
-    /**
-     * Retrieves the full JSON representation of a schema document by its reference (@pubKey).
-     * @param schemaRef The schema reference string (e.g., "@0x...").
-     * @returns The schema content as a JSON object, or null if not found or error.
-     */
-    public async getSchemaDataAsJson(schemaRef: string): Promise<Record<string, unknown> | null> {
-        if (!schemaRef || !schemaRef.startsWith('@')) {
-            console.error(`[getSchemaDataAsJson] Invalid schema reference format: ${schemaRef}`);
-            return null;
-        }
-        const schemaPubKey = schemaRef.substring(1);
-        // Use getDocumentDataAsJson to leverage its logic and pubKey injection
-        return this.getDocumentDataAsJson(schemaPubKey);
-    }
-
-    /**
-     * Updates the 'places' map of an entity document.
-     * Handles LoroDoc loading, applying changes, validation (basic structure), snapshotting/updating, and persistence.
-     * @param pubKey The public key of the entity document to update.
-     * @param placesUpdate An object containing the key-value pairs to set in the 'places' map.
-     * @returns The updated Docs metadata object.
-     * @throws Error if the document is not found, update fails, or permission denied.
-     */
-    public async updateEntityPlaces(
-        pubKey: string,
-        placesUpdate: Record<string, LoroJsonValue>
-    ): Promise<Docs> {
-        // Get current metadata for capability check and return value
-        const docMeta = await this.getDocument(pubKey);
-        if (!docMeta) {
-            throw new Error(`Document ${pubKey} not found for update.`);
-        }
-
-        // *** Capability Check ***
-        const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
-        if (!canWrite(currentUser, docMeta)) {
-            throw new Error(`Permission denied: Cannot write to document ${pubKey}`);
-        }
-        // *** End Capability Check ***
-
-        // Get the active LoroDoc instance (ensures it exists and is subscribed)
-        const loroDoc = await this.getLoroDoc(pubKey);
-        if (!loroDoc) {
-            throw new Error(`Failed to load LoroDoc for update: ${pubKey}`);
-        }
-
-        // Get the data map, then the places map (create if needed)
-        const dataMap = loroDoc.getMap('data');
-        let placesMap: LoroMap;
-        const potentialPlacesMap = dataMap.get('places');
-        if (potentialPlacesMap instanceof LoroMap) {
-            placesMap = potentialPlacesMap;
-        } else {
-            placesMap = dataMap.setContainer('places', new LoroMap());
-            console.log(`[updateEntityPlaces] Created 'places' map for doc ${pubKey}`);
-        }
-
-        // Apply updates to the LoroMap (this triggers Loro change event)
-        let changesMade = false;
-        for (const key in placesUpdate) {
-            if (Object.prototype.hasOwnProperty.call(placesUpdate, key)) {
-                // TODO: Add check if value actually changed? Loro might handle this internally.
-                placesMap.set(key, placesUpdate[key]);
-                changesMade = true; // Assume change if key exists in update
-            }
-        }
-
-        if (!changesMade) {
-            console.log(`[updateEntityPlaces] No effective changes provided for doc ${pubKey}. Returning current metadata.`);
-            return docMeta; // Return original metadata if no changes applied
-        }
-
-        // --- REMOVED PERSISTENCE & SVELTE STORE UPDATES ---
-        // The Loro change handler (`_handleLoroChange`) will now handle:
-        // 1. Exporting the update (only if byteLength > 0).
-        // 2. Persisting the update via `persistLoroUpdate`.
-        // 3. Updating relevant Svelte stores.
-        // ---------------------------------------------------- 
-
-        console.log(`[updateEntityPlaces] Applied Loro changes for doc ${pubKey}. Event handler will persist.`);
-
-        // Return the metadata *before* the event handler potentially updates it.
-        // The caller (HQL) might need this, and the UI will update reactively anyway.
-        return docMeta;
-    }
-
-    // --- Loro Event Handling --- 
-    private async _handleLoroChange(pubKey: string, loroDoc: LoroDoc) {
-        console.log(`[Loro Event] Handling change for doc: ${pubKey}`);
-
-        // 1. Increment global change notifier
-        docChangeNotifier.update(n => n + 1);
-
-        // 2. Fetch latest metadata (as it might have changed, e.g., updatedAt)
-        // Note: This reads from storage. We might need a cached/in-memory version 
-        // if direct Loro event doesn't provide enough context for metadata updates.
-        const docMeta = await this.getDocument(pubKey);
-        if (!docMeta) {
-            console.warn(`[Loro Event] Metadata not found for changed doc ${pubKey}. Cannot update stores.`);
-            return;
-        }
-
-        // Update updatedAt timestamp in the metadata object (reflecting the change)
-        // This assumes the handler runs shortly after the change.
-        // A more robust way might involve Loro'sLamport timestamps if available.
-        docMeta.updatedAt = new Date().toISOString();
-
-        // 3. Update the main 'docs' store
-        docs.update(currentDocs => {
-            const index = currentDocs.findIndex(d => d.pubKey === pubKey);
-            if (index !== -1) {
-                currentDocs[index] = { ...docMeta }; // Update with potentially new metadata
-                return [...currentDocs]; // Return new array reference
-            } else {
-                // Doc changed but wasn't in the list? Add it? Or log error?
-                console.warn(`[Loro Event] Changed doc ${pubKey} not found in docs store.`);
-                return currentDocs; // Return original array
-            }
-        });
-
-        // 4. Update 'selectedDoc' store if it's the one that changed
-        const currentSelected = get(selectedDoc);
-        if (currentSelected && currentSelected.pubKey === pubKey) {
-            selectedDoc.set({ ...docMeta }); // Update selected doc with new metadata
-
-            // 5. Reload content view for the selected document
-            // Pass the *updated* metadata. loadDocumentContent reads from the *live* loroDoc.
-            await this.loadDocumentContent(docMeta);
-        }
-
-        // 6. Trigger Asynchronous Persistence (Decoupled)
-        // This should ideally be handled carefully to avoid race conditions 
-        // and ensure atomicity if possible. For now, a simple async call.
-        this._persistLoroUpdateAsync(pubKey, loroDoc).catch(err => {
-            console.error(`[Loro Event] Background persistence failed for ${pubKey}:`, err);
-            // Optionally notify user or set an error state?
-            this.setError(`Background save failed for ${pubKey}`);
-        });
     }
 
     // Helper for async persistence triggered by Loro event
@@ -1480,7 +1074,7 @@ class HominioDB {
         // Removed redundant try...catch, caller handles errors
         const updateData = loroDoc.export({ mode: 'update' });
         if (updateData.byteLength > 0) {
-            // Call the existing persistence logic (which also updates metadata)
+            // Call the existing persistence logic (which also updates metadata & triggers notifier)
             await this.persistLoroUpdate(pubKey, updateData);
             console.log(`[Loro Event] Background persistence successful for ${pubKey}.`);
         } else {
@@ -1488,6 +1082,105 @@ class HominioDB {
         }
     }
     // -------------------------
+
+    // --- NEW METHODS FOR SYNC SERVICE ---
+
+    /**
+     * Retrieves raw binary content from the content store.
+     * @param cid Content ID.
+     * @returns Uint8Array or null if not found.
+     */
+    public async getRawContent(cid: string): Promise<Uint8Array | null> {
+        try {
+            const contentStorage = getContentStorage();
+            return await contentStorage.get(cid);
+        } catch (err) {
+            console.error(`[getRawContent] Error fetching CID ${cid}:`, err);
+            return null;
+        }
+    }
+
+    /**
+     * Saves raw binary content to the content store.
+     * @param cid Content ID.
+     * @param data Binary data.
+     * @param meta Metadata (e.g., { type: 'snapshot' | 'update', documentPubKey: string }).
+     */
+    public async saveRawContent(cid: string, data: Uint8Array, meta: Record<string, unknown>): Promise<void> {
+        try {
+            const contentStorage = getContentStorage();
+            // Check if exists first? Optional optimization.
+            // const exists = await contentStorage.get(cid);
+            // if (!exists) {
+            await contentStorage.put(cid, data, meta);
+            console.log(`[saveRawContent] Saved content ${cid}`);
+            // } else {
+            // 	console.log(`[saveRawContent] Content ${cid} already exists.`);
+            // }
+        } catch (err) {
+            console.error(`[saveRawContent] Error saving CID ${cid}:`, err);
+            throw new Error(`Failed to save raw content: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        }
+    }
+
+    /**
+     * Checks for the existence of multiple content CIDs efficiently.
+     * @param cids Array of Content IDs.
+     * @returns A Set containing the keys that exist.
+     */
+    public async batchCheckContentExists(cids: string[]): Promise<Set<string>> {
+        try {
+            const contentStorage = getContentStorage();
+            return await contentStorage.batchExists(cids);
+        } catch (err) {
+            console.error(`[batchCheckContentExists] Error checking CIDs:`, err);
+            return new Set<string>(); // Return empty set on error
+        }
+    }
+
+    /**
+     * Saves document metadata received from the server during a pull.
+     * Merges with local state, updates storage, updates Svelte stores, and triggers notifier.
+     * @param serverDocData The document metadata received from the server.
+     */
+    public async saveSyncedDocument(serverDocData: Docs): Promise<void> {
+        const pubKey = serverDocData.pubKey;
+        console.log(`[saveSyncedDocument] Processing pulled data for doc ${pubKey}`);
+        try {
+            // 1. Fetch local version for state merging
+            const localDoc = await this.getDocument(pubKey); // Uses storage directly
+
+            // 2. Merge state
+            const mergedDoc: Docs = { ...serverDocData }; // Start with server state
+
+            if (localDoc?.localState?.updateCids && localDoc.localState.updateCids.length > 0) {
+                // Preserve local *updates*, discard local *snapshot*
+                if (!mergedDoc.localState) mergedDoc.localState = {};
+                mergedDoc.localState.updateCids = [...(localDoc.localState.updateCids ?? [])];
+                mergedDoc.localState.snapshotCid = undefined; // Ensure local snapshot ref is gone
+                console.log(`[saveSyncedDocument] Preserved ${localDoc.localState.updateCids.length} local updates for ${pubKey}.`);
+            } else {
+                // No local updates to preserve, ensure localState field is removed
+                delete mergedDoc.localState;
+            }
+
+            // Add/update updatedAt timestamp (reflects sync time)
+            mergedDoc.updatedAt = new Date().toISOString();
+
+            // 3. Save merged data to storage
+            const docsStorage = getDocsStorage();
+            await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(mergedDoc)));
+
+            console.log(`[saveSyncedDocument] Successfully saved and notified for doc ${pubKey}`);
+
+        } catch (err) {
+            console.error(`[saveSyncedDocument] Error processing doc ${pubKey}:`, err);
+            // Optionally re-throw or handle differently
+            throw err;
+        }
+    }
+
+    // ---------------------------------
 }
 
 // Create and export singleton instance

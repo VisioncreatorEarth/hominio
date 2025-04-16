@@ -27,6 +27,12 @@ A modern web application built with cutting-edge technologies for real-time coll
 - Node.js 18+
 - A Neon PostgreSQL database
 
+### Repomix whole git repository
+
+```bash
+bunx repomix
+```
+
 ### Installation
 
 1. Clone the repository:

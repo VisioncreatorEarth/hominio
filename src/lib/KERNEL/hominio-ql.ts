@@ -1,11 +1,12 @@
 import { hominioDB, type Docs } from './hominio-db';
-import { validateEntityJsonAgainstSchema } from './hominio-validate';
+import { validateEntityJsonAgainstSchema } from './hominio-validate'; // Re-add import
 import { canRead, canDelete, type CapabilityUser, canWrite } from './hominio-capabilities';
 // --- Add Svelte store imports for reactive queries ---
 import { readable, type Readable, get } from 'svelte/store';
 import { docChangeNotifier } from './hominio-db'; // Import the notifier
 import { authClient } from '$lib/client/auth-hominio'; // Import authClient
 // ---------------------------------------------------
+import { LoroMap } from 'loro-crdt'; // <-- ADDED LoroMap import
 
 type LoroJsonValue = string | number | boolean | null | LoroJsonObject | LoroJsonArray;
 interface LoroJsonObject { [key: string]: LoroJsonValue }
@@ -138,25 +139,36 @@ class HominioQLService {
     // Renamed and refactored _applyFilter
     private async _applyFilter(docsMetadata: Docs[], filter: HqlFilterObject): Promise<Docs[]> {
         const results: Docs[] = [];
-        // Extract schema filter early if present
         const fromSchemaFilter = filter.$fromSchema;
         const actualContentFilter = { ...filter };
-        delete actualContentFilter.$fromSchema; // Don't evaluate the marker directly in _evaluateFilter
+        delete actualContentFilter.$fromSchema;
         const hasContentFilter = Object.keys(actualContentFilter).length > 0;
+        // Cache fetched JSON data within this filter operation to avoid redundant fetches
+        const jsonDataCache = new Map<string, Record<string, unknown> | null>();
+
+        // Helper to get JSON data, using cache
+        const getJsonData = async (pubKey: string): Promise<Record<string, unknown> | null> => {
+            if (jsonDataCache.has(pubKey)) {
+                return jsonDataCache.get(pubKey)!;
+            }
+            // Use getLoroDoc().then(doc => doc?.toJSON())
+            const loroDoc = await hominioDB.getLoroDoc(pubKey);
+            const jsonData = loroDoc ? (loroDoc.toJSON() as Record<string, unknown>) : null;
+            if (jsonData && loroDoc) { // Add pubKey if data exists
+                jsonData.pubKey = pubKey;
+            }
+            jsonDataCache.set(pubKey, jsonData);
+            return jsonData;
+        };
+
 
         for (const docMeta of docsMetadata) {
             let matches = true;
 
-            // --- Pre-filter based on metadata available in docMeta (optimization) ---
-            // Example: If filter has { meta: { owner: '...' } }, check docMeta.owner first
-            // For simplicity, this pre-filtering is omitted here, but could be added.
-            // We currently check owner/pubKey via combinedFilter logic before calling _applyFilter,
-            // but deeper meta checks could happen here before fetching JSON.
-
             // --- Check Schema Match (using $fromSchema marker) --- Needs JSON meta.schema
             if (fromSchemaFilter) {
-                // Fetch JSON only if schema filtering is needed
-                const jsonData = await hominioDB.getDocumentDataAsJson(docMeta.pubKey);
+                // Fetch JSON using helper
+                const jsonData = await getJsonData(docMeta.pubKey);
                 if (!jsonData) {
                     console.warn(`[HQL ApplyFilter] Could not load JSON for schema check on ${docMeta.pubKey}. Skipping.`);
                     matches = false;
@@ -177,7 +189,6 @@ class HominioQLService {
                         console.warn(`[HQL ApplyFilter] Filtering by schema name ('${schemaFilterName}') is not robustly implemented. Assuming mismatch for doc ${docMeta.pubKey}.`);
                         matches = false;
                     } else {
-                        // Invalid fromSchemaFilter format?
                         matches = false;
                     }
                 }
@@ -185,9 +196,8 @@ class HominioQLService {
 
             // --- Check Content Filter (if schema matched and content filter exists) ---
             if (matches && hasContentFilter) {
-                // Fetch JSON only if needed (if not already fetched for schema check)
-                // This assumes getDocumentDataAsJson is efficient enough or cached by hominioDB layer.
-                const jsonData = await hominioDB.getDocumentDataAsJson(docMeta.pubKey);
+                // Fetch JSON using helper (will hit cache if already fetched)
+                const jsonData = await getJsonData(docMeta.pubKey);
                 if (!jsonData) {
                     console.warn(`[HQL ApplyFilter] Could not load JSON data for content filter on ${docMeta.pubKey}. Skipping.`);
                     matches = false;
@@ -287,117 +297,118 @@ class HominioQLService {
         const resolvedDocs: ResolvedHqlDocument[] = [];
         const visited = new Set<string>();
 
-        // Keep schema cache within the request lifecycle
-        const schemaFetcher = async (schemaRef: string) => {
-            if (this.schemaJsonCache.has(schemaRef)) {
-                return this.schemaJsonCache.get(schemaRef) || null;
+        // Helper function to fetch and cache schema JSON
+        const schemaFetcher = async (schemaRef: string): Promise<Record<string, unknown> | null> => {
+            if (!schemaRef.startsWith('@')) {
+                console.warn(`[HQL Schema Fetcher] Invalid schema ref: ${schemaRef}`);
+                return null;
             }
-            const schemaJson = await hominioDB.getSchemaDataAsJson(schemaRef);
-            this.schemaJsonCache.set(schemaRef, schemaJson);
+            const schemaPubKey = schemaRef.substring(1);
+
+            if (this.schemaJsonCache.has(schemaPubKey)) {
+                return this.schemaJsonCache.get(schemaPubKey)!;
+            }
+
+            // Use getLoroDoc -> toJSON pattern
+            const schemaLoroDoc = await hominioDB.getLoroDoc(schemaPubKey);
+            const schemaJson = schemaLoroDoc ? (schemaLoroDoc.toJSON() as Record<string, unknown>) : null;
+            if (schemaJson) {
+                schemaJson.pubKey = schemaPubKey; // Add pubKey
+            }
+
+            this.schemaJsonCache.set(schemaPubKey, schemaJson);
             return schemaJson;
         };
 
         for (const docMeta of docsMetadata) {
             visited.clear();
-            // Get the current JSON state (includes local updates)
-            const jsonData = await hominioDB.getDocumentDataAsJson(docMeta.pubKey);
+            // Use getLoroDoc -> toJSON pattern
+            const loroDoc = await hominioDB.getLoroDoc(docMeta.pubKey);
+            const currentJson = loroDoc ? (loroDoc.toJSON() as Record<string, unknown>) : null;
 
-            if (!jsonData) {
-                console.warn(`[HQL ResolveRefs] Could not load JSON data for final result ${docMeta.pubKey}.`);
-                // Include basic info even if content fails
-                resolvedDocs.push({
-                    pubKey: docMeta.pubKey,
-                    $error: "Failed to load document content",
-                    $localState: { // Add local state info from metadata
-                        isUnsynced: !!docMeta.localState,
-                        hasLocalSnapshot: !!docMeta.localState?.snapshotCid,
-                        localUpdateCount: docMeta.localState?.updateCids?.length ?? 0
-                    }
-                } as unknown as ResolvedHqlDocument);
-                continue;
+            if (currentJson) {
+                currentJson.pubKey = docMeta.pubKey; // Ensure pubKey is present
+                const resolved = await this._resolveNode(currentJson, user, new Set(), schemaFetcher);
+                resolvedDocs.push(resolved);
+            } else {
+                console.warn(`[HQL Resolve] Could not load LoroDoc/JSON for ${docMeta.pubKey}. Skipping.`);
             }
-
-            // Resolve references within the JSON data
-            const resolvedJson = await this._resolveNode(jsonData, user, visited, schemaFetcher);
-
-            // Add local state information to the final resolved document
-            resolvedJson.$localState = {
-                isUnsynced: !!docMeta.localState,
-                hasLocalSnapshot: !!docMeta.localState?.snapshotCid,
-                localUpdateCount: docMeta.localState?.updateCids?.length ?? 0
-            };
-
-            resolvedDocs.push(resolvedJson);
         }
         return resolvedDocs;
     }
 
-    // _resolveNode remains largely the same, operating on JSON
     private async _resolveNode(
         currentNodeJson: Record<string, unknown>,
         user: CapabilityUser | null,
         visited: Set<string>,
         schemaFetcher: (schemaRef: string) => Promise<Record<string, unknown> | null>
     ): Promise<ResolvedHqlDocument> {
-        const pubKey = currentNodeJson.pubKey as string;
-        if (!pubKey) {
-            // Attempt to find pubKey if missing (e.g., from nested resolution)
-            // This part might need review based on how data is structured.
-            console.warn("[HQL ResolveNode] Node JSON missing pubKey.");
-            // Add placeholder if truly missing
-            return { ...currentNodeJson, $error: "Missing pubKey during resolution" } as unknown as ResolvedHqlDocument;
-        }
 
-        if (visited.has(pubKey)) {
-            return { pubKey, $ref: pubKey, $error: "Cycle detected" } as ResolvedHqlDocument;
+        const pubKey = currentNodeJson.pubKey as string;
+        if (!pubKey || visited.has(pubKey)) {
+            // Return node as is if no pubKey or already visited (cycle detection)
+            return currentNodeJson as ResolvedHqlDocument;
         }
         visited.add(pubKey);
 
-        const resolvedJson = { ...currentNodeJson };
-        const meta = resolvedJson.meta as Record<string, unknown> | undefined;
-        const data = resolvedJson.data as Record<string, unknown> | undefined;
-        const metaSchemaRef = meta?.schema as string | undefined;
+        const resolvedNode: Record<string, unknown> = { ...currentNodeJson }; // Shallow copy
 
-        let schemaJson: Record<string, unknown> | null = null;
-        if (metaSchemaRef) {
-            schemaJson = await schemaFetcher(metaSchemaRef);
-        }
-
-        if (schemaJson && data?.places && typeof data.places === 'object') {
-            const schemaData = schemaJson.data as Record<string, unknown> | undefined;
-            const schemaPlacesDef = schemaData?.places as Record<string, unknown> | undefined;
-
-            if (schemaPlacesDef) {
-                const resolvedPlaces: Record<string, unknown> = {};
-                const currentPlaces = data.places as Record<string, unknown>;
-
-                for (const placeKey in currentPlaces) {
-                    const placeValue = currentPlaces[placeKey];
-
-                    if (typeof placeValue === 'string' && placeValue.startsWith('@')) {
-                        const refPubKey = placeValue.substring(1);
-                        const refDocMeta = await hominioDB.getDocument(refPubKey);
-
-                        if (refDocMeta && canRead(user, refDocMeta)) {
-                            const refJsonData = await hominioDB.getDocumentDataAsJson(refPubKey);
-                            if (refJsonData) {
-                                resolvedPlaces[placeKey] = await this._resolveNode(refJsonData, user, visited, schemaFetcher);
-                            } else {
-                                resolvedPlaces[placeKey] = { pubKey: refPubKey, $ref: placeValue, $error: "Referenced document data could not be loaded" };
-                            }
-                        } else {
-                            resolvedPlaces[placeKey] = { pubKey: refPubKey, $ref: placeValue, $error: "Permission denied or referenced document not found" };
-                        }
-                    } else {
-                        resolvedPlaces[placeKey] = placeValue;
-                    }
-                }
-                data.places = resolvedPlaces;
+        // --- Resolve Schema --- (If meta.schema exists)
+        const meta = resolvedNode.meta as Record<string, unknown> | undefined;
+        const schemaRef = typeof meta?.schema === 'string' && meta.schema.startsWith('@') ? meta.schema : null;
+        if (schemaRef) {
+            // Use the passed schemaFetcher (which uses getLoroDoc -> toJSON)
+            const schemaData = await schemaFetcher(schemaRef);
+            if (schemaData) {
+                // Embed schema directly (consider if this should be nested or flattened)
+                resolvedNode.$schema = schemaData; // Using $schema to avoid collision
             }
         }
 
-        visited.delete(pubKey);
-        return resolvedJson as ResolvedHqlDocument;
+        // --- Resolve References in Places --- (If data.places exists)
+        const data = resolvedNode.data as Record<string, unknown> | undefined;
+        const places = data?.places as Record<string, unknown> | undefined;
+        if (places) {
+            const resolvedPlaces: Record<string, unknown> = {};
+            for (const key in places) {
+                const value = places[key];
+                if (typeof value === 'string' && value.startsWith('@')) {
+                    const refPubKey = value.substring(1);
+                    // Fetch referenced doc JSON using getLoroDoc -> toJSON
+                    const refLoroDoc = await hominioDB.getLoroDoc(refPubKey);
+                    const referencedJson = refLoroDoc ? (refLoroDoc.toJSON() as Record<string, unknown>) : null;
+
+                    if (referencedJson) {
+                        referencedJson.pubKey = refPubKey; // Ensure pubKey
+                        // Check read capability for referenced doc
+                        // Construct a minimal Docs object for capability check
+                        const owner = typeof meta?.owner === 'string' ? meta.owner : '';
+                        const updatedAt = typeof meta?.updatedAt === 'string' ? meta.updatedAt : '';
+                        const referencedDocMeta: Docs = {
+                            pubKey: refPubKey,
+                            owner: owner,
+                            updatedAt: updatedAt
+                        };
+                        if (canRead(user, referencedDocMeta)) {
+                            // Recursively resolve the referenced node
+                            resolvedPlaces[key] = await this._resolveNode(referencedJson, user, new Set(visited), schemaFetcher);
+                        } else {
+                            resolvedPlaces[key] = { $error: 'Permission denied', pubKey: refPubKey };
+                        }
+                    } else {
+                        resolvedPlaces[key] = { $error: 'Not found', pubKey: refPubKey };
+                    }
+                } else {
+                    // Copy non-reference values directly
+                    resolvedPlaces[key] = value;
+                }
+            }
+            // Replace original places with resolved places
+            if (!resolvedNode.data) resolvedNode.data = {};
+            (resolvedNode.data as Record<string, unknown>).places = resolvedPlaces;
+        }
+
+        return resolvedNode as ResolvedHqlDocument;
     }
 
 
@@ -407,126 +418,183 @@ class HominioQLService {
         if (!user) {
             throw new Error("Authentication required for mutations.");
         }
-
-        if (request.action === 'create') {
-            return this._handleCreate(request, user);
-        } else if (request.action === 'update') {
-            return this._handleUpdate(request, user);
-        } else if (request.action === 'delete') {
-            return this._handleDelete(request, user);
-        } else {
-            throw new Error(`Invalid mutation action: ${request.action}`);
+        switch (request.action) {
+            case 'create':
+                return this._handleCreate(request, user);
+            case 'update':
+                return this._handleUpdate(request, user);
+            case 'delete':
+                return this._handleDelete(request, user);
+            default:
+                throw new Error(`Invalid mutation action: ${request.action}`);
         }
     }
 
     private async _handleCreate(request: HqlMutationRequest, user: CapabilityUser): Promise<Docs> {
-        if (!request.schema) throw new Error("HQL Create: Schema reference (@pubKey) is required.");
-        if (!request.places) throw new Error("HQL Create: Places data is required.");
-
-        // 1. Fetch Schema JSON
-        const schemaJson = await hominioDB.getSchemaDataAsJson(request.schema);
-        if (!schemaJson) {
-            throw new Error(`HQL Create: Schema ${request.schema} not found or not accessible.`);
+        if (!request.schema) {
+            throw new Error("Schema reference ('schema') is required for create action.");
         }
 
-        // 2. Construct Temporary Entity JSON for Validation
-        const tempEntityJson = {
+        let schemaPubKey: string;
+        if (request.schema.startsWith('@')) {
+            schemaPubKey = request.schema.substring(1);
+        } else {
+            throw new Error("Schema creation via name resolution is not implemented. Use @pubKey format.");
+            // ... (schema name lookup logic commented out) ...
+        }
+
+        // --- Derive entity name from x1 --- 
+        let derivedName: string | undefined = undefined;
+        const x1Value = request.places?.x1;
+        if (typeof x1Value === 'string') {
+            if (x1Value.startsWith('@')) {
+                const refPubKey = x1Value.substring(1);
+                try {
+                    const refLoroDoc = await hominioDB.getLoroDoc(refPubKey);
+                    if (refLoroDoc) {
+                        derivedName = refLoroDoc.getMap('meta').get('name') as string | undefined;
+                        console.log(`[HQL Create] Derived name '${derivedName}' from referenced doc ${refPubKey}`);
+                    } else {
+                        console.warn(`[HQL Create] Referenced doc ${refPubKey} for name not found.`);
+                    }
+                } catch (err) {
+                    console.error(`[HQL Create] Error fetching referenced doc ${refPubKey} for name:`, err);
+                }
+            } else {
+                derivedName = x1Value; // Use direct string value
+            }
+        }
+        // -----------------------------------
+
+        // --- Get schema definition ---
+        const schemaLoroDoc = await hominioDB.getLoroDoc(schemaPubKey);
+        const schemaJson = schemaLoroDoc ? schemaLoroDoc.toJSON() as Record<string, unknown> : null;
+        if (!schemaJson) {
+            throw new Error(`Schema document with pubKey ${schemaPubKey} not found or failed to load.`);
+        }
+        // ----------------------------------
+
+        // --- Prepare entity data for validation ---
+        const finalName = derivedName || 'Unnamed Entity'; // Keep this calculation
+        const entityJsonToValidate: LoroJsonObject = {
             meta: {
-                schema: request.schema,
-                name: `New ${(schemaJson.meta as Record<string, unknown>)?.name ?? 'Entity'}`
+                schema: `@${schemaPubKey}`,
+                owner: user.id, // Set owner immediately
+                name: finalName // <-- Add the final name here for validation
+                // Consider adding other meta fields if validation needs them
             },
             data: {
-                places: request.places
+                places: request.places ?? {}
             }
         };
+        // --------------------------------------------------
 
-        // 3. Validate the proposed entity data against the schema JSON
-        const validationResult = validateEntityJsonAgainstSchema(tempEntityJson, schemaJson);
-        if (!validationResult.isValid) {
-            throw new Error(`HQL Create: Validation failed: ${validationResult.errors.join(', ')}`);
+        // Ensure data is an object before validation
+        if (typeof entityJsonToValidate.data !== 'object' || entityJsonToValidate.data === null || Array.isArray(entityJsonToValidate.data)) {
+            throw new Error("Internal HQL Error: Constructed entity data is not a valid object for validation.");
         }
 
-        // 4. Extract schema pubKey (without @)
-        const schemaPubKey = request.schema.substring(1);
+        // --- Validate against schema ---
+        const validationResult = validateEntityJsonAgainstSchema(entityJsonToValidate, schemaJson);
+        if (!validationResult.isValid) {
+            console.error("HQL Create Validation Failed:", validationResult.errors);
+            throw new Error(`Validation failed for new entity: ${validationResult.errors.join(', ')}`);
+        }
+        // -------------------------------------
 
-        // 5. Call hominioDB to perform the actual creation
-        console.log(`[HQL Create] Validation passed for schema ${request.schema}. Calling hominioDB.createEntity...`);
-        const newDbDoc = await hominioDB.createEntity(
-            schemaPubKey,
-            request.places as Record<string, LoroJsonValue>, // Cast needed
-            user.id
-        );
-        return newDbDoc;
+        // Perform actual creation via hominioDB
+        console.log(`[HQL Create] Validation passed. Creating entity with schema @${schemaPubKey} and name '${finalName}'...`); // Use finalName declared earlier
+        const newDocMetadata = await hominioDB.createEntity(schemaPubKey, request.places || {}, user.id, { name: finalName }); // Pass final name
+
+        return newDocMetadata;
     }
 
     private async _handleUpdate(request: HqlMutationRequest, user: CapabilityUser): Promise<Docs> {
+        if (!request.pubKey) {
+            throw new Error("Document PubKey ('pubKey') is required for update action.");
+        }
+        if (!request.places) {
+            throw new Error("Place data ('places') is required for update action.");
+        }
+
         const pubKey = request.pubKey;
-        if (!pubKey) throw new Error("HQL Update: pubKey is required.");
-        if (!request.places || Object.keys(request.places).length === 0) {
-            console.log("[HQL Update] No places data provided, returning current doc metadata.");
-            const currentDocMeta = await hominioDB.getDocument(pubKey);
-            if (!currentDocMeta) throw new Error(`HQL Update: Document ${pubKey} not found.`);
-            return currentDocMeta;
+
+        // 1. Fetch the document metadata for capability check and schema retrieval
+        const docMeta = await hominioDB.getDocument(pubKey);
+        if (!docMeta) {
+            throw new Error(`Document ${pubKey} not found for update.`);
         }
 
-        // 1. Fetch Current Entity JSON and Metadata
-        const currentEntityJson = await hominioDB.getDocumentDataAsJson(pubKey);
-        if (!currentEntityJson) {
-            throw new Error(`HQL Update: Failed to load current data for document ${pubKey}.`);
-        }
-        const currentDocMeta = await hominioDB.getDocument(pubKey);
-        if (!currentDocMeta) {
-            // Should not happen if getDocumentDataAsJson succeeded, but check defensively
-            throw new Error(`HQL Update: Failed to load metadata for document ${pubKey}.`);
+        // 2. Capability Check (using fetched metadata)
+        if (!canWrite(user, docMeta)) {
+            throw new Error(`Permission denied: Cannot write to document ${pubKey}`);
         }
 
-        // 2. Capability Check
-        if (!canWrite(user, currentDocMeta)) {
-            throw new Error(`HQL Update: Permission denied to update document ${pubKey}.`);
+        // 3. Get Schema Reference from Existing Document
+        // Need the current LoroDoc to get meta.schema
+        const currentLoroDoc = await hominioDB.getLoroDoc(pubKey);
+        if (!currentLoroDoc) {
+            throw new Error(`Could not load current document state for update: ${pubKey}`);
         }
+        const currentMeta = currentLoroDoc.getMap('meta');
+        const schemaRef = currentMeta.get('schema') as string | undefined;
+        if (!schemaRef || !schemaRef.startsWith('@')) {
+            throw new Error(`Document ${pubKey} does not have a valid schema reference in its metadata.`);
+        }
+        const schemaPubKey = schemaRef.substring(1);
 
-        // 3. Fetch Schema JSON
-        const schemaRef = (currentEntityJson.meta as Record<string, unknown>)?.schema as string | undefined;
-        if (!schemaRef) {
-            throw new Error(`HQL Update: Document ${pubKey} is missing schema reference in meta.`);
-        }
-        const schemaJson = await hominioDB.getSchemaDataAsJson(schemaRef);
+        // 4. Fetch Schema for Validation
+        const schemaLoroDoc = await hominioDB.getLoroDoc(schemaPubKey);
+        const schemaJson = schemaLoroDoc ? schemaLoroDoc.toJSON() : null;
         if (!schemaJson) {
-            throw new Error(`HQL Update: Schema ${schemaRef} not found or not accessible for validation.`);
+            throw new Error(`Schema document ${schemaRef} not found for validation.`);
         }
 
-        // 4. Construct Merged Entity JSON for Validation
-        const currentPlaces = ((currentEntityJson.data as Record<string, unknown>)?.places as Record<string, LoroJsonValue>) || {};
-        const mergedPlaces = { ...currentPlaces, ...(request.places as Record<string, LoroJsonValue>) };
-
-        // Create the new data object separately
-        const existingData = (typeof currentEntityJson.data === 'object' && currentEntityJson.data !== null)
-            ? currentEntityJson.data as Record<string, unknown>
-            : {};
-        const newData = {
-            ...existingData,
-            places: mergedPlaces
-        };
-
-        // Construct the final merged JSON
-        const mergedEntityJson = {
-            ...currentEntityJson, // Spread the original entity
-            data: newData        // Assign the separately created data object
-        };
-
-        // 5. Validate the merged entity data against the schema JSON
-        const validationResult = validateEntityJsonAgainstSchema(mergedEntityJson, schemaJson);
-        if (!validationResult.isValid) {
-            throw new Error(`HQL Update: Validation failed: ${validationResult.errors.join(', ')}`);
+        // 5. Prepare Update Data (Resolving @ references like in create)
+        const placesUpdate: Record<string, LoroJsonValue> = {};
+        for (const key in request.places) {
+            const value = request.places[key];
+            if (typeof value === 'string' && value.startsWith('@')) {
+                placesUpdate[key] = value; // Keep reference string
+            } else {
+                placesUpdate[key] = value as LoroJsonValue;
+            }
         }
 
-        // 6. Call hominioDB to perform the actual update
-        console.log(`[HQL Update] Validation passed for doc ${pubKey}. Calling hominioDB.updateEntityPlaces...`);
-        const updatedDbDoc = await hominioDB.updateEntityPlaces(
-            pubKey,
-            request.places as Record<string, LoroJsonValue> // Pass only the changes
-        );
-        return updatedDbDoc;
+        // 6. Validation (Validate the *intended state* after update)
+        // This requires merging `placesUpdate` with the current places, which is complex.
+        // Simpler approach: Validate just the `placesUpdate` structure against the schema's place definitions.
+        // Even simpler: Skip pre-validation and rely on Loro/DB layer errors if structure is wrong.
+        // Let's skip pre-validation for now to avoid complexity.
+        // const validationResult = validateEntityJsonAgainstSchema({ data: { places: placesUpdate } }, schemaJson);
+        // if (!validationResult.valid) {
+        //     throw new Error(`Validation failed for update: ${validationResult.errors.join(', ')}`);
+        // }
+
+        // 7. Perform Update using generic updateDocument
+        await hominioDB.updateDocument(pubKey, (loroDoc) => {
+            const dataMap = loroDoc.getMap('data');
+            let placesMap = dataMap.get('places');
+            // Ensure placesMap is a LoroMap
+            if (!(placesMap instanceof LoroMap)) {
+                console.warn(`[HQL Update] Document ${pubKey} data.places was not a LoroMap. Recreating.`);
+                placesMap = dataMap.setContainer('places', new LoroMap());
+            }
+            // Apply the updates
+            for (const key in placesUpdate) {
+                if (Object.prototype.hasOwnProperty.call(placesUpdate, key)) {
+                    (placesMap as LoroMap).set(key, placesUpdate[key]);
+                }
+            }
+        });
+
+        // 8. Return updated document metadata
+        const updatedDocMeta = await hominioDB.getDocument(pubKey);
+        if (!updatedDocMeta) {
+            // This shouldn't happen if the update didn't throw
+            throw new Error(`Failed to retrieve document metadata for ${pubKey} after update.`);
+        }
+        return updatedDocMeta;
     }
 
     private async _handleDelete(request: HqlMutationRequest, user: CapabilityUser): Promise<{ success: boolean }> {

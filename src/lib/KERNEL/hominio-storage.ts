@@ -78,7 +78,7 @@ export interface StorageAdapter {
      * Put multiple items into storage efficiently.
      * @param items Array of items to put.
      */
-    batchPut(items: Array<{ key: string, value: Uint8Array, meta?: Record<string, any> }>): Promise<void>;
+    batchPut(items: Array<{ key: string, value: Uint8Array, meta?: Record<string, unknown> }>): Promise<void>;
 
     /**
      * Create a transaction for batch operations
@@ -395,7 +395,7 @@ export class IndexedDBAdapter implements StorageAdapter {
      * Put multiple items into storage efficiently.
      * @param items Array of items to put.
      */
-    async batchPut(items: Array<{ key: string, value: Uint8Array, meta?: Record<string, any> }>): Promise<void> {
+    async batchPut(items: Array<{ key: string, value: Uint8Array, meta?: Record<string, unknown> }>): Promise<void> {
         if (!items.length) return;
         try {
             const db = await this.ensureDB();
@@ -404,8 +404,8 @@ export class IndexedDBAdapter implements StorageAdapter {
             const now = new Date().toISOString();
 
             const putPromises = items.map(item => {
-                let valueToStore: any = item.value; // Default for content
-                let metadataToStore = item.meta || {};
+                let valueToStore: unknown = item.value; // Default for content
+                const metadataToStore: Record<string, unknown> = item.meta || {}; // Use const
 
                 // Special handling for docs store
                 if (this.storeName === 'docs') {
@@ -421,7 +421,7 @@ export class IndexedDBAdapter implements StorageAdapter {
 
                 const storageItem: StorageItem = {
                     key: item.key,
-                    value: valueToStore,
+                    value: valueToStore as Uint8Array, // Cast here if necessary after checks
                     metadata: metadataToStore,
                     createdAt: now // Consider if a per-item timestamp is needed
                 };
@@ -465,8 +465,10 @@ export class IndexedDBAdapter implements StorageAdapter {
         } else if (typeof value === 'object' && value !== null && 'buffer' in value) {
             // Handle Buffer-like objects
             try {
-                // @ts-ignore - We've already checked 'buffer' property exists
-                return new Uint8Array(value.buffer);
+                // Ensure 'buffer' is a property and it's an ArrayBuffer
+                if (typeof value === 'object' && value !== null && 'buffer' in value && value.buffer instanceof ArrayBuffer) {
+                    return new Uint8Array(value.buffer);
+                }
             } catch (err) {
                 console.error('Failed to convert Buffer-like to Uint8Array:', err);
             }
@@ -491,7 +493,8 @@ export class IndexedDBAdapter implements StorageAdapter {
 class IndexedDBTransaction implements StorageTransaction {
     private dbPromise: Promise<IDBPDatabase>;
     private storeName: string;
-    private tx: IDBPDatabase | null = null;
+    private tx: import('idb').IDBPTransaction<unknown, [string], "readwrite"> | null = null;
+    private activePromise: Promise<import('idb').IDBPTransaction<unknown, [string], "readwrite"> | null> | null = null;
     private completed = false;
     private aborted = false;
 
@@ -500,7 +503,7 @@ class IndexedDBTransaction implements StorageTransaction {
         this.storeName = storeName;
     }
 
-    private async ensureTx(): Promise<IDBPDatabase> {
+    private async ensureTx(): Promise<import('idb').IDBPTransaction<unknown, [string], "readwrite">> {
         if (this.completed) {
             throw new Error('Transaction already completed');
         }
@@ -508,39 +511,44 @@ class IndexedDBTransaction implements StorageTransaction {
             throw new Error('Transaction aborted');
         }
         if (!this.tx) {
-            this.tx = await this.dbPromise;
+            this.tx = await this.dbPromise.then(db => db.transaction(this.storeName, 'readwrite'));
         }
         return this.tx;
     }
 
     async get(key: string): Promise<Uint8Array | null> {
-        const db = await this.ensureTx();
-        const item = await db.get(this.storeName, key) as StorageItem | undefined;
+        const tx = await this.ensureTx();
+        const store = tx.objectStore(this.storeName);
+        const item = await store.get(key) as StorageItem | undefined;
 
         if (!item || !item.value) {
             return null;
         }
 
-        // Handle different types of binary data
-        if (item.value instanceof Uint8Array) {
-            return item.value;
-        } else if (item.value instanceof ArrayBuffer) {
-            return new Uint8Array(item.value);
-        } else if (Array.isArray(item.value)) {
-            return new Uint8Array(item.value);
-        } else {
-            // Try to convert whatever we have
+        // Now item.value is known to be defined, attempt conversion
+        const value: unknown = item.value; // Use unknown for safety before checks
+        if (value instanceof Uint8Array) {
+            return value;
+        } else if (value instanceof ArrayBuffer) {
+            return new Uint8Array(value);
+        } else if (Array.isArray(value)) {
+            // Attempt conversion from number array
             try {
-                return new Uint8Array(item.value as unknown as ArrayBufferLike);
-            } catch (err) {
-                console.error('Failed to convert value to Uint8Array in transaction:', err);
+                return new Uint8Array(value);
+            } catch (e) {
+                console.error('Failed to convert array to Uint8Array:', e);
                 return null;
             }
+        } else {
+            console.warn(`Unexpected type for item.value for key ${key}: ${typeof value}`);
+            // Try generic conversion as a last resort if appropriate for your data types
+            // return new Uint8Array(value as unknown as ArrayBufferLike);
+            return null;
         }
     }
 
     async put(key: string, value: Uint8Array, metadata: Record<string, unknown> = {}): Promise<void> {
-        const db = await this.ensureTx();
+        const tx = await this.ensureTx();
         const now = new Date().toISOString();
 
         const item: StorageItem = {
@@ -550,19 +558,19 @@ class IndexedDBTransaction implements StorageTransaction {
             createdAt: now
         };
 
-        await db.put(this.storeName, item);
+        await tx.objectStore(this.storeName).put(item);
     }
 
     async delete(key: string): Promise<boolean> {
-        const db = await this.ensureTx();
+        const tx = await this.ensureTx();
 
         // Check if item exists
-        const exists = await db.get(this.storeName, key);
+        const exists = await tx.objectStore(this.storeName).get(key);
         if (!exists) {
             return false;
         }
 
-        await db.delete(this.storeName, key);
+        await tx.objectStore(this.storeName).delete(key);
         return true;
     }
 

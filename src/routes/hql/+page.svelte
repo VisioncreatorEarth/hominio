@@ -8,6 +8,7 @@
 	} from '$lib/KERNEL/hominio-ql';
 	import { readable, type Readable } from 'svelte/store';
 	import { slide } from 'svelte/transition';
+	import { hominioSync } from '$lib/KERNEL/hominio-sync';
 
 	// --- Reactive Data Store (Using Auto-Subscription & Effects) ---
 
@@ -26,6 +27,8 @@
 
 	// Selected Schema State
 	let selectedSchemaPubKey = $state<string | null>(null);
+	// Selected Entity State
+	let selectedEntityPubKey = $state<string | null>(null);
 
 	// Entities of Selected Schema
 	let entitiesReadable = $state(readable<HqlQueryResult | null | undefined>(undefined));
@@ -41,11 +44,21 @@
 			};
 			// Get the new readable store for entities and assign it to the state variable
 			entitiesReadable = hominioQLService.processReactive(entityQuery);
+			selectedEntityPubKey = null; // <-- Reset selected entity when schema changes
 		} else {
 			console.log(`[Effect] No schema selected. Resetting entities.`);
 			// If no schema selected, reset to an empty/loading state
 			entitiesReadable = readable(undefined);
+			selectedEntityPubKey = null; // <-- Reset selected entity when schema changes
 		}
+	});
+
+	// Derived value for the currently selected entity's full data
+	const selectedEntityData = $derived(() => {
+		if (selectedEntityPubKey && $entitiesReadable) {
+			return $entitiesReadable.find((e) => e.pubKey === selectedEntityPubKey) || null;
+		}
+		return null;
 	});
 
 	// Helper function to format validation rules (simplified)
@@ -100,9 +113,23 @@
 			isCreatingPrenu = false;
 		}
 	}
+
+	// --- Sync Status ---
+	const syncStatus = hominioSync.status;
+	function handlePull() {
+		if (!$syncStatus.isSyncing) {
+			hominioSync.pullFromServer();
+		}
+	}
+
+	function handlePush() {
+		if (!$syncStatus.isSyncing && $syncStatus.pendingLocalChanges > 0) {
+			hominioSync.pushToServer();
+		}
+	}
 </script>
 
-<div class="grid h-screen grid-cols-1 bg-gray-100 md:grid-cols-4">
+<div class="grid h-screen grid-cols-1 bg-gray-100 md:grid-cols-[250px_1fr_400px]">
 	<!-- Sidebar (Left Column) -->
 	<aside class="col-span-1 overflow-y-auto border-r border-gray-300 bg-white p-4">
 		<h2 class="mb-4 text-lg font-semibold text-gray-700">Schemas</h2>
@@ -130,10 +157,48 @@
 				{/each}
 			</ul>
 		{/if}
+
+		<!-- Sync Status Display & Button -->
+		<div class="mt-auto border-t border-gray-300 p-4">
+			<h3 class="mb-2 text-sm font-medium text-gray-600">Sync Status</h3>
+			<!-- Display Sync Status -->
+			<p class="mb-3 text-xs text-gray-500">
+				{#if $syncStatus.isSyncing}
+					Syncing...
+				{:else if $syncStatus.syncError}
+					<span class="text-red-600">Error: {$syncStatus.syncError}</span>
+				{:else if $syncStatus.lastSynced}
+					Last synced: {new Date($syncStatus.lastSynced).toLocaleTimeString()}
+				{:else}
+					Ready to sync.
+				{/if}
+				{#if $syncStatus.pendingLocalChanges > 0}
+					<span class="ml-1 text-orange-600">({$syncStatus.pendingLocalChanges} pending)</span>
+				{/if}
+			</p>
+			<div class="space-y-2">
+				<button
+					class="w-full rounded-md bg-blue-500 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+					on:click={handlePull}
+					disabled={$syncStatus.isSyncing}
+				>
+					{$syncStatus.isSyncing ? 'Pulling...' : 'Pull from Server'}
+				</button>
+				<button
+					class="w-full rounded-md bg-green-500 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-50"
+					on:click={handlePush}
+					disabled={$syncStatus.isSyncing || $syncStatus.pendingLocalChanges === 0}
+				>
+					{$syncStatus.isSyncing
+						? 'Pushing...'
+						: `Push to Server (${$syncStatus.pendingLocalChanges})`}
+				</button>
+			</div>
+		</div>
 	</aside>
 
-	<!-- Main Content Area (Right Columns) -->
-	<main class="col-span-1 flex flex-col overflow-y-auto p-6 md:col-span-3">
+	<!-- Main Content Area (Middle Column) -->
+	<main class="col-span-1 flex flex-col overflow-y-auto border-r border-gray-300 p-6">
 		{#if selectedSchemaPubKey && $schemasReadable}
 			{@const selectedSchema = $schemasReadable.find((s) => s.pubKey === selectedSchemaPubKey)}
 			{#if selectedSchema}
@@ -194,20 +259,6 @@
 					{:else}
 						<p class="mb-6 text-sm text-gray-500">No places defined for this schema.</p>
 					{/if}
-
-					<details class="mb-6 rounded border border-gray-300 bg-white">
-						<summary class="cursor-pointer list-none p-3 font-medium text-gray-700 hover:bg-gray-50"
-							>Raw JSON (Schema)</summary
-						>
-						<div class="border-t border-gray-300 p-3" transition:slide={{ duration: 200 }}>
-							<pre
-								class="overflow-x-auto rounded bg-gray-50 p-2 text-xs whitespace-pre-wrap text-gray-600">{JSON.stringify(
-									selectedSchema,
-									null,
-									2
-								)}</pre>
-						</div>
-					</details>
 				</div>
 
 				<!-- Entities List Section -->
@@ -225,13 +276,22 @@
 							{#each $entitiesReadable as entity (entity.pubKey)}
 								{@const entityMeta = entity.meta as Record<string, any> | undefined}
 								{@const entityData = entity.data as Record<string, any> | undefined}
-								<li class="py-3">
-									<p class="font-medium text-gray-800">
-										{entityData?.places?.x1 ?? entityMeta?.name ?? 'Unnamed Entity'}
-									</p>
-									<p class="text-xs text-gray-500">
-										PubKey: <code class="text-xs">{entity.pubKey}</code>
-									</p>
+								<li class="py-0">
+									<!-- Make list items clickable -->
+									<button
+										class="block w-full cursor-pointer rounded px-3 py-3 text-left transition-colors hover:bg-gray-100 {selectedEntityPubKey ===
+										entity.pubKey
+											? 'bg-blue-50'
+											: ''}"
+										on:click={() => (selectedEntityPubKey = entity.pubKey)}
+									>
+										<p class="font-medium text-gray-800">
+											{entityData?.places?.x1 ?? entityMeta?.name ?? 'Unnamed Entity'}
+										</p>
+										<p class="text-xs text-gray-500">
+											PubKey: <code class="text-xs">{entity.pubKey}</code>
+										</p>
+									</button>
 								</li>
 							{/each}
 						</ul>
@@ -246,4 +306,35 @@
 			</div>
 		{/if}
 	</main>
+
+	<!-- Right Sidebar (Restored) -->
+	<aside class="col-span-1 overflow-y-auto bg-white p-6">
+		{#if selectedSchemaPubKey && $schemasReadable}
+			<!-- Show selected schema JSON (appears if schema selected, below entity meta if entity also selected) -->
+			{@const selectedSchema = $schemasReadable.find((s) => s.pubKey === selectedSchemaPubKey)}
+			{#if selectedSchema}
+				<details class="rounded border border-gray-300 bg-white" open>
+					<summary class="cursor-pointer list-none p-3 font-medium text-gray-700 hover:bg-gray-50"
+						>Schema: {(selectedSchema.meta as Record<string, any>)?.name ??
+							selectedSchema.pubKey}</summary
+					>
+					<div class="border-t border-gray-300 p-3">
+						<pre
+							class="overflow-x-auto rounded bg-gray-50 p-3 font-mono text-xs whitespace-pre-wrap text-gray-700">{JSON.stringify(
+								selectedSchema,
+								null,
+								2
+							)}</pre>
+					</div>
+				</details>
+			{/if}
+		{/if}
+
+		{#if !selectedEntityData && !selectedSchemaPubKey}
+			<!-- Show only if nothing is selected -->
+			<div class="flex h-full items-center justify-center text-gray-500">
+				<p>Select a schema or entity to view details.</p>
+			</div>
+		{/if}
+	</aside>
 </div>
