@@ -149,6 +149,27 @@
 		}
 	}
 
+	// --- Snapshot Creation ---
+	let isCreatingSnapshot = $state(false);
+	async function handleCreateSnapshot(entityPubKey: string) {
+		if (isCreatingSnapshot || !entityPubKey) return;
+		console.log(`[Action] Requesting server snapshot for ${entityPubKey}...`);
+		isCreatingSnapshot = true;
+		try {
+			// Call the sync service method, which talks to the server
+			await hominioSync.createConsolidatedSnapshot(entityPubKey);
+			console.log(
+				`[Action] Server snapshot request completed for ${entityPubKey}. Client will pull updates.`
+			);
+			// No direct result needed here, sync relies on pullFromServer implicitly called after server success
+		} catch (err) {
+			console.error(`[Action] Error requesting server snapshot for ${entityPubKey}:`, err);
+			// TODO: Show error to user
+		} finally {
+			isCreatingSnapshot = false;
+		}
+	}
+
 	// --- Sync Status ---
 	const syncStatus = hominioSync.status;
 	function handlePull() {
@@ -332,13 +353,24 @@
 										<!-- Edit Button (Only for Prenu Schema) -->
 										{#if selectedMetaData?.name === 'prenu'}
 											{@const isUpdatingThis = currentlyUpdatingPrenu === entity.pubKey}
-											<button
-												class="ml-2 flex-shrink-0 rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600 shadow-sm transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-												on:click={() => updatePrenuName(entity.pubKey)}
-												disabled={currentlyUpdatingPrenu !== null}
-											>
-												{isUpdatingThis ? '...' : 'Edit Name'}
-											</button>
+											<div class="ml-2 flex flex-shrink-0 flex-col items-end space-y-1">
+												<button
+													class="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600 shadow-sm transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+													on:click={() => updatePrenuName(entity.pubKey)}
+													disabled={currentlyUpdatingPrenu !== null || isCreatingSnapshot}
+												>
+													{isUpdatingThis ? '...' : 'Edit Name'}
+												</button>
+												<!-- Snapshot Button (Moved Here) -->
+												<button
+													class="rounded border border-purple-300 bg-purple-50 px-2 py-1 text-xs text-purple-700 shadow-sm transition-colors hover:bg-purple-100 disabled:cursor-not-allowed disabled:opacity-50"
+													on:click={() => handleCreateSnapshot(entity.pubKey)}
+													disabled={isCreatingSnapshot || currentlyUpdatingPrenu !== null}
+													title="Request server snapshot (requires Pull)"
+												>
+													{isCreatingSnapshot ? '...' : 'Snapshot'}
+												</button>
+											</div>
 										{/if}
 									</div>
 								</li>
@@ -359,10 +391,10 @@
 	<!-- Right Sidebar (Restored) -->
 	<aside class="col-span-1 overflow-y-auto bg-white p-6">
 		{#if selectedSchemaPubKey && $schemasReadable}
-			<!-- Show selected schema JSON (appears if schema selected, below entity meta if entity also selected) -->
+			<!-- Show selected schema JSON -->
 			{@const selectedSchema = $schemasReadable.find((s) => s.pubKey === selectedSchemaPubKey)}
 			{#if selectedSchema}
-				<details class="rounded border border-gray-300 bg-white" open>
+				<details class="mb-4 rounded border border-gray-300 bg-white" open>
 					<summary class="cursor-pointer list-none p-3 font-medium text-gray-700 hover:bg-gray-50"
 						>Schema: {(selectedSchema.meta as Record<string, any>)?.name ??
 							selectedSchema.pubKey}</summary
@@ -379,8 +411,24 @@
 			{/if}
 		{/if}
 
-		{#if !selectedEntityData && !selectedSchemaPubKey}
-			<!-- Show only if nothing is selected -->
+		{#if selectedEntityData}
+			<!-- Show selected entity JSON -->
+			<details class="mb-4 rounded border border-gray-300 bg-white" open>
+				<summary class="cursor-pointer list-none p-3 font-medium text-gray-700 hover:bg-gray-50"
+					>Entity: {(selectedEntityData.meta as Record<string, any>)?.name ??
+						selectedEntityData.pubKey}</summary
+				>
+				<div class="border-t border-gray-300 p-3">
+					<pre
+						class="overflow-x-auto rounded bg-gray-50 p-3 font-mono text-xs whitespace-pre-wrap text-gray-700">{JSON.stringify(
+							selectedEntityData,
+							null,
+							2
+						)}</pre>
+				</div>
+			</details>
+		{:else if !selectedSchemaPubKey}
+			<!-- Show only if nothing is selected (Schema or Entity) -->
 			<div class="flex h-full items-center justify-center text-gray-500">
 				<p>Select a schema or entity to view details.</p>
 			</div>
