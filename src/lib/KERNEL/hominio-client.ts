@@ -1,5 +1,5 @@
 import { treaty } from '@elysiajs/eden';
-import type { App } from '../../routes/api/[...slugs]/+server';
+import type { App } from '../../routes/api/[...slugs]/+server'
 
 // Create the base Eden client with proper URL format
 export const hominio = treaty<App>('http://localhost:5173');

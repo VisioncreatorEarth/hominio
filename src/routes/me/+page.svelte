@@ -2,9 +2,17 @@
 	import { authClient } from '$lib/KERNEL/hominio-auth';
 	import { goto } from '$app/navigation';
 	import type { PageData } from './$types';
+	import { browser } from '$app/environment';
 	import VibeRenderer from '$lib/components/VibeRenderer.svelte';
 
 	export let data: PageData;
+
+	// Client-side check: If the session is null after initial load, redirect.
+	// This handles cases where the session might expire or be invalidated client-side.
+	if (browser && !data.session) {
+		goto('/');
+	}
+
 	let loading = false;
 
 	async function handleSignOut() {

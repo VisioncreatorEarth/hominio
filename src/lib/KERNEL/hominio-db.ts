@@ -1,16 +1,62 @@
-import { writable, get } from 'svelte/store';
+import { writable } from 'svelte/store';
 import { browser } from '$app/environment';
 import { LoroDoc, LoroMap } from 'loro-crdt';
 import { hashService } from './hash-service';
 import { docIdService } from './docid-service';
 import { getContentStorage, getDocsStorage, initStorage } from './hominio-storage';
-import { authClient } from '$lib/KERNEL/hominio-auth'; // Assumed path for auth client
-import { canRead, canWrite, type CapabilityUser, canDelete } from './hominio-caps'; // Import capabilities
+import { canRead, canWrite, canDelete } from './hominio-caps'; // Import central capability functions
+import type { CapabilityUser } from './hominio-caps'; // Fixed import source
 
 // --- Reactivity Notifier ---
 // Simple store that increments when any tracked document changes.
 // Consumed by services like HQL to trigger re-queries.
 export const docChangeNotifier = writable(0);
+
+// Debounced notification for batch operations
+let notificationDebounceTimer: NodeJS.Timeout | null = null;
+const NOTIFICATION_DEBOUNCE_MS = 150; // Increase from 50ms to 150ms for smoother UI
+
+// Add variables to track notification timing
+let lastNotificationTime: number = 0;
+const NOTIFICATION_THROTTLE_MS = 200; // Minimum time between notifications
+
+// Helper to trigger notification with debounce
+export function triggerDocChangeNotification(): void {
+    if (!browser) return; // Skip in SSR
+
+    try {
+        if (notificationDebounceTimer) {
+            clearTimeout(notificationDebounceTimer);
+        }
+
+        // Throttle updates to no more than once per NOTIFICATION_THROTTLE_MS
+        const now = Date.now();
+        if (lastNotificationTime && now - lastNotificationTime < NOTIFICATION_THROTTLE_MS) {
+            // Too soon after last notification, schedule for later
+            notificationDebounceTimer = setTimeout(() => {
+                lastNotificationTime = Date.now();
+                docChangeNotifier.update(n => n + 1);
+            }, NOTIFICATION_DEBOUNCE_MS);
+            return;
+        }
+
+        // Normal debounced path
+        notificationDebounceTimer = setTimeout(() => {
+            lastNotificationTime = Date.now();
+            docChangeNotifier.update(n => n + 1);
+        }, NOTIFICATION_DEBOUNCE_MS);
+    } catch (err) {
+        console.error("Error in triggerDocChangeNotification:", err);
+        // Try direct update as fallback with a slight delay
+        setTimeout(() => {
+            try {
+                docChangeNotifier.update(n => n + 1);
+            } catch (e) {
+                console.error("Critical error updating docChangeNotifier:", e);
+            }
+        }, 10);
+    }
+}
 // --------------------------
 
 // Constants
@@ -127,20 +173,22 @@ class HominioDB {
      * @param options Document creation options
      * @returns PubKey of the created document
      */
-    async createDocument(options: { name?: string; description?: string } = {}): Promise<string> {
+    async createDocument(
+        user: CapabilityUser | null,
+        options: { name?: string; description?: string; owner?: string } = {}
+    ): Promise<string> {
         this._setStatus({ creatingDoc: true });
         this._setError(null); // Clear previous error
         this._isInitializingDoc = true; // Set flag before creation starts
 
         try {
-            // Capability check still uses get() on authClient, assuming it's external
-            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null;
-            if (!currentUser) {
-                throw new Error('Permission denied: User must be logged in to create documents.');
+            // Determine owner: prioritize options.owner, then user.id, then error
+            const owner = options.owner ?? user?.id;
+            if (!owner) {
+                throw new Error("Cannot create document: Owner must be specified in options or user must be provided.");
             }
 
             const pubKey = await docIdService.generateDocId();
-            const owner = currentUser.id;
             const now = new Date().toISOString();
 
             const newDocMeta: Docs = {
@@ -172,8 +220,8 @@ class HominioDB {
             const docsStorage = getDocsStorage();
             await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(newDocMeta)));
 
-            // Explicitly trigger reactivity *after* metadata is saved
-            // docChangeNotifier.update(n => n + 1);
+            // Explicitly trigger reactivity after metadata is saved
+            triggerDocChangeNotification();
 
             return pubKey;
         } catch (err) {
@@ -220,46 +268,76 @@ class HominioDB {
      * @param snapshotCid Optional snapshot CID to initialize from
      */
     private async getOrCreateLoroDoc(pubKey: string, snapshotCid?: string): Promise<LoroDoc> {
-        // If we already have an active instance, return it
         if (activeLoroDocuments.has(pubKey)) {
             return activeLoroDocuments.get(pubKey)!;
         }
 
-        // Create a new LoroDoc instance
-        const loroDoc = new LoroDoc();
+        // Create a new/empty document if no snapshotCid provided
+        if (!snapshotCid) {
+            const loroDoc = new LoroDoc();
 
-        // Try to load binary data if we have a snapshot CID
-        if (snapshotCid) {
-            const contentStorage = getContentStorage();
-            const binaryData = await contentStorage.get(snapshotCid);
+            // Initialize with default structure
+            loroDoc.getMap('meta'); // Create meta map
+            loroDoc.getMap('data'); // Create data map
+            loroDoc.setPeerId(1); // Set peer ID
 
-            if (binaryData) {
-                try {
-                    // Initialize with stored data
-                    loroDoc.import(binaryData);
-                } catch (err) {
-                    console.error(`[Loro Management] Error importing binary data for doc ${pubKey}:`, err);
-                    // Proceed with an empty doc if import fails?
-                }
-            }
+            // Add subscription for changes
+            loroDoc.subscribe(() => {
+                // Directly trigger async persistence on change
+                this._persistLoroUpdateAsync(pubKey, loroDoc).catch((err) => {
+                    console.error(`[Loro Subscribe] Background persistence failed for ${pubKey}:`, err);
+                });
+            });
+
+            // Add to cache
+            activeLoroDocuments.set(pubKey, loroDoc);
+            return loroDoc;
         }
 
+        // Load from snapshot if snapshotCid provided
+        try {
+            const contentStorage = getContentStorage();
+            const snapshotData = await contentStorage.get(snapshotCid);
 
-        // *** Add Loro Subscription ***
-        // Subscribe to changes and trigger our handler
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        loroDoc.subscribe((_event) => {
-            // Directly trigger async persistence on change
-            this._persistLoroUpdateAsync(pubKey, loroDoc).catch((err: unknown) => {
-                console.error(`[Loro Subscribe Callback] Background persistence failed for ${pubKey}:`, err);
-                this._setError(`Background save failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+            if (!snapshotData) {
+                throw new Error(`Snapshot content not found for ${snapshotCid}`);
+            }
+
+            const loroDoc = new LoroDoc();
+            loroDoc.import(snapshotData);
+            loroDoc.setPeerId(1); // Set a standard peer ID
+
+            // Apply any existing updates
+            const docMeta = await this.getDocument(pubKey);
+            if (docMeta?.updateCids && docMeta.updateCids.length > 0) {
+                // Apply updates if available
+                for (const updateCid of docMeta.updateCids) {
+                    const updateData = await contentStorage.get(updateCid);
+                    if (updateData) {
+                        try {
+                            loroDoc.import(updateData);
+                        } catch (updateErr) {
+                            console.error(`[getOrCreateLoroDoc] Error importing update ${updateCid}:`, updateErr);
+                        }
+                    }
+                }
+            }
+
+            // Add subscription for future changes
+            loroDoc.subscribe(() => {
+                // Directly trigger async persistence on change
+                this._persistLoroUpdateAsync(pubKey, loroDoc).catch((err) => {
+                    console.error(`[Loro Subscribe] Background persistence failed for ${pubKey}:`, err);
+                });
             });
-        });
 
-        // Store in the active documents map
-        activeLoroDocuments.set(pubKey, loroDoc);
-
-        return loroDoc;
+            // Add to cache
+            activeLoroDocuments.set(pubKey, loroDoc);
+            return loroDoc;
+        } catch (error) {
+            console.error(`[getOrCreateLoroDoc] Error creating LoroDoc for ${pubKey}:`, error);
+            throw error;
+        }
     }
 
     /**
@@ -268,13 +346,12 @@ class HominioDB {
      * Use getLoroDoc(pubKey) and then loroDoc.toJSON() instead.
      * @param doc Document to load content for
      */
-    async loadDocumentContent(doc: Docs): Promise<void> {
+    async loadDocumentContent(user: CapabilityUser | null, doc: Docs): Promise<void> { // Added user argument
         console.warn("[DEPRECATED] loadDocumentContent called. Use getLoroDoc(pubKey).then(d => d?.toJSON()) instead.");
 
         // *** Capability Check ***
-        const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null; // Still uses external store getter
-        if (!canRead(currentUser, doc)) {
-            console.warn(`Permission denied: User ${currentUser?.id ?? 'anonymous'} cannot read doc ${doc.pubKey} owned by ${doc.owner}`);
+        if (!canRead(user, doc)) { // Added user argument to canRead
+            console.warn(`Permission denied: Cannot read doc ${doc.pubKey} owned by ${doc.owner}`);
             // Removed docContent.set error
             this._setError(`Permission denied: Cannot read document ${doc.pubKey}.`);
             return;
@@ -290,34 +367,33 @@ class HominioDB {
      * @param mutationFn Function that mutates the document
      * @returns CID of the update
      */
-    async updateDocument(pubKey: string, mutationFn: (doc: LoroDoc) => void): Promise<string> {
-        // Get current metadata for capability check BEFORE getting LoroDoc
-        const docMeta = await this.getDocument(pubKey);
-        if (!docMeta) {
-            throw new Error(`Document ${pubKey} not found for update.`);
+    async updateDocument(
+        user: CapabilityUser | null,
+        pubKey: string,
+        mutationFn: (doc: LoroDoc) => void
+    ): Promise<string> {
+        this._setError(null);
+        try {
+            const docMeta = await this.getDocument(pubKey);
+            if (!docMeta) {
+                throw new Error(`Document ${pubKey} not found for update.`);
+            }
+            if (!canWrite(user, docMeta)) {
+                throw new Error('Permission denied: Cannot write to this document');
+            }
+
+            const loroDoc = await this.getOrCreateLoroDoc(pubKey, docMeta.snapshotCid);
+
+            // Apply User's Mutation
+            mutationFn(loroDoc);
+
+            loroDoc.commit();
+            return pubKey;
+        } catch (err) {
+            console.error(`Error updating document ${pubKey}:`, err);
+            this._setError(`Failed to update document: ${err instanceof Error ? err.message : String(err)}`);
+            throw err;
         }
-
-        // *** Capability Check ***
-        const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null; // Still uses external store getter
-        if (!canWrite(currentUser, docMeta)) {
-            throw new Error('Permission denied: Cannot write to this document');
-        }
-        // *** End Capability Check ***
-
-        // Get the Loro document instance (this ensures it's active and subscribed)
-        const loroDoc = await this.getOrCreateLoroDoc(pubKey, docMeta.snapshotCid);
-
-        // Apply the mutation (this triggers the Loro change event)
-        mutationFn(loroDoc);
-
-        // *** Explicitly commit the transaction to trigger events ***
-        loroDoc.commit(); // Commit triggers the subscribe callback which calls _persistLoroUpdateAsync
-
-        // Return something? Maybe pubKey or void?
-        // Returning pubKey seems reasonable.
-        return pubKey;
-
-        // Note: Error handling is implicitly handled by the caller or the top-level try/catch
     }
 
     /**
@@ -325,7 +401,10 @@ class HominioDB {
      * @param pubKey Document public key (Now Required)
      * @returns The new snapshot CID or null if failed
      */
-    async createConsolidatedSnapshot(pubKey: string): Promise<string | null> { // Made pubKey required
+    async createConsolidatedSnapshot(
+        user: CapabilityUser | null, // Added user argument
+        pubKey: string
+    ): Promise<string | null> { // Made pubKey required
         this._setStatus({ loading: true });
         this._setError(null);
         try {
@@ -337,8 +416,7 @@ class HominioDB {
             // --------------------------------------------------
 
             // *** Capability Check ***
-            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null; // Still uses external store getter
-            if (!canWrite(currentUser, doc)) {
+            if (!canWrite(user, doc)) { // Added user argument to canWrite
                 throw new Error('Permission denied: Cannot create snapshot for this document'); // Throw error
             }
             // *** End Capability Check ***
@@ -498,11 +576,7 @@ class HominioDB {
         if (!browser) return;
 
         try {
-            // --- Fetch directly instead of using store ---
-            // const allDocs = get(docs); // Removed
-            const doc = await this.getDocument(pubKey); // Fetch directly
-            // --------------------------------------------
-
+            const doc = await this.getDocument(pubKey);
             if (!doc) { // Check if doc exists
                 console.warn(`[updateDocStateAfterSync] Doc ${pubKey} not found.`);
                 return;
@@ -513,31 +587,41 @@ class HominioDB {
 
             // --- Handle Server Consolidation --- 
             if (changes.serverConsolidated && changes.newServerSnapshotCid) {
-                console.log(`[Sync] Applying server consolidation for ${pubKey}. New snapshot: ${changes.newServerSnapshotCid}`);
-                // Set the main snapshot to the new one from the server
                 updatedDoc.snapshotCid = changes.newServerSnapshotCid;
-                // Clear ALL local and base updates, as they are now in the new server snapshot
                 updatedDoc.updateCids = [];
-                if (updatedDoc.localState) {
-                    updatedDoc.localState.updateCids = [];
-                    // Also clear local snapshot if it existed, it's irrelevant now
-                    delete updatedDoc.localState.snapshotCid;
+
+                // Create localState if it doesn't exist
+                if (!updatedDoc.localState) {
+                    updatedDoc.localState = {};
                 }
+
+                // Clear update CIDs from local state
+                updatedDoc.localState.updateCids = [];
+                // Also clear local snapshot if it existed, it's irrelevant now
+                delete updatedDoc.localState.snapshotCid;
+
                 needsSave = true;
             } else {
                 // --- Standard Update Promotion (Only if NOT consolidated) --- 
+
+                // Create localState if it doesn't exist
+                if (!updatedDoc.localState) {
+                    updatedDoc.localState = {};
+                }
+
+                // Initialize arrays if they don't exist
+                if (!updatedDoc.updateCids) updatedDoc.updateCids = [];
+                if (!updatedDoc.localState.updateCids) updatedDoc.localState.updateCids = [];
+
                 // Promote synced updates (original logic)
                 if (changes.updateCids && changes.updateCids.length > 0) {
                     const updatesToRemove = new Set(changes.updateCids);
-                    const originalLocalUpdatesCount = updatedDoc.localState?.updateCids?.length ?? 0;
+                    const originalLocalUpdatesCount = updatedDoc.localState.updateCids.length;
 
-                    // Remove synced CIDs from localState.updateCids
-                    if (updatedDoc.localState?.updateCids) {
-                        updatedDoc.localState.updateCids = updatedDoc.localState.updateCids.filter(cid => !updatesToRemove.has(cid));
-                    }
+                    // Remove synced CIDs from localState.updateCids 
+                    updatedDoc.localState.updateCids = updatedDoc.localState.updateCids.filter(cid => !updatesToRemove.has(cid));
 
                     // Add synced CIDs to the main updateCids array (if not already present)
-                    if (!updatedDoc.updateCids) updatedDoc.updateCids = [];
                     const currentBaseUpdates = new Set(updatedDoc.updateCids);
                     changes.updateCids.forEach(cid => {
                         if (!currentBaseUpdates.has(cid)) {
@@ -547,29 +631,40 @@ class HominioDB {
                     });
 
                     // If localState.updateCids changed length or base updateCids changed length
-                    if ((updatedDoc.localState?.updateCids?.length ?? 0) !== originalLocalUpdatesCount || updatedDoc.updateCids.length !== currentBaseUpdates.size) {
+                    if (updatedDoc.localState.updateCids.length !== originalLocalUpdatesCount ||
+                        updatedDoc.updateCids.length !== currentBaseUpdates.size) {
                         needsSave = true;
                     }
                 }
+
+                // Handle snapshot promotion if provided
+                if (changes.snapshotCid && updatedDoc.localState.snapshotCid === changes.snapshotCid) {
+                    updatedDoc.snapshotCid = changes.snapshotCid;
+                    delete updatedDoc.localState.snapshotCid;
+                    needsSave = true;
+                }
+
                 // --- End Standard Update Promotion --- 
             }
             // --- End Handle Server Consolidation ---
 
             // Clean up localState if empty
-            if (updatedDoc.localState && Object.keys(updatedDoc.localState).length === 0) {
-                delete updatedDoc.localState;
-                needsSave = true;
+            if (updatedDoc.localState) {
+                const hasLocalSnapshot = !!updatedDoc.localState.snapshotCid;
+                const hasLocalUpdates = updatedDoc.localState.updateCids && updatedDoc.localState.updateCids.length > 0;
+
+                if (!hasLocalSnapshot && !hasLocalUpdates) {
+                    delete updatedDoc.localState;
+                    needsSave = true;
+                }
             }
 
-            // 4. Save if changes were made
+            // Save if changes were made
             if (needsSave) {
                 updatedDoc.updatedAt = new Date().toISOString(); // Update timestamp
                 const docsStorage = getDocsStorage();
                 await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDoc)));
-
-                // Explicitly trigger reactivity *after* metadata is saved
-                // docChangeNotifier.update(n => n + 1);
-                console.log(`[updateDocStateAfterSync] Saved updated state for ${pubKey}`);
+                triggerDocChangeNotification();
             }
 
         } catch (err) {
@@ -585,14 +680,19 @@ class HominioDB {
      * @param options Import options
      * @returns The document pubKey and snapshot CID
      */
-    async importContent(binaryData: Uint8Array, options: {
-        pubKey?: string,
-        owner?: string
-    } = {}): Promise<{ pubKey: string, snapshotCid: string }> {
+    async importContent(
+        user: CapabilityUser | null, // Added user argument
+        binaryData: Uint8Array,
+        options: {
+            pubKey?: string,
+            owner?: string
+        } = {}
+    ): Promise<{ pubKey: string, snapshotCid: string }> {
         try {
-            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null; // Still uses external store getter
-            if (!currentUser) {
-                throw new Error("Permission denied: User must be logged in to import content.");
+            // Determine owner: prioritize options.owner, then user.id, then error
+            const determinedOwner = options.owner ?? user?.id;
+            if (!determinedOwner) {
+                throw new Error("Import requires an owner to be specified in options or user must be provided.");
             }
 
             // Create a new LoroDoc to analyze the content
@@ -637,7 +737,7 @@ class HominioDB {
             const now = new Date().toISOString();
             const newDoc: Docs = {
                 pubKey,
-                owner: options.owner || currentUser.id, // Use current user ID as owner
+                owner: determinedOwner, // Use determined owner
                 updatedAt: now,
                 snapshotCid,
                 updateCids: [],
@@ -669,7 +769,11 @@ class HominioDB {
      * @param options Export options
      * @returns Binary data
      */
-    async exportContent(pubKey: string, options: { mode?: 'snapshot' | 'update' } = {}): Promise<Uint8Array> {
+    async exportContent(
+        user: CapabilityUser | null, // Added user argument
+        pubKey: string,
+        options: { mode?: 'snapshot' | 'update' } = {}
+    ): Promise<Uint8Array> {
         try {
             // --- Fetch directly instead of using store ---
             // const doc = get(docs).find(d => d.pubKey === pubKey); // Removed
@@ -680,8 +784,7 @@ class HominioDB {
             }
 
             // *** Capability Check ***
-            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null; // Still uses external store getter
-            if (!canRead(currentUser, doc)) {
+            if (!canRead(user, doc)) { // Added user argument to canRead
                 throw new Error('Permission denied: Cannot read this document to export');
             }
             // *** End Capability Check ***
@@ -706,10 +809,16 @@ class HominioDB {
      * @param newStatus Status update
      */
     private _setStatus(newStatus: Partial<{ loading: boolean; creatingDoc: boolean }>): void {
-        // status.update(s => ({ ...s, ...newStatus })); // Removed store update
+        const wasLoading = this._isLoading;
+        const wasCreating = this._isCreatingDoc;
+
         if (newStatus.loading !== undefined) this._isLoading = newStatus.loading;
         if (newStatus.creatingDoc !== undefined) this._isCreatingDoc = newStatus.creatingDoc;
-        // Consider adding a notifier update here if UI needs to react to loading states
+
+        // Trigger notifier when loading/creating state changes to false (completed operation)
+        if ((wasLoading && !this._isLoading) || (wasCreating && !this._isCreatingDoc)) {
+            docChangeNotifier.update(n => n + 1);
+        }
     }
 
     /**
@@ -732,22 +841,20 @@ class HominioDB {
      * @param pubKey Document public key
      * @returns True if successful, otherwise throws an error
      */
-    async deleteDocument(pubKey: string): Promise<boolean> {
+    async deleteDocument(
+        user: CapabilityUser | null,
+        pubKey: string
+    ): Promise<boolean> {
         this._setError(null); // Clear error
         try {
-            // --- Fetch directly instead of using store ---
-            // const allDocs = get(docs); // Removed
-            // const docIndex = allDocs.findIndex(d => d.pubKey === pubKey); // Removed
             const doc = await this.getDocument(pubKey); // Fetch directly
-            // --------------------------------------------
 
             if (!doc) { // Check if doc exists
                 throw new Error(`Document ${pubKey} not found for deletion`);
             }
 
             // *** Capability Check ***
-            const currentUser = get(authClient.useSession()).data?.user as CapabilityUser | null; // Still uses external store getter
-            if (!canDelete(currentUser, doc)) {
+            if (!canDelete(user, doc)) { // Added user argument to canDelete
                 throw new Error('Permission denied: Cannot delete this document');
             }
             // *** End Capability Check ***
@@ -761,13 +868,13 @@ class HominioDB {
             const docsStorage = getDocsStorage();
             await docsStorage.delete(pubKey);
 
-            // Explicitly trigger reactivity *after* metadata is saved
-            // docChangeNotifier.update(n => n + 1);
+            // Explicitly trigger reactivity *after* deletion
+            docChangeNotifier.update(n => n + 1);
 
             return true;
         } catch (err) {
             console.error(`Error deleting document ${pubKey}:`, err);
-            this._setError(`Failed to delete document: ${err instanceof Error ? err.message : String(err)}`); // Use internal method
+            this._setError(`Failed to delete document: ${err instanceof Error ? err.message : String(err)}`);
             throw err; // Re-throw error
         }
     }
@@ -876,44 +983,27 @@ class HominioDB {
         const loroDoc = new LoroDoc();
         try {
             loroDoc.import(snapshotData);
+            loroDoc.setPeerId(1); // Set a default peer ID
+
+            // Add subscribe to changes
+            loroDoc.subscribe(() => {
+                // Check if there are changes that need persisting
+                // This is called when the document changes in-memory
+                // We need to persist these changes to storage
+                this._persistLoroUpdateAsync(pubKey, loroDoc).catch(err => {
+                    console.error(`[Loro Subscribe] Failed to persist update for ${pubKey}:`, err);
+                });
+            });
+
+            // Store in cache
+            activeLoroDocuments.set(pubKey, loroDoc);
+
+            return loroDoc;
+
         } catch (importErr) {
             console.error(`[getLoroDoc] Error importing snapshot ${snapshotCid} for ${pubKey}:`, importErr);
             return null;
         }
-
-        // 6. Apply Updates
-        const allUpdateCids = [
-            ...(docMetadata.updateCids || []),
-            ...(docMetadata.localState?.updateCids || []) // Include local updates if present
-        ];
-
-        // Optimization: Fetch all updates at once if storage supports it (assuming basic get for now)
-        const updatesData: Uint8Array[] = [];
-        for (const updateCid of allUpdateCids) {
-            const updateData = await contentStorage.get(updateCid);
-            if (updateData) {
-                updatesData.push(updateData);
-            } else {
-                console.warn(`[getLoroDoc] Update content not found for CID ${updateCid} (doc ${pubKey})`);
-                // Decide: continue applying others or fail? Continue seems reasonable.
-            }
-        }
-
-        // 7. Import Updates in Batch (if any)
-        if (updatesData.length > 0) {
-            try {
-                loroDoc.importBatch(updatesData);
-            } catch (batchImportErr) {
-                console.error(`[getLoroDoc] Error batch importing updates for ${pubKey}:`, batchImportErr);
-                // Should we return null or the doc state before failed batch import?
-                // Returning null seems safer to indicate incomplete state.
-                return null;
-            }
-        }
-
-        // 8. Cache and Return
-        activeLoroDocuments.set(pubKey, loroDoc);
-        return loroDoc;
     }
 
     /**
@@ -926,30 +1016,37 @@ class HominioDB {
      * @returns The metadata (Docs object) of the newly created entity document.
      * @throws Error if creation fails.
      */
-    public async createEntity(schemaPubKey: string, initialPlaces: Record<string, LoroJsonValue>, ownerId: string, options: { name?: string } = {}): Promise<Docs> {
-        const pubKey: string = docIdService.generateDocId();
-        const now: string = new Date().toISOString();
-        this._isInitializingDoc = true; // Set flag before creation starts
+    public async createEntity(
+        user: CapabilityUser | null,
+        schemaPubKey: string,
+        initialPlaces: Record<string, LoroJsonValue>,
+        ownerId: string,
+        options: { name: string }
+    ): Promise<Docs> {
+        this._isInitializingDoc = true;
+        let pubKey: string | undefined = undefined;
 
         try {
-            const loroDoc: LoroDoc = await this.getOrCreateLoroDoc(pubKey);
-            const meta: LoroMap = loroDoc.getMap('meta');
+            pubKey = await docIdService.generateDocId();
+            const now = new Date().toISOString();
+            const loroDoc = await this.getOrCreateLoroDoc(pubKey);
+
+            // Populate Metadata
+            const meta = loroDoc.getMap('meta');
             meta.set('schema', `@${schemaPubKey}`);
-            if (options.name) meta.set('name', options.name);
+            meta.set('name', options.name);
 
-            // Correctly create the nested places map
-            const dataMap: LoroMap = loroDoc.getMap('data');
-            // Use setContainer with a NEW LoroMap instance
-            const placesMap: LoroMap = dataMap.setContainer("places", new LoroMap());
-
-            // Now placesMap is guaranteed to be a LoroMap, set values
+            // Populate Data
+            const dataMap = loroDoc.getMap('data');
+            const placesMap = dataMap.setContainer("places", new LoroMap());
             for (const key in initialPlaces) {
                 if (Object.prototype.hasOwnProperty.call(initialPlaces, key)) {
                     placesMap.set(key, initialPlaces[key]);
                 }
             }
 
-            const snapshot: Uint8Array = loroDoc.export({ mode: 'snapshot' });
+            // Snapshotting, Content Saving, Metadata Saving
+            const snapshot = loroDoc.export({ mode: 'snapshot' });
             const snapshotCid = await hashService.hashSnapshot(snapshot);
             const contentStorage = getContentStorage();
             await contentStorage.put(snapshotCid, snapshot, {
@@ -958,31 +1055,29 @@ class HominioDB {
                 created: now,
                 schema: `@${schemaPubKey}`
             });
-            const newDoc: Docs = {
+            const docMetadata: Docs = {
                 pubKey,
                 owner: ownerId,
                 updatedAt: now,
                 snapshotCid,
-                updateCids: [],
-                localState: {
-                    snapshotCid: snapshotCid
-                }
+                localState: { snapshotCid: snapshotCid }
             };
             const docsStorage = getDocsStorage();
-            await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(newDoc)));
+            await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(docMetadata)));
             activeLoroDocuments.set(pubKey, loroDoc);
 
-            // Explicitly trigger reactivity *after* metadata is saved
-            // docChangeNotifier.update(n => n + 1);
+            triggerDocChangeNotification();
 
-            return newDoc;
-
+            return docMetadata;
         } catch (err) {
-            console.error(`[createEntity] Failed for schema @${schemaPubKey}:`, err);
-            activeLoroDocuments.delete(pubKey);
-            throw new Error(`Failed to create entity: ${err instanceof Error ? err.message : 'Unknown error'}`);
+            console.error('Error creating entity:', err);
+            this._setError(`Failed to create entity: ${err instanceof Error ? err.message : 'Unknown error'}`);
+            if (pubKey) {
+                activeLoroDocuments.delete(pubKey);
+            }
+            throw err;
         } finally {
-            this._isInitializingDoc = false; // Clear flag
+            this._isInitializingDoc = false;
         }
     }
 
@@ -998,7 +1093,7 @@ class HominioDB {
     public async persistLoroUpdate(pubKey: string, updateData: Uint8Array): Promise<string> {
         try {
             // 1. Calculate CID
-            const updateCid = await hashService.hashSnapshot(updateData); // Use same hash function
+            const updateCid = await hashService.hashSnapshot(updateData);
 
             // 2. Store Update Content
             const contentStorage = getContentStorage();
@@ -1031,20 +1126,23 @@ class HominioDB {
             // Now we know updatedDocData.localState.updateCids is an array
             if (!updatedDocData.localState.updateCids.includes(updateCid)) {
                 updatedDocData.localState.updateCids.push(updateCid);
-                updatedDocData.updatedAt = new Date().toISOString(); // Update timestamp only if CID added
-
-                // 5. Save Updated Document Metadata
+                // Always update the updatedAt timestamp to ensure change detection
+                updatedDocData.updatedAt = new Date().toISOString();
+                // Persist updated metadata
                 const docsStorage = getDocsStorage();
                 await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDocData)));
-
+                // Always trigger the notifier after updates
+                docChangeNotifier.update((n) => n + 1);
             } else {
-                console.warn(`[persistLoroUpdate] Update CID ${updateCid} already present in localState for doc ${pubKey}. Skipping metadata update.`); // KEEP Warning
+
+                // Trigger notification even if no new updates to ensure UI refreshes
+                docChangeNotifier.update((n) => n + 1);
             }
 
             return updateCid; // Return the CID regardless of whether metadata was updated
 
         } catch (err) {
-            console.error(`[persistLoroUpdate] Failed for doc ${pubKey}:`, err); // <-- Log: Error
+            console.error(`[persistLoroUpdate] Failed for doc ${pubKey}:`, err);
             this._setError(`Failed to persist update: ${err instanceof Error ? err.message : 'Unknown error'}`);
             throw err; // Re-throw error
         }
@@ -1057,13 +1155,69 @@ class HominioDB {
             return;
         }
 
-        const updateData = loroDoc.export({ mode: 'update' });
+        try {
+            // Get the update data
+            const updateData = loroDoc.export({ mode: 'update' });
 
-        if (updateData.byteLength > 0) {
-            // Call the existing persistence logic (which also updates metadata & triggers notifier)
-            await this.persistLoroUpdate(pubKey, updateData);
-        } else {
-            console.log(`[Loro Event] No effective changes detected by Loro for ${pubKey}. Skipping persistence.`);
+            if (updateData.byteLength > 0) {
+                // Calculate CID
+                const updateCid = await hashService.hashSnapshot(updateData);
+
+                // Store the update content
+                const contentStorage = getContentStorage();
+                await contentStorage.put(updateCid, updateData, {
+                    type: 'update',
+                    documentPubKey: pubKey,
+                    created: new Date().toISOString()
+                });
+
+                // Update document metadata
+                const docMeta = await this.getDocument(pubKey);
+                if (!docMeta) {
+                    console.error(`[_persistLoroUpdateAsync] Document ${pubKey} not found during update persistence.`);
+                    return;
+                }
+
+                // Prepare updated metadata
+                const updatedDocData: Docs = { ...docMeta };
+                let needsSave = false;
+
+                // Ensure localState and updateCids array exist
+                if (!updatedDocData.localState) {
+                    updatedDocData.localState = { updateCids: [] };
+                } else if (!updatedDocData.localState.updateCids) { // Check if updateCids array exists within localState
+                    updatedDocData.localState.updateCids = [];
+                }
+
+                // Add CID if not already present in localState.updateCids
+                // Ensure updateCids is not undefined before accessing includes/push
+                if (updatedDocData.localState.updateCids && !updatedDocData.localState.updateCids.includes(updateCid)) {
+                    updatedDocData.localState.updateCids.push(updateCid);
+                    needsSave = true; // Mark that we need to save
+                } else {
+                    // CID already present or updateCids was somehow undefined
+                    needsSave = false;
+                    if (updatedDocData.localState.updateCids) { // Only log if array existed
+                    }
+                }
+
+                // Only save if the CID was actually added
+                if (needsSave) {
+                    // Update timestamp
+                    updatedDocData.updatedAt = new Date().toISOString();
+
+                    // Save metadata
+                    const docsStorage = getDocsStorage();
+                    await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDocData)));
+
+                    // Trigger notification after successful persistence
+                    triggerDocChangeNotification();
+                } // else: No need to save metadata if CID was already there
+            } else {
+                console.log(`[Loro Event] No effective changes detected for ${pubKey}.`);
+            }
+        } catch (error) {
+            console.error(`[_persistLoroUpdateAsync] Error processing changes for ${pubKey}:`, error);
         }
     }
     // -------------------------
@@ -1098,9 +1252,7 @@ class HominioDB {
             // const exists = await contentStorage.get(cid);
             // if (!exists) {
             await contentStorage.put(cid, data, meta);
-            // } else {
-            // 	console.log(`[saveRawContent] Content ${cid} already exists.`);
-            // }
+
         } catch (err) {
             console.error(`[saveRawContent] Error saving CID ${cid}:`, err);
             throw new Error(`Failed to save raw content: ${err instanceof Error ? err.message : 'Unknown error'}`);
@@ -1151,8 +1303,10 @@ class HominioDB {
 
             // 3. Save merged data to storage
             const docsStorage = getDocsStorage();
-            console.log(`[saveSyncedDocument] Saving merged metadata to docs store:`, JSON.stringify(mergedDoc)); // <-- Log before save
             await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(mergedDoc)));
+
+            // Trigger reactivity after saving document
+            docChangeNotifier.update(n => n + 1);
 
         } catch (err) {
             console.error(`[saveSyncedDocument] Error processing doc ${pubKey}:`, err);

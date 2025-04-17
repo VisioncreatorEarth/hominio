@@ -163,7 +163,6 @@ export class IndexedDBAdapter implements StorageAdapter {
                 }
             });
 
-            console.log(`IndexedDB opened successfully for store: ${this.storeName}`);
         } catch (err) {
             console.error('Error opening IndexedDB:', err);
             throw new Error('Could not open IndexedDB');
@@ -631,7 +630,6 @@ export async function initStorage(): Promise<void> {
             docsStore.init()
         ]);
 
-        console.log('All storage initialized successfully');
     }
 }
 

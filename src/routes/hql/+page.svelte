@@ -3,14 +3,19 @@
 		hominioQLService,
 		type HqlQueryRequest,
 		type HqlQueryResult,
-		type ResolvedHqlDocument,
 		type HqlMutationRequest
 	} from '$lib/KERNEL/hominio-ql';
 	import { readable, type Readable } from 'svelte/store';
-	import { slide } from 'svelte/transition';
 	import { hominioSync } from '$lib/KERNEL/hominio-sync';
+	import { getContext } from 'svelte';
+	import { getCurrentEffectiveUser as getCurrentEffectiveUserType } from '$lib/KERNEL/hominio-auth';
 
-	// --- Reactive Data Store (Using Auto-Subscription & Effects) ---
+	// Define the specific Prenu schema pubkey
+	const PRENU_SCHEMA_PUBKEY = '0xfdd157564621e5bd35bc9276e6dfae3eb5b60076b0d0d20559ac588121be9cf7';
+
+	// --- Get Effective User Function from Context ---
+	type GetCurrentUserFn = typeof getCurrentEffectiveUserType;
+	const getCurrentEffectiveUser = getContext<GetCurrentUserFn>('getCurrentEffectiveUser');
 
 	// Schemas
 	const allSchemasQuery: HqlQueryRequest = {
@@ -22,8 +27,9 @@
 			]
 		}
 	};
+	// Get current user BEFORE creating reactive query
 	const schemasReadable: Readable<HqlQueryResult | null | undefined> =
-		hominioQLService.processReactive(allSchemasQuery);
+		hominioQLService.processReactive(getCurrentEffectiveUser, allSchemasQuery);
 
 	// Selected Schema State
 	let selectedSchemaPubKey = $state<string | null>(null);
@@ -41,22 +47,15 @@
 				operation: 'query',
 				filter: { meta: { schema: `@${currentPubKey}` } } // Find entities using the selected schema
 			};
+			// Get current user BEFORE creating reactive query
 			// Get the new readable store for entities and assign it to the state variable
-			entitiesReadable = hominioQLService.processReactive(entityQuery);
+			entitiesReadable = hominioQLService.processReactive(getCurrentEffectiveUser, entityQuery);
 			selectedEntityPubKey = null; // <-- Reset selected entity when schema changes
 		} else {
 			// If no schema selected, reset to an empty/loading state
 			entitiesReadable = readable(undefined);
 			selectedEntityPubKey = null; // <-- Reset selected entity when schema changes
 		}
-	});
-
-	// Derived value for the currently selected entity's full data
-	const selectedEntityData = $derived(() => {
-		if (selectedEntityPubKey && $entitiesReadable) {
-			return $entitiesReadable.find((e) => e.pubKey === selectedEntityPubKey) || null;
-		}
-		return null;
 	});
 
 	// Helper function to format validation rules (simplified)
@@ -105,11 +104,11 @@
 				}
 			};
 
-			const result = await hominioQLService.process(mutation);
-			// List will update automatically due to reactive query
+			// Get current user before processing mutation
+			const currentUser = getCurrentEffectiveUser();
+			const result = await hominioQLService.process(currentUser, mutation);
 		} catch (err) {
 			console.error('[Action] Error creating Prenu:', err);
-			// TODO: Show error to user
 		} finally {
 			isCreatingPrenu = false;
 		}
@@ -133,7 +132,9 @@
 				}
 			};
 
-			const result = await hominioQLService.process(mutation);
+			// Get current user before processing mutation
+			const currentUser = getCurrentEffectiveUser();
+			const result = await hominioQLService.process(currentUser, mutation);
 		} catch (err) {
 			console.error(`[Action] Error updating Prenu ${entityPubKey} name:`, err);
 		} finally {
@@ -151,12 +152,13 @@
 
 	function handlePush() {
 		if (!$syncStatus.isSyncing && $syncStatus.pendingLocalChanges > 0) {
-			hominioSync.pushToServer();
+			const currentUser = getCurrentEffectiveUser();
+			hominioSync.pushToServer(currentUser);
 		}
 	}
 </script>
 
-<div class="grid h-screen grid-cols-1 bg-gray-100 md:grid-cols-[250px_1fr_400px]">
+<div class="grid h-screen grid-cols-1 bg-gray-100 md:grid-cols-[250px_3fr_2fr]">
 	<!-- Sidebar (Left Column) -->
 	<aside class="col-span-1 overflow-y-auto border-r border-gray-300 bg-white p-4">
 		<h2 class="mb-4 text-lg font-semibold text-gray-700">Schemas</h2>
@@ -297,57 +299,21 @@
 					{/if}
 				</div>
 
-				<!-- Entities List Section -->
-				<div class="flex-grow border-t border-gray-300 pt-6">
-					<h2 class="mb-4 text-xl font-semibold text-gray-700">Entities using this Schema</h2>
-					<!-- Use $entitiesReadable directly -->
-					{#if $entitiesReadable === undefined}
-						<p class="text-sm text-gray-500">Loading entities...</p>
-					{:else if $entitiesReadable === null}
-						<p class="text-sm text-red-600">Error loading entities.</p>
-					{:else if $entitiesReadable.length === 0}
-						<p class="text-sm text-yellow-700">No entities found using this schema.</p>
-					{:else}
-						<ul class="divide-y divide-gray-200">
-							{#each $entitiesReadable as entity (entity.pubKey)}
-								{@const entityMeta = entity.meta as Record<string, any> | undefined}
-								{@const entityData = entity.data as Record<string, any> | undefined}
-								<li class="py-3">
-									<div class="flex items-center justify-between">
-										<!-- Entity Info & Selection Button -->
-										<button
-											class="flex-grow cursor-pointer rounded-l px-3 py-1 text-left transition-colors hover:bg-gray-100 {selectedEntityPubKey ===
-											entity.pubKey
-												? 'bg-blue-50'
-												: ''}"
-											on:click={() => (selectedEntityPubKey = entity.pubKey)}
-										>
-											<p class="font-medium text-gray-800">
-												{entityData?.places?.x1 ?? entityMeta?.name ?? 'Unnamed Entity'}
-											</p>
-											<p class="text-xs text-gray-500">
-												PubKey: <code class="text-xs">{entity.pubKey}</code>
-											</p>
-										</button>
-
-										<!-- Edit Button (Only for Prenu Schema) -->
-										{#if selectedMetaData?.name === 'prenu'}
-											{@const isUpdatingThis = currentlyUpdatingPrenu === entity.pubKey}
-											<div class="ml-2 flex flex-shrink-0 flex-col items-end space-y-1">
-												<button
-													class="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600 shadow-sm transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-													on:click={() => updatePrenuName(entity.pubKey)}
-													disabled={currentlyUpdatingPrenu !== null}
-												>
-													{isUpdatingThis ? '...' : 'Edit Name'}
-												</button>
-											</div>
-										{/if}
-									</div>
-								</li>
-							{/each}
-						</ul>
-					{/if}
+				<!-- Entities List Section - MOVED TO RIGHT SIDEBAR -->
+				<div class="mt-6 border-t border-gray-300 pt-6">
+					<details class="rounded border border-gray-300 bg-white">
+						<summary class="cursor-pointer list-none p-3 font-medium text-gray-700 hover:bg-gray-50"
+							>Schema JSON: {selectedMetaData?.name ?? selectedSchema.pubKey}</summary
+						>
+						<div class="border-t border-gray-300 p-3">
+							<pre
+								class="overflow-x-auto rounded bg-gray-50 p-3 font-mono text-xs whitespace-pre-wrap text-gray-700">{JSON.stringify(
+									selectedSchema,
+									null,
+									2
+								)}</pre>
+						</div>
+					</details>
 				</div>
 			{:else}
 				<p class="text-red-600">Error: Selected schema not found in the list.</p>
@@ -360,26 +326,94 @@
 	</main>
 
 	<!-- Right Sidebar (Restored) -->
-	<aside class="col-span-1 overflow-y-auto bg-white p-6">
-		{#if selectedSchemaPubKey && $schemasReadable}
-			<!-- Show selected schema JSON -->
-			{@const selectedSchema = $schemasReadable.find((s) => s.pubKey === selectedSchemaPubKey)}
-			{#if selectedSchema}
-				<details class="mb-4 rounded border border-gray-300 bg-white" open>
-					<summary class="cursor-pointer list-none p-3 font-medium text-gray-700 hover:bg-gray-50"
-						>Schema: {(selectedSchema.meta as Record<string, any>)?.name ??
-							selectedSchema.pubKey}</summary
-					>
-					<div class="border-t border-gray-300 p-3">
-						<pre
-							class="overflow-x-auto rounded bg-gray-50 p-3 font-mono text-xs whitespace-pre-wrap text-gray-700">{JSON.stringify(
-								selectedSchema,
-								null,
-								2
-							)}</pre>
-					</div>
-				</details>
-			{/if}
+	<aside class="col-span-1 flex flex-col overflow-y-auto bg-white p-6">
+		<h2 class="mb-4 flex-shrink-0 text-xl font-semibold text-gray-700">
+			Entities using this Schema
+		</h2>
+		{#if selectedSchemaPubKey}
+			<!-- Use $entitiesReadable directly -->
+			<div class="flex-grow overflow-y-auto">
+				{#if $entitiesReadable === undefined}
+					<p class="text-sm text-gray-500">Loading entities...</p>
+				{:else if $entitiesReadable === null}
+					<p class="text-sm text-red-600">Error loading entities.</p>
+				{:else if $entitiesReadable.length === 0}
+					<p class="text-sm text-yellow-700">No entities found using this schema.</p>
+				{:else}
+					<ul class="divide-y divide-gray-200">
+						{#each $entitiesReadable as entity (entity.pubKey)}
+							{@const entityMeta = entity.meta as Record<string, any> | undefined}
+							{@const entityData = entity.data as Record<string, any> | undefined}
+							<li class="py-3">
+								<div class="flex items-start justify-between space-x-2">
+									<!-- Entity Info & Selection Button -->
+									<button
+										class="flex-grow cursor-pointer rounded-l px-3 py-1 text-left transition-colors hover:bg-gray-100 {selectedEntityPubKey ===
+										entity.pubKey
+											? 'bg-blue-50'
+											: ''}"
+										on:click={() => (selectedEntityPubKey = entity.pubKey)}
+									>
+										<!-- Name and Edit Button Container -->
+										<div class="flex items-center space-x-2">
+											<p class="font-medium text-gray-800">
+												{#if entityMeta?.schema === `@${PRENU_SCHEMA_PUBKEY}`}
+													{entityData?.places?.x1 ?? 'Unnamed Prenu'}
+												{:else}
+													{entityMeta?.name ?? 'Unnamed Entity'}
+												{/if}
+											</p>
+											<!-- Edit Button (Inline) -->
+											{#if entityMeta?.schema === `@${PRENU_SCHEMA_PUBKEY}`}
+												{@const isUpdatingThis = currentlyUpdatingPrenu === entity.pubKey}
+												<!-- Remove the wrapping div, button goes directly here -->
+												<button
+													type="button"
+													class="flex-shrink-0 rounded border border-gray-300 bg-white px-2 py-0.5 text-xs text-gray-600 shadow-sm transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+													on:click|stopPropagation={() => updatePrenuName(entity.pubKey)}
+													disabled={currentlyUpdatingPrenu !== null}
+												>
+													{isUpdatingThis ? '...' : 'Update'}
+												</button>
+											{/if}
+										</div>
+
+										<p class="mt-1 text-xs text-gray-500">
+											PubKey: <code class="truncate text-xs">{entity.pubKey}</code>
+										</p>
+										<!-- Display Place Values -->
+										<div class="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+											{#each Object.entries(entityData?.places ?? {}).sort( ([keyA], [keyB]) => keyA.localeCompare(keyB) ) as [placeKey, placeValue] (placeKey)}
+												<div class="flex items-baseline">
+													<span class="mr-1 font-mono font-medium text-indigo-600">{placeKey}:</span
+													>
+													{#if typeof placeValue === 'string' && placeValue.startsWith('@')}
+														<code class="truncate text-blue-700">{placeValue}</code>
+													{:else if typeof placeValue === 'object' && placeValue !== null && (placeValue as any).pubKey}
+														{@const resolvedName =
+															(placeValue as any)?.data?.places?.x1 ??
+															(placeValue as any)?.meta?.name ??
+															(placeValue as any).pubKey}
+														<span class="ml-1 truncate font-medium text-purple-700"
+															>[Ref: {resolvedName}]</span
+														>
+													{:else}
+														<span class="truncate text-gray-800">{JSON.stringify(placeValue)}</span>
+													{/if}
+												</div>
+											{/each}
+										</div>
+									</button>
+								</div>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
+		{:else}
+			<div class="flex h-full items-center justify-center">
+				<p class="text-lg text-gray-500">Select a schema to view entities.</p>
+			</div>
 		{/if}
 	</aside>
 </div>

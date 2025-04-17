@@ -1,10 +1,5 @@
 import type { Docs } from './hominio-db'; // Assuming Docs type is exported
 import { GENESIS_HOMINIO } from '../../db/constants'; // Import from centralized constants
-import { browser } from '$app/environment'; // <<< IMPORT BROWSER
-
-
-
-const OFFLINE_OWNER_PLACEHOLDER = 'offline_owner'; // <<< Define placeholder constant
 
 // --- Types ---
 
@@ -21,79 +16,70 @@ export enum HominioAbility {
     DELETE = 'delete' // Add DELETE capability
 }
 
-// --- Core Check Function ---
+// --- Core Check Function --- UPDATED SIGNATURE & LOGIC
 
 /**
  * Checks if a user has a specific ability on a given document.
  * This function centralizes the core access control logic.
  *
- * @param user The user attempting the action, or null if anonymous.
+ * @param user The user object (must contain the 'id' field) or null.
  * @param ability The desired ability (e.g., HominioAbility.READ).
  * @param doc The target document object (must contain the 'owner' field).
  * @returns True if the action is permitted, false otherwise.
  */
 export function can(
-    user: CapabilityUser | null,
+    user: CapabilityUser | null, // <<< UPDATED: Accept user
     ability: HominioAbility,
-    doc: Pick<Docs, 'owner'> // Only require the 'owner' field from the Docs type
+    doc: Pick<Docs, 'owner'>
 ): boolean {
 
-    // --- Offline Check --- <<< ADDED OFFLINE HANDLING
-    if (browser && !navigator.onLine) {
-        console.log(`[Caps Check] Offline mode detected. Allowing ability '${ability}' for doc owned by ${doc.owner}.`);
-        return true; // Allow all operations locally when offline
-    }
-    // --------------------
+    // --- REMOVED Internal session fetching ---
+    // --- REMOVED Offline Check --- 
 
-    // --- Online Logic --- (Existing checks)
+    // --- Simplified Online Logic --- 
     const targetOwner = doc.owner;
-    const userId = user?.id;
+    const userId = user?.id; // Use passed-in user
 
     const isOwner = !!userId && targetOwner === userId;
     const isGenesis = targetOwner === GENESIS_HOMINIO;
 
     switch (ability) {
         case HominioAbility.READ:
-            // Allow reading if the user is the owner OR if it's a genesis document
             return isOwner || isGenesis;
 
         case HominioAbility.WRITE:
-            // Allow writing ONLY if the user is the owner OR if pushing an offline-created doc
-            // The server will assign the correct owner on initial creation.
-            return isOwner || targetOwner === OFFLINE_OWNER_PLACEHOLDER;
-
-        case HominioAbility.DELETE:
-            // Allow deleting ONLY if the user is the owner
+            // Write allowed if owner. Offline placeholder check is removed as
+            // offline state is handled before calling 'can'.
             return isOwner;
 
-        // Add cases for other abilities here later
+        case HominioAbility.DELETE:
+            return isOwner;
 
         default:
-            // Default deny for unknown abilities
             console.warn(`Unknown ability check: ${ability}`);
             return false;
     }
 }
 
-// --- Helper Functions ---
+// --- Helper Functions --- UPDATED SIGNATURES
 
 /**
  * Convenience helper to check if a user can read a document.
  */
-export function canRead(user: CapabilityUser | null, doc: Pick<Docs, 'owner'>): boolean {
-    return can(user, HominioAbility.READ, doc);
+export function canRead(user: CapabilityUser | null, doc: Pick<Docs, 'owner'>): boolean { // <<< ADD user
+    return can(user, HominioAbility.READ, doc); // <<< Pass user
 }
 
 /**
  * Convenience helper to check if a user can write to (update/delete) a document.
  */
-export function canWrite(user: CapabilityUser | null, doc: Pick<Docs, 'owner'>): boolean {
-    return can(user, HominioAbility.WRITE, doc);
+export function canWrite(user: CapabilityUser | null, doc: Pick<Docs, 'owner'>): boolean { // <<< ADD user
+    return can(user, HominioAbility.WRITE, doc); // <<< Pass user
 }
 
 /**
  * Convenience helper to check if a user can delete a document.
  */
-export function canDelete(user: CapabilityUser | null, doc: Pick<Docs, 'owner'>): boolean {
-    return can(user, HominioAbility.DELETE, doc);
+export function canDelete(user: CapabilityUser | null, doc: Pick<Docs, 'owner'>): boolean { // <<< ADD user
+    return can(user, HominioAbility.DELETE, doc); // <<< Pass user
 }

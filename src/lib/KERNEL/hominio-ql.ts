@@ -1,19 +1,45 @@
-import { hominioDB, type Docs } from './hominio-db';
-import { validateEntityJsonAgainstSchema } from './hominio-validate'; // Re-add import
-import { canRead, canDelete, type CapabilityUser, canWrite } from './hominio-caps';
-// --- Add Svelte store imports for reactive queries ---
-import { readable, type Readable, get } from 'svelte/store';
-import { docChangeNotifier } from './hominio-db'; // Import the notifier
-import { authClient } from '$lib/KERNEL/hominio-auth'; // Import authClient
-import { LoroMap } from 'loro-crdt'; // <-- ADDED LoroMap import
-import { browser } from '$app/environment'; // <<< IMPORT BROWSER HERE for _handleCreate logic
+import { hominioDB, type Docs, docChangeNotifier, triggerDocChangeNotification } from './hominio-db';
+import { canRead, canDelete } from './hominio-caps';
+import { readable, get, type Readable } from 'svelte/store';
+import { LoroMap } from 'loro-crdt';
+import { browser } from '$app/environment';
+import { authClient, getCurrentEffectiveUser as getCurrentEffectiveUserType } from '$lib/KERNEL/hominio-auth';
+import type { CapabilityUser } from './hominio-caps';
+import { validateEntityJsonAgainstSchema } from './hominio-validate';
 
 type LoroJsonValue = string | number | boolean | null | LoroJsonObject | LoroJsonArray;
 interface LoroJsonObject { [key: string]: LoroJsonValue }
 type LoroJsonArray = LoroJsonValue[];
 
+// --- Helper Function for Default Name Generation (Moved here) ---
+function generateDefaultEntityName(places: Record<string, LoroJsonValue> | null | undefined): string {
+    if (!places) {
+        return 'Unnamed Entity';
+    }
+    const nameParts: string[] = [];
+    const sortedKeys = Object.keys(places).sort();
+
+    for (const key of sortedKeys) {
+        const value = places[key];
+        if (typeof value === 'string') {
+            if (value.startsWith('@')) {
+                nameParts.push(`@${value.substring(1, 9)}`);
+            } else if (value.trim() !== '') {
+                nameParts.push(value);
+            }
+        } else if (typeof value === 'number' || typeof value === 'boolean') {
+            nameParts.push(String(value));
+        }
+    }
+    if (nameParts.length === 0) {
+        return 'Unnamed Entity';
+    }
+    return nameParts.join(' ');
+}
+// --- End Helper Function ---
+
 type HqlValue = LoroJsonValue;
-type HqlOperator = '$eq' | '$ne' | '$gt' | '$gte' | '$lt' | '$lte' | '$in' | '$nin' | '$exists' | '$regex' | '$contains';
+type HqlOperator = '$eq' | '$ne' | '$gt' | '$gte' | '$lt' | '$lte' | '$in' | '$nin' | '$exists' | '$regex' | '$contains' | '$refSchema';
 type HqlCondition = { [key in HqlOperator]?: HqlValue | HqlValue[] };
 type HqlPlaceFilterValue = HqlValue | HqlCondition | string; // Allow direct @ref string
 type HqlMetaFilterValue = HqlValue | HqlCondition;
@@ -76,16 +102,13 @@ class HominioQLService {
     /**
      * Main entry point to process an HQL request (non-reactive).
      */
-    async process(request: HqlRequest): Promise<HqlResult> {
+    async process(user: CapabilityUser | null, request: HqlRequest): Promise<HqlResult> {
         this.schemaJsonCache.clear(); // Clear JSON cache
         try {
-            // Fetch user internally for this specific operation
-            const user = get(authClient.useSession()).data?.user as CapabilityUser | null;
-
             if (request.operation === 'query') {
-                return await this._handleQuery(request, user);
+                return await this._handleQuery(user, request);
             } else if (request.operation === 'mutate') {
-                return await this._handleMutate(request, user);
+                return await this._handleMutate(user, request);
             } else {
                 throw new Error(`Invalid HQL operation: ${(request as { operation: string }).operation}`);
             }
@@ -97,7 +120,7 @@ class HominioQLService {
 
     // --- Query Handling ---
 
-    private async _handleQuery(request: HqlQueryRequest, user: CapabilityUser | null): Promise<HqlQueryResult> {
+    private async _handleQuery(user: CapabilityUser | null, request: HqlQueryRequest): Promise<HqlQueryResult> {
         // 1. Fetch ALL document metadata
         const allDbDocsMetadata = await hominioDB.loadAllDocsReturn();
 
@@ -130,7 +153,7 @@ class HominioQLService {
 
         // 5. Resolve References (if needed) and Format Results
         // Pass the metadata of the filtered docs.
-        const resolvedResults = await this._resolveReferencesAndFormat(filteredDocsMetadata, user);
+        const resolvedResults = await this._resolveReferencesAndFormat(filteredDocsMetadata);
         return resolvedResults;
     }
 
@@ -254,22 +277,31 @@ class HominioQLService {
                 const operand = (condition as HqlCondition)[operator];
                 fieldMatch = this._applyOperator(actualValue, operator, operand);
             } else {
-                if (typeof condition === 'string' && condition.startsWith('@') && typeof actualValue === 'string' && actualValue.startsWith('@')) {
-                    fieldMatch = condition === actualValue || condition.substring(1) === actualValue.substring(1);
-                } else if (typeof condition === 'string' && condition.startsWith('@')) {
-                    fieldMatch = actualValue === condition.substring(1);
-                } else if (typeof actualValue === 'string' && actualValue.startsWith('@')) {
-                    fieldMatch = condition === actualValue.substring(1);
-                } else {
-                    fieldMatch = this._applyOperator(actualValue, '$eq', condition);
-                }
+                // Enhanced check for @ references, primarily for $eq
+                fieldMatch = this._checkEqualityOrReference(actualValue, condition);
             }
             if (!fieldMatch) return false;
         }
         return true;
     }
 
+    // Helper specifically for equality comparison, handling @ references
+    private _checkEqualityOrReference(actualValue: unknown, expectedValue: unknown): boolean {
+        if (typeof actualValue === 'string' && actualValue.startsWith('@') && typeof expectedValue === 'string' && expectedValue.startsWith('@')) {
+            // Both are references, compare them (allow comparing with or without @)
+            return actualValue === expectedValue || actualValue.substring(1) === expectedValue.substring(1);
+        } else if (typeof actualValue === 'string' && actualValue.startsWith('@')) {
+            // Actual is ref, expected is not - compare pubKey to expected value
+            return actualValue.substring(1) === expectedValue;
+        } else if (typeof expectedValue === 'string' && expectedValue.startsWith('@')) {
+            // Expected is ref, actual is not - compare actual value to pubKey
+            return actualValue === expectedValue.substring(1);
+        }
+        // Standard equality check
+        return this._applyOperator(actualValue, '$eq', expectedValue);
+    }
 
+    // Modify _applyOperator to handle $refSchema
     private _applyOperator(value: unknown, operator: HqlOperator, operand: unknown): boolean {
         // Need more robust type checks here potentially
         switch (operator) {
@@ -287,13 +319,34 @@ class HominioQLService {
                 try {
                     return typeof value === 'string' && typeof operand === 'string' && new RegExp(operand).test(value);
                 } catch { return false; }
+            case '$refSchema':
+                {
+                    // operand should be the expected schema ref (e.g., '@0x...')
+                    if (typeof value !== 'string' || !value.startsWith('@') || typeof operand !== 'string' || !operand.startsWith('@')) {
+                        return false; // Value must be a @ reference, operand must be a schema @ reference
+                    }
+                    const refPubKey = value.substring(1);
+                    const expectedSchemaRef = operand;
+
+                    // Silence unused variable warnings for now
+                    void refPubKey;
+                    void expectedSchemaRef;
+
+                    // --- ASYNCHRONOUS OPERATION NEEDED HERE --- 
+                    // This cannot be done synchronously within the current filter structure.
+                    // We need to refactor _applyFilter or _evaluateFilter to be async
+                    // or pre-fetch referenced schemas.
+                    console.warn("[HQL] $refSchema operator is NOT YET IMPLEMENTED due to async requirements within sync filter evaluation.");
+                    return false; // Placeholder: return false until implemented
+                    // TODO: Implement async fetching and comparison of referenced schema
+                }
             default: return false;
         }
     }
 
 
     // Renamed _resolveReferences to reflect its new role
-    private async _resolveReferencesAndFormat(docsMetadata: Docs[], user: CapabilityUser | null): Promise<HqlQueryResult> {
+    private async _resolveReferencesAndFormat(docsMetadata: Docs[]): Promise<HqlQueryResult> {
         const resolvedDocs: ResolvedHqlDocument[] = [];
         const visited = new Set<string>();
 
@@ -328,7 +381,7 @@ class HominioQLService {
 
             if (currentJson) {
                 currentJson.pubKey = docMeta.pubKey; // Ensure pubKey is present
-                const resolved = await this._resolveNode(currentJson, user, new Set(), schemaFetcher);
+                const resolved = await this._resolveNode(currentJson, new Set(), schemaFetcher);
                 resolvedDocs.push(resolved);
             } else {
                 console.warn(`[HQL Resolve] Could not load LoroDoc/JSON for ${docMeta.pubKey}. Skipping.`);
@@ -339,7 +392,6 @@ class HominioQLService {
 
     private async _resolveNode(
         currentNodeJson: Record<string, unknown>,
-        user: CapabilityUser | null,
         visited: Set<string>,
         schemaFetcher: (schemaRef: string) => Promise<Record<string, unknown> | null>
     ): Promise<ResolvedHqlDocument> {
@@ -374,29 +426,24 @@ class HominioQLService {
                 const value = places[key];
                 if (typeof value === 'string' && value.startsWith('@')) {
                     const refPubKey = value.substring(1);
-                    // Fetch referenced doc JSON using getLoroDoc -> toJSON
+                    // Fetch referenced doc LoroDoc to get its name, but don't recurse resolution
                     const refLoroDoc = await hominioDB.getLoroDoc(refPubKey);
-                    const referencedJson = refLoroDoc ? (refLoroDoc.toJSON() as Record<string, unknown>) : null;
-
-                    if (referencedJson) {
-                        referencedJson.pubKey = refPubKey; // Ensure pubKey
-                        // Check read capability for referenced doc
-                        // Construct a minimal Docs object for capability check
-                        const owner = typeof meta?.owner === 'string' ? meta.owner : '';
-                        const updatedAt = typeof meta?.updatedAt === 'string' ? meta.updatedAt : '';
-                        const referencedDocMeta: Docs = {
+                    if (refLoroDoc) {
+                        const refMeta = refLoroDoc.getMap('meta');
+                        const refName = refMeta?.get('name') as string | undefined;
+                        // Store a marker object with essential info, not the full resolved node
+                        resolvedPlaces[key] = {
+                            $ref: true,
                             pubKey: refPubKey,
-                            owner: owner,
-                            updatedAt: updatedAt
+                            name: refName ?? refPubKey // Use pubKey as fallback name 
                         };
-                        if (canRead(user, referencedDocMeta)) {
-                            // Recursively resolve the referenced node
-                            resolvedPlaces[key] = await this._resolveNode(referencedJson, user, new Set(visited), schemaFetcher);
-                        } else {
-                            resolvedPlaces[key] = { $error: 'Permission denied', pubKey: refPubKey };
-                        }
                     } else {
-                        resolvedPlaces[key] = { $error: 'Not found', pubKey: refPubKey };
+                        // Keep original reference string or mark as not found
+                        resolvedPlaces[key] = {
+                            $ref: true,
+                            pubKey: refPubKey,
+                            $error: 'Not found'
+                        };
                     }
                 } else {
                     // Copy non-reference values directly
@@ -412,114 +459,86 @@ class HominioQLService {
     }
 
 
-    // --- Mutation Handling (To be refactored next) ---
+    // --- Mutation Handling ---
 
-    private async _handleMutate(request: HqlMutationRequest, user: CapabilityUser | null): Promise<HqlMutationResult> {
-        // <<< REMOVED isOffline CHECK, effectiveUser, mutationUser >>>
-        // The `can` functions called by the handlers below will now manage offline permissions.
-        // We pass the potentially null `user` directly.
+    private async _handleMutate(user: CapabilityUser | null, request: HqlMutationRequest): Promise<HqlMutationResult> {
+        let result: HqlMutationResult; // Declare result variable
+        try {
+            switch (request.action) {
+                case 'create':
+                    result = await this._handleCreate(user, request); // Assign result
+                    break; // Add break
+                case 'update':
+                    result = await this._handleUpdate(user, request); // Assign result
+                    break; // Add break
+                case 'delete':
+                    result = await this._handleDelete(user, request); // Assign result
+                    break; // Add break
+                default:
+                    throw new Error(`Invalid mutation action: ${request.action}`);
+            }
 
-        let result: HqlMutationResult;
-        switch (request.action) {
-            case 'create':
-                result = await this._handleCreate(request, user); // <<< Pass original user (can be null)
-                break;
-            case 'update':
-                result = await this._handleUpdate(request, user); // <<< Pass original user (can be null)
-                break;
-            case 'delete':
-                result = await this._handleDelete(request, user); // <<< Pass original user (can be null)
-                break;
-            default:
-                throw new Error(`Invalid mutation action: ${request.action}`);
+            // Notify AFTER the mutation logic completes successfully, but yield first
+            setTimeout(() => {
+                triggerDocChangeNotification();
+            }, 0); // Delay of 0ms yields to the event loop
+
+            return result; // Return the stored result
+
+        } catch (error) {
+            console.error(`HQL Mutation Error (Action: ${request.action}):`, error);
+            throw error instanceof Error ? error : new Error(`An unknown error occurred during HQL mutation: ${request.action}.`);
         }
-
-        // Notify AFTER the mutation logic completes, but yield first
-        setTimeout(() => {
-            docChangeNotifier.update(n => n + 1);
-        }, 0); // Delay of 0ms yields to the event loop
-
-        return result;
     }
 
-    private async _handleCreate(request: HqlMutationRequest, user: CapabilityUser | null): Promise<Docs> { // <<< Allow null user
-        // NOTE: Capability check (canWrite) happens implicitly in hominioDB.createEntity IF needed,
-        // but here we primarily need the user ID for ownership.
-        if (!request.schema) {
-            throw new Error("Schema reference ('schema') is required for create action.");
-        }
+    private async _handleCreate(user: CapabilityUser | null, request: HqlMutationRequest): Promise<Docs> {
+        if (!request.schema) throw new Error("HQL Create: 'schema' is required.");
+        if (!request.places) throw new Error("HQL Create: 'places' data is required.");
+        const ownerId = user?.id;
+        if (!ownerId && !(browser && !navigator.onLine)) throw new Error("HQL Create: User must be authenticated or offline.");
+        const effectiveOwnerId = ownerId ?? 'offline_owner';
+        const schemaPubKey = request.schema.startsWith('@') ? request.schema.substring(1) : null;
+        if (!schemaPubKey) throw new Error(`HQL Create: Schema must be @pubKey reference.`);
 
-        let schemaPubKey: string;
-        if (request.schema.startsWith('@')) {
-            schemaPubKey = request.schema.substring(1);
-        } else {
-            throw new Error("Schema creation via name resolution is not implemented. Use @pubKey format.");
-        }
-
-        // --- Determine Owner ID --- <<< MODIFIED
-        let ownerId: string;
-        if (user?.id) {
-            ownerId = user.id;
-        } else if (browser && !navigator.onLine) {
-            ownerId = 'offline_owner'; // Placeholder for offline creation
-            console.warn("[HQL Create] Running offline, setting owner to 'offline_owner'.");
-        } else {
-            // This case (online but no user) should ideally be prevented by upstream checks,
-            // but throw an error defensively.
-            throw new Error("Cannot create entity: User is not authenticated.");
-        }
-        // -------------------------
-
-        // --- Derive entity name from x1 --- 
+        // --- Determine Final Name ---
+        // Try deriving from x1 first
         let derivedName: string | undefined = undefined;
         const x1Value = request.places?.x1;
         if (typeof x1Value === 'string') {
             if (x1Value.startsWith('@')) {
-                const refPubKey = x1Value.substring(1);
-                try {
-                    const refLoroDoc = await hominioDB.getLoroDoc(refPubKey);
-                    if (refLoroDoc) {
-                        derivedName = refLoroDoc.getMap('meta').get('name') as string | undefined;
-                    } else {
-                        console.warn(`[HQL Create] Referenced doc ${refPubKey} for name not found.`);
-                    }
-                } catch (err) {
-                    console.error(`[HQL Create] Error fetching referenced doc ${refPubKey} for name:`, err);
-                }
+                // If x1 is a reference, we cannot easily get the name synchronously here.
+                // We'll rely on the generateDefaultEntityName fallback for now.
+                // TODO: Consider fetching the referenced doc name if this derivation is crucial.
             } else {
                 derivedName = x1Value; // Use direct string value
             }
         }
-        // -----------------------------------
+        // If no name derived from x1, generate default from all places
+        const finalName = derivedName && derivedName.trim() !== ''
+            ? derivedName
+            : generateDefaultEntityName(request.places);
+        // ------------------------
 
-        // --- Get schema definition ---
-        const schemaLoroDoc = await hominioDB.getLoroDoc(schemaPubKey);
-        const schemaJson = schemaLoroDoc ? schemaLoroDoc.toJSON() as Record<string, unknown> : null;
+        // --- Fetch Schema for Validation ---
+        const schemaJson = await this._fetchReferencedDocJson(schemaPubKey, new Map());
         if (!schemaJson) {
-            throw new Error(`Schema document with pubKey ${schemaPubKey} not found or failed to load.`);
+            throw new Error(`HQL Create: Schema document ${schemaPubKey} not found.`);
         }
         // ----------------------------------
 
-        // --- Prepare entity data for validation ---
-        const finalName = derivedName || 'Unnamed Entity';
+        // --- Prepare and Validate Entity Data --- 
         const entityJsonToValidate: LoroJsonObject = {
             meta: {
                 schema: `@${schemaPubKey}`,
-                owner: ownerId, // <<< Use determined ownerId
-                name: finalName
+                owner: effectiveOwnerId,
+                name: finalName // Use the final determined name
             },
             data: {
                 places: request.places ?? {}
             }
         };
-        // --------------------------------------------------
 
-        // Ensure data is an object before validation
-        if (typeof entityJsonToValidate.data !== 'object' || entityJsonToValidate.data === null || Array.isArray(entityJsonToValidate.data)) {
-            throw new Error("Internal HQL Error: Constructed entity data is not a valid object for validation.");
-        }
-
-        // --- Validate against schema ---
+        // Perform Validation
         const validationResult = validateEntityJsonAgainstSchema(entityJsonToValidate, schemaJson);
         if (!validationResult.isValid) {
             console.error("HQL Create Validation Failed:", validationResult.errors);
@@ -527,185 +546,399 @@ class HominioQLService {
         }
         // -------------------------------------
 
-        // Perform actual creation via hominioDB
-        const newDocMetadata = await hominioDB.createEntity(schemaPubKey, request.places || {}, ownerId, { name: finalName }); // <<< Use determined ownerId
-
-        return newDocMetadata;
+        // Perform actual creation via hominioDB, passing the final name
+        try {
+            const newDocMetadata = await hominioDB.createEntity(
+                user,
+                schemaPubKey,
+                request.places || {},
+                effectiveOwnerId,
+                { name: finalName } // Pass final name in options
+            );
+            return newDocMetadata;
+        } catch (dbError) {
+            console.error("HQL Create: Error calling hominioDB.createEntity:", dbError);
+            throw new Error(`Failed to create document in database: ${dbError instanceof Error ? dbError.message : 'Unknown DB error'}`);
+        }
     }
 
-    private async _handleUpdate(request: HqlMutationRequest, user: CapabilityUser | null): Promise<Docs> { // <<< Allow null user
-        if (!request.pubKey) {
-            throw new Error("Document PubKey ('pubKey') is required for update action.");
-        }
-        if (!request.places) {
-            throw new Error("Place data ('places') is required for update action.");
-        }
-
+    private async _handleUpdate(user: CapabilityUser | null, request: HqlMutationRequest): Promise<Docs> {
+        if (!request.pubKey) throw new Error("HQL Update: 'pubKey' is required.");
+        if (!request.places) throw new Error("HQL Update: 'places' data is required.");
         const pubKey = request.pubKey;
 
-        // 1. Fetch the document metadata for capability check and schema retrieval
+        // Fetch metadata (needed for potential later validation steps)
         const docMeta = await hominioDB.getDocument(pubKey);
-        if (!docMeta) {
-            throw new Error(`Document ${pubKey} not found for update.`);
+        if (!docMeta) throw new Error(`HQL Update: Document ${pubKey} not found.`);
+
+        // Fetch schema if needed for validation later
+        const initialLoroDoc = await hominioDB.getLoroDoc(pubKey);
+        if (!initialLoroDoc) throw new Error(`HQL Update: Could not load LoroDoc instance for ${pubKey}.`);
+        const initialMetaMap = initialLoroDoc.getMap('meta');
+        const schemaRef = initialMetaMap.get('schema') as string | undefined;
+        const schemaPubKey = schemaRef?.startsWith('@') ? schemaRef.substring(1) : null;
+        let schemaJson: Record<string, unknown> | null = null;
+        if (schemaPubKey) {
+            schemaJson = await this._fetchReferencedDocJson(schemaPubKey, new Map());
+            if (!schemaJson) throw new Error(`HQL Update: Schema document ${schemaPubKey} not found.`);
         }
 
-        // 2. Capability Check (using fetched metadata)
-        if (!canWrite(user, docMeta)) { // canWrite handles null user / offline logic
-            throw new Error(`Permission denied: Cannot write to document ${pubKey}`);
-        }
-
-        // 3. Get Schema Reference from Existing Document
-        // Need the current LoroDoc to get meta.schema
-        const currentLoroDoc = await hominioDB.getLoroDoc(pubKey);
-        if (!currentLoroDoc) {
-            throw new Error(`Could not load current document state for update: ${pubKey}`);
-        }
-        const currentMeta = currentLoroDoc.getMap('meta');
-        const schemaRef = currentMeta.get('schema') as string | undefined;
-        if (!schemaRef || !schemaRef.startsWith('@')) {
-            throw new Error(`Document ${pubKey} does not have a valid schema reference in its metadata.`);
-        }
-        const schemaPubKey = schemaRef.substring(1);
-
-        // 4. Fetch Schema for Validation
-        const schemaLoroDoc = await hominioDB.getLoroDoc(schemaPubKey);
-        const schemaJson = schemaLoroDoc ? schemaLoroDoc.toJSON() : null;
-        if (!schemaJson) {
-            throw new Error(`Schema document ${schemaRef} not found for validation.`);
-        }
-
-        // 5. Prepare Update Data (Resolving @ references like in create)
-        const placesUpdate: Record<string, LoroJsonValue> = {};
+        // --- Resolve references *before* the update callback --- 
+        const updatesToApply: Record<string, LoroJsonValue> = {};
+        const placeRefsToResolve = new Map<string, string>();
         for (const key in request.places) {
             const value = request.places[key];
-            if (typeof value === 'string' && value.startsWith('@')) {
-                placesUpdate[key] = value; // Keep reference string
-            } else {
-                placesUpdate[key] = value as LoroJsonValue;
-            }
+            if (typeof value === 'string' && value.startsWith('@')) placeRefsToResolve.set(key, value.substring(1));
+            else updatesToApply[key] = value;
         }
+        for (const [key, refPubKey] of placeRefsToResolve) {
+            const refDocMeta = await hominioDB.getDocument(refPubKey);
+            if (!refDocMeta) throw new Error(`HQL Update: Referenced document ${refPubKey} for place '${key}' not found.`);
+            if (!canRead(user, refDocMeta)) throw new Error(`HQL Update: Permission denied to read referenced document ${refPubKey}.`);
+            updatesToApply[key] = `@${refPubKey}`; // Add the resolved ref string back
+        }
+        // ----------------------------------------------------------
 
-        // 6. Validation (Validate the *intended state* after update)
-        // This requires merging `placesUpdate` with the current places, which is complex.
-        // Simpler approach: Validate just the `placesUpdate` structure against the schema's place definitions.
-        // Even simpler: Skip pre-validation and rely on Loro/DB layer errors if structure is wrong.
-        // Let's skip pre-validation for now to avoid complexity.
-        // const validationResult = validateEntityJsonAgainstSchema({ data: { places: placesUpdate } }, schemaJson);
-        // if (!validationResult.valid) {
-        //     throw new Error(`Validation failed for update: ${validationResult.errors.join(', ')}`);
-        // }
-
-        // 7. Perform Update using generic updateDocument
-        await hominioDB.updateDocument(pubKey, (loroDoc) => {
+        // --- Perform Update and Name Check within Mutation Callback --- 
+        // updatesToApply is now accessible here from the outer scope
+        await hominioDB.updateDocument(user, pubKey, (loroDoc) => {
+            const metaMap = loroDoc.getMap('meta');
             const dataMap = loroDoc.getMap('data');
-            const currentPlacesContainer = dataMap.get('places'); // Get the container/value
+            const currentPlacesContainer = dataMap.get('places');
             let currentPlacesData: Record<string, LoroJsonValue> = {};
 
-            // Check if it's a LoroMap and convert to plain object if so
             if (currentPlacesContainer instanceof LoroMap) {
-                try {
-                    // Use toJSON() for a reliable plain JS representation
-                    currentPlacesData = currentPlacesContainer.toJSON() as Record<string, LoroJsonValue>;
-                } catch (e) {
-                    console.error(`[HQL Update mutationFn] Error converting current places LoroMap to JSON for ${pubKey}:`, e);
-                    // Leave currentPlacesData as empty {} on error
-                }
-            } else {
-                console.warn(`[HQL Update mutationFn] Current data.places for ${pubKey} is not a LoroMap or doesn't exist. Starting fresh.`);
-                // currentPlacesData remains empty {}
+                try { currentPlacesData = currentPlacesContainer.toJSON() as Record<string, LoroJsonValue>; }
+                catch (e) { console.error(`[HQL Update mutationFn] Error converting places LoroMap to JSON:`, e); }
+            } else if (currentPlacesContainer !== undefined && currentPlacesContainer !== null) {
+                console.warn(`[HQL Update mutationFn] Current data.places is not a LoroMap.`);
             }
 
-            // Merge updates into the plain JS object
-            const newPlacesData = { ...currentPlacesData, ...placesUpdate };
-
-            // Create a new LoroMap and populate it from the merged plain object
+            // Use updatesToApply from the outer scope
+            const newPlacesData = { ...currentPlacesData, ...updatesToApply };
             const newPlacesLoroMap = new LoroMap();
             for (const key in newPlacesData) {
                 if (Object.prototype.hasOwnProperty.call(newPlacesData, key)) {
-                    newPlacesLoroMap.set(key, newPlacesData[key]);
+                    newPlacesLoroMap.set(key, newPlacesData[key] ?? null);
                 }
             }
-
-            // Replace the entire 'places' container - This should trigger subscription
             dataMap.setContainer('places', newPlacesLoroMap);
-        });
 
-        // 8. Return updated document metadata
-        const updatedDocMeta = await hominioDB.getDocument(pubKey);
-        if (!updatedDocMeta) {
-            // This shouldn't happen if the update didn't throw
-            throw new Error(`Failed to retrieve document metadata for ${pubKey} after update.`);
+            // Check and Fix Name AFTER places update
+            const currentName = metaMap.get('name');
+            if (currentName === null || currentName === undefined || String(currentName).trim() === '') {
+                const generatedName = generateDefaultEntityName(newPlacesData);
+                console.warn(`[HQL Update mutationFn] Setting default name for ${pubKey}: "${generatedName}"`);
+                metaMap.set('name', generatedName);
+            }
+        });
+        // --- End Update Call --- 
+
+        // --- Re-fetch and Validate AFTER update --- 
+        const updatedLoroDoc = await hominioDB.getLoroDoc(pubKey);
+        if (!updatedLoroDoc) throw new Error(`HQL Update: Failed to re-fetch LoroDoc ${pubKey} after update.`);
+        const updatedMetaMap = updatedLoroDoc.getMap('meta');
+
+        const finalStatePlacesContainer = updatedLoroDoc.getMap('data').get('places');
+        let finalStatePlacesJson: Record<string, LoroJsonValue> = {};
+        if (finalStatePlacesContainer instanceof LoroMap) {
+            try { finalStatePlacesJson = finalStatePlacesContainer.toJSON() as Record<string, LoroJsonValue>; }
+            catch (e) { console.error(`[HQL Update Validation] Error converting final places LoroMap to JSON:`, e); }
         }
+        const metaForValidation: LoroJsonObject = {
+            name: updatedMetaMap.get('name') as string,
+            schema: updatedMetaMap.get('schema') as string,
+            pubKey: pubKey
+        };
+        const entityJsonToValidate: LoroJsonObject = { meta: metaForValidation, data: { places: finalStatePlacesJson } };
+
+        if (schemaJson) {
+            const validationResult = validateEntityJsonAgainstSchema(entityJsonToValidate, schemaJson);
+            if (!validationResult.isValid) {
+                console.error("HQL Update Validation Failed:", validationResult.errors);
+                throw new Error(`Validation failed for update: ${validationResult.errors.join(', ')}`);
+            }
+        } else if (schemaPubKey) {
+            console.warn(`[HQL Update] Skipping validation: schema ${schemaPubKey} could not be loaded.`);
+        }
+        // --- End Validation ---
+
+        // Return latest metadata
+        const updatedDocMeta = await hominioDB.getDocument(pubKey);
+        if (!updatedDocMeta) throw new Error(`HQL Update: Failed to re-fetch final metadata for ${pubKey}.`);
         return updatedDocMeta;
     }
 
-    private async _handleDelete(request: HqlMutationRequest, user: CapabilityUser | null): Promise<{ success: boolean }> { // <<< Allow null user
+    private async _handleDelete(user: CapabilityUser | null, request: HqlMutationRequest): Promise<{ success: boolean }> {
+        if (!request.pubKey) {
+            throw new Error("HQL Delete: 'pubKey' is required.");
+        }
         const pubKey = request.pubKey;
-        if (!pubKey) throw new Error("HQL Delete: pubKey is required.");
 
+        // --- Fetch metadata first for capability check ---
         const docToDelete = await hominioDB.getDocument(pubKey);
         if (!docToDelete) {
-            throw new Error(`HQL Delete: Document ${pubKey} not found.`);
-        }
-        if (!canDelete(user, docToDelete)) { // canDelete handles null user / offline logic
-            throw new Error(`HQL Delete: Permission denied to delete document ${pubKey}.`);
+            // Already deleted or never existed, return success
+            console.warn(`HQL Delete: Document ${pubKey} not found. Assuming already deleted.`);
+            return { success: true };
         }
 
-        await hominioDB.deleteDocument(pubKey);
-        return { success: true };
+        // --- Capability Check ---
+        if (!canDelete(user, docToDelete)) { // Pass user to canDelete
+            throw new Error(`HQL Delete: Permission denied to delete document ${pubKey}.`);
+        }
+        // --- End Capability Check ---
+
+        // Call hominioDB to perform the actual deletion
+        try {
+            const deleted = await hominioDB.deleteDocument(user, pubKey); // Pass user
+            return { success: deleted };
+        } catch (dbError) {
+            console.error(`HQL Delete: Error calling hominioDB.deleteDocument for ${pubKey}:`, dbError);
+            throw new Error(`Failed to delete document in database: ${dbError instanceof Error ? dbError.message : 'Unknown DB error'}`);
+        }
     }
 
     // --- Reactive Query Handling ---
     processReactive(
+        getCurrentUserFn: typeof getCurrentEffectiveUserType,
         request: HqlQueryRequest
     ): Readable<HqlQueryResult | null | undefined> {
-        // Define the actual query execution function
-        const executeQuery = async (): Promise<HqlQueryResult | null> => {
-            try {
-                // Fetch user internally EACH time query runs for capability checks
-                const user = get(authClient.useSession()).data?.user as CapabilityUser | null;
-                const result = await this._handleQuery(request, user); // Pass user to internal handler
-                return result;
-            } catch (error) {
-                console.error('[HQL Requery] Query failed:', error);
-                return null; // Return null on error
-            }
-        };
+        if (!browser) {
+            // Return a store that resolves once with the non-reactive result server-side
+            // Need to get user for SSR call
+            const ssrUser = getCurrentUserFn();
+            return readable<HqlQueryResult | null>(undefined, (set) => {
+                this._handleQuery(ssrUser, request) // Pass user for SSR
+                    .then(set)
+                    .catch(err => {
+                        console.error("SSR Reactive Query Error:", err);
+                        set(null); // Set to null on error
+                    });
+            });
+        }
 
-        // Create the readable store
-        const store = readable<HqlQueryResult | null | undefined>(undefined, (set) => { // Start as undefined
-            let isMounted = true;
-            let initialLoadComplete = false;
+        // Client-side reactive logic
+        return readable<HqlQueryResult | null | undefined>(undefined, (set) => {
+            let debounceTimer: NodeJS.Timeout | null = null;
+            const DEBOUNCE_MS = 200; // Increase debounce time
+            let lastSessionState: unknown = undefined; // Track session state
+            let currentResults: HqlQueryResult | null = null; // Track current results
+            let pendingNotificationCount = 0; // Track pending notifications
 
-            // Initial fetch
-            executeQuery().then(initialResult => {
-                if (isMounted) {
-                    set(initialResult); // Set initial result (or null if error)
-                    initialLoadComplete = true;
+            const triggerDebouncedQuery = () => {
+                if (debounceTimer) {
+                    clearTimeout(debounceTimer);
                 }
+
+                // If we have existing results, don't show loading state
+                if (!currentResults) {
+                    set(undefined); // Only show loading on initial load
+                }
+
+                // Increment pending notification count
+                pendingNotificationCount++;
+
+                debounceTimer = setTimeout(async () => {
+                    // Reset pending count for this batch
+                    pendingNotificationCount = 0;
+
+                    const currentUser = getCurrentUserFn(); // Get FRESH user context
+                    try {
+                        const result = await this._handleQuery(currentUser, request);
+                        currentResults = result; // Store current results
+                        set(result);
+                    } catch (error) {
+                        console.error("Reactive Query Error:", error);
+                        // Don't set null if we have previous results to avoid UI flashing
+                        if (!currentResults) {
+                            set(null);
+                        }
+                    }
+                }, DEBOUNCE_MS);
+            };
+
+            // Subscribe to the central document change notifier
+            const unsubscribeNotifier = docChangeNotifier.subscribe(() => {
+                triggerDebouncedQuery(); // Trigger on data change
             });
 
-            // Subscribe to changes - *after* initial load starts
-            const unsubscribeNotifier = docChangeNotifier.subscribe(async () => {
-                // Avoid requery if initial load hasn't finished or component unmounted
-                if (!isMounted || !initialLoadComplete) return;
-
-                const newResult = await executeQuery();
-                if (isMounted) { // Check again after await
-                    set(newResult); // Set new result (or null if error)
+            // Subscribe to session changes
+            const sessionStore = authClient.useSession();
+            const unsubscribeSession = sessionStore.subscribe(session => {
+                // Trigger only if session state actually changes
+                const currentSessionState = JSON.stringify(session.data); // Simple comparison key
+                // Only trigger *after* initial load is complete (lastSessionState is defined)
+                if (lastSessionState !== undefined && lastSessionState !== currentSessionState) {
+                    triggerDebouncedQuery(); // Trigger on auth change
                 }
+                lastSessionState = currentSessionState;
             });
 
-            // Cleanup
+            // Initial query execution (no debounce needed)
+            (async () => {
+                const initialUser = getCurrentUserFn();
+                try {
+                    const initialResult = await this._handleQuery(initialUser, request);
+                    currentResults = initialResult; // Store initial results
+                    set(initialResult);
+                    // Set initial session state *after* first query completes successfully
+                    lastSessionState = JSON.stringify(get(sessionStore).data);
+                } catch (error) {
+                    console.error("Initial Reactive Query Error:", error);
+                    set(null);
+                    // Set initial session state even on error to prevent immediate re-trigger
+                    lastSessionState = JSON.stringify(get(sessionStore).data);
+                }
+            })();
+
+            // Cleanup function
             return () => {
-                isMounted = false;
                 unsubscribeNotifier();
+                unsubscribeSession(); // Unsubscribe from session
+                if (debounceTimer) {
+                    clearTimeout(debounceTimer);
+                }
             };
         });
-
-        return store; // Return the readable store SYNCHRONOUSLY
     }
-} // End of HominioQLService class
 
-// Export singleton instance
+    // --- Helper Methods (No user context needed directly here) ---
+
+    private async _fetchReferencedDocJson(pubKey: string, cache: Map<string, Record<string, unknown> | null>): Promise<Record<string, unknown> | null> {
+        if (cache.has(pubKey)) {
+            return cache.get(pubKey)!;
+        }
+        try {
+            const loroDoc = await hominioDB.getLoroDoc(pubKey);
+            const jsonData = loroDoc ? (loroDoc.toJSON() as Record<string, unknown>) : null;
+            cache.set(pubKey, jsonData);
+            return jsonData;
+        } catch (error) {
+            console.warn(`[HQL Helper] Failed to fetch referenced doc ${pubKey}:`, error);
+            cache.set(pubKey, null);
+            return null;
+        }
+    }
+
+}
+
+
+// --- Export Singleton Instance ---
 export const hominioQLService = new HominioQLService();
+
+// Add this section for query optimization
+interface QueryCacheEntry<T> {
+    result: T;
+    timestamp: number;
+}
+
+const queryCache = new Map<string, QueryCacheEntry<unknown>>();
+const CACHE_TTL_MS = 1000; // 1 second cache TTL
+
+export function makeReactiveQuery<T>(
+    queryFn: () => Promise<T>,
+    opts: { key?: string; skipCache?: boolean } = {}
+): { subscribe: (cb: (val: T | undefined) => void) => () => void } {
+    const queryKey = opts.key || crypto.randomUUID();
+    const skipCache = opts.skipCache || false;
+
+    // Create a readable store that manages subscriptions
+    let unsubscribeFromChangeNotifier: (() => void) | undefined;
+    let lastValue: T | undefined = undefined;
+    let isFirstQuery = true;
+    let isQueryInProgress = false;
+    let pendingSubscribers: ((val: T | undefined) => void)[] = [];
+
+    // Function to run the query and notify subscribers
+    const runQuery = async (subscribers: ((val: T | undefined) => void)[]) => {
+        if (isQueryInProgress) return;
+        isQueryInProgress = true;
+
+        try {
+            // Check cache first if caching is enabled
+            if (!skipCache && !isFirstQuery) {
+                const cached = queryCache.get(queryKey);
+                if (cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS) {
+                    lastValue = cached.result as T;
+                    subscribers.forEach(cb => cb(lastValue));
+                    isQueryInProgress = false;
+                    return;
+                }
+            }
+
+            // Only set undefined on first query to avoid flickering during updates
+            if (isFirstQuery) {
+                subscribers.forEach(cb => cb(undefined)); // initial loading state
+            }
+
+            const result = await queryFn();
+            lastValue = result;
+
+            // Cache the result if not skipping cache
+            if (!skipCache) {
+                queryCache.set(queryKey, {
+                    result,
+                    timestamp: Date.now()
+                });
+            }
+
+            subscribers.forEach(cb => cb(lastValue));
+            isFirstQuery = false;
+        } catch (error) {
+            console.error('Error in reactive query:', error);
+            subscribers.forEach(cb => cb(undefined));
+        } finally {
+            isQueryInProgress = false;
+
+            // Process any subscribers that came in during query execution
+            if (pendingSubscribers.length > 0) {
+                const currentPending = [...pendingSubscribers];
+                pendingSubscribers = [];
+                currentPending.forEach(cb => cb(lastValue));
+            }
+        }
+    };
+
+    return {
+        subscribe: (cb: (val: T | undefined) => void) => {
+            let subscribers: ((val: T | undefined) => void)[] = [cb];
+
+            // Setup document change listener if this is the first subscriber
+            if (!unsubscribeFromChangeNotifier) {
+                let lastNotificationCount = 0;
+                unsubscribeFromChangeNotifier = docChangeNotifier.subscribe(count => {
+                    if (count !== lastNotificationCount) {
+                        lastNotificationCount = count;
+                        runQuery(subscribers);
+                    }
+                });
+
+                // Initial query
+                runQuery(subscribers);
+            } else {
+                // New subscriber to existing query
+                if (isQueryInProgress) {
+                    pendingSubscribers.push(cb);
+                } else {
+                    // Immediately notify with the last value if available
+                    cb(lastValue);
+                }
+                subscribers.push(cb);
+            }
+
+            // Return unsubscribe function
+            return () => {
+                subscribers = subscribers.filter(s => s !== cb);
+
+                // Clean up change listener if no more subscribers
+                if (subscribers.length === 0 && unsubscribeFromChangeNotifier) {
+                    unsubscribeFromChangeNotifier();
+                    unsubscribeFromChangeNotifier = undefined;
+                    isFirstQuery = true;
+                }
+            };
+        }
+    };
+}
+

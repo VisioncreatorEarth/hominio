@@ -97,13 +97,11 @@ const schemasToSeed: Record<string, SchemaDefinition> = {
             x1: {
                 description: "lo tcini",
                 required: true,
-                // Adapt validation structure
                 validation: { value: { options: ["todo", "in_progress", "done", "blocked"] } }
             },
             x2: {
                 description: "lo se tcini",
                 required: true,
-                // Reference schema by name for deterministic key generation
                 validation: { schema: ["gunka"] }
             }
         },
@@ -126,6 +124,21 @@ const schemasToSeed: Record<string, SchemaDefinition> = {
                     x2: "Entität in der Situation/dem Zustand/der Bedingung"
                 }
             }
+        ]
+    },
+    // Lojban 'liste' (list)
+    "liste": {
+        schema: "gismu",
+        name: "liste",
+        places: {
+            x1: { description: "lo liste be lo se lista", required: true, validation: { value: "string" } }, // the list itself (e.g., its name or identifier)
+            x2: { description: "lo se lista", required: true, validation: { value: "any" } }, // element in list
+            x3: { description: "lo tcila be lo liste", required: false, validation: { value: "any" } }, // list property (e.g., ordering)
+            x4: { description: "lo ve lista", required: false, validation: { value: "any" } } // list containing elements (mass/set)
+        },
+        translations: [
+            { lang: "en", name: "List", description: "A sequence/ordered set of items", places: { x1: "The list identifier/sequence", x2: "Item in the list", x3: "Property/ordering", x4: "Containing set/mass" } },
+            { lang: "de", name: "Liste", description: "Eine Sequenz/geordnete Menge von Elementen", places: { x1: "Der Listenbezeichner/Sequenz", x2: "Element in der Liste", x3: "Eigenschaft/Ordnung", x4: "Enthaltende Menge" } }
         ]
     },
     // <<< Add other schemas here later >>>

@@ -1,11 +1,25 @@
 <script lang="ts">
 	import '../app.css';
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount, onDestroy, setContext } from 'svelte';
 	import { startCall, endCall } from '$lib/ultravox/callFunctions';
 	import CallInterface from '$lib/components/CallInterface.svelte';
+	import { authClient, getCurrentEffectiveUser } from '$lib/KERNEL/hominio-auth';
 	import { initializeVibe } from '$lib/ultravox';
 	import { DEFAULT_CALL_CONFIG } from '$lib/ultravox/callConfig';
 	import { initDocs } from '$lib/docs';
+	import VibeRenderer from '$lib/components/VibeRenderer.svelte';
+	import type { PageData } from './$types';
+	import type { LayoutData } from './$types';
+	import { type Snippet } from 'svelte';
+
+	// Get the session store from the auth client
+	const sessionStore = authClient.useSession();
+
+	// Provide the session store to child components via context
+	setContext('sessionStore', sessionStore);
+
+	// Provide the effective user utility via context
+	setContext('getCurrentEffectiveUser', getCurrentEffectiveUser);
 
 	const DEFAULT_VIBE = 'home';
 
@@ -104,7 +118,9 @@
 		}
 	});
 
-	let { children } = $props();
+	// --- Props ---
+	// Receive data from +layout.server.ts (contains initial session)
+	let { children, data } = $props<{ children: Snippet; data: LayoutData }>();
 </script>
 
 <div class="relative min-h-screen w-full overflow-hidden bg-cover bg-center text-white">
