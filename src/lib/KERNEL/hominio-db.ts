@@ -1147,17 +1147,12 @@ class HominioDB {
             console.log(`[saveSyncedDocument] Saving merged metadata to docs store:`, JSON.stringify(mergedDoc)); // <-- Log before save
             await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(mergedDoc)));
 
-
-
-
         } catch (err) {
             console.error(`[saveSyncedDocument] Error processing doc ${pubKey}:`, err);
             // Optionally re-throw or handle differently
             throw err;
         }
     }
-
-    // ---------------------------------
 }
 
 // Create and export singleton instance

@@ -18,18 +18,30 @@ const auth = getAuthClient();
 
 // Session protection middleware
 const requireAuth = async ({ request, set }: Context) => {
-    const session = await auth.api.getSession({
-        headers: request.headers
-    });
+    try {
+        const session = await auth.api.getSession({
+            headers: request.headers
+        });
 
-    if (!session) {
-        set.status = 401;
-        throw new Error('Unauthorized: Valid session required');
+        if (!session) {
+            set.status = 401;
+            throw new Error('Unauthorized: Valid session required');
+        }
+
+        return {
+            session
+        };
+
+    } catch (error: unknown) {
+        console.error("[requireAuth] Error during session validation:", error);
+        if (error instanceof Error && (error.message.includes('ENOTFOUND') || error.message.includes('EADDRNOTAVAIL') || error.message.includes('timed out'))) {
+            set.status = 503;
+            throw new Error('Authentication service temporarily unavailable.');
+        } else {
+            set.status = 401;
+            throw new Error('Unauthorized: Session validation failed.');
+        }
     }
-
-    return {
-        session
-    };
 }
 
 const betterAuthView = (context: Context) => {

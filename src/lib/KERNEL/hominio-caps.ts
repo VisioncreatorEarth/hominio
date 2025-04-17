@@ -1,10 +1,10 @@
 import type { Docs } from './hominio-db'; // Assuming Docs type is exported
 import { GENESIS_HOMINIO } from '../../db/constants'; // Import from centralized constants
+import { browser } from '$app/environment'; // <<< IMPORT BROWSER
 
-// --- Constants ---
 
-// MUST match the value used in src/db/seed.ts and src/lib/server/routes/docs.ts
-// export const GENESIS_HOMINIO = "00000000000000000000000000000000";
+
+const OFFLINE_OWNER_PLACEHOLDER = 'offline_owner'; // <<< Define placeholder constant
 
 // --- Types ---
 
@@ -37,6 +37,15 @@ export function can(
     ability: HominioAbility,
     doc: Pick<Docs, 'owner'> // Only require the 'owner' field from the Docs type
 ): boolean {
+
+    // --- Offline Check --- <<< ADDED OFFLINE HANDLING
+    if (browser && !navigator.onLine) {
+        console.log(`[Caps Check] Offline mode detected. Allowing ability '${ability}' for doc owned by ${doc.owner}.`);
+        return true; // Allow all operations locally when offline
+    }
+    // --------------------
+
+    // --- Online Logic --- (Existing checks)
     const targetOwner = doc.owner;
     const userId = user?.id;
 
@@ -49,8 +58,9 @@ export function can(
             return isOwner || isGenesis;
 
         case HominioAbility.WRITE:
-            // Allow writing ONLY if the user is the owner
-            return isOwner;
+            // Allow writing ONLY if the user is the owner OR if pushing an offline-created doc
+            // The server will assign the correct owner on initial creation.
+            return isOwner || targetOwner === OFFLINE_OWNER_PLACEHOLDER;
 
         case HominioAbility.DELETE:
             // Allow deleting ONLY if the user is the owner
@@ -87,8 +97,3 @@ export function canWrite(user: CapabilityUser | null, doc: Pick<Docs, 'owner'>):
 export function canDelete(user: CapabilityUser | null, doc: Pick<Docs, 'owner'>): boolean {
     return can(user, HominioAbility.DELETE, doc);
 }
-
-// --- (Optional) Future Extensions ---
-// - Define Resource types (e.g., specific doc, type of doc)
-// - Implement more complex capability objects combining resource + ability
-// - Integrate role-based access control (RBAC)

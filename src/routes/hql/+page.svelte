@@ -206,7 +206,16 @@
 		<!-- Sync Status Display & Button -->
 		<div class="mt-auto border-t border-gray-300 p-4">
 			<h3 class="mb-2 text-sm font-medium text-gray-600">Sync Status</h3>
-			<!-- Display Sync Status -->
+			<!-- Online/Offline Indicator -->
+			<p class="mb-1 text-xs">
+				Status:
+				{#if $syncStatus.isOnline}
+					<span class="font-semibold text-green-600">Online</span>
+				{:else}
+					<span class="font-semibold text-red-600">Offline</span>
+				{/if}
+			</p>
+			<!-- Display Sync Status Details -->
 			<p class="mb-3 text-xs text-gray-500">
 				{#if $syncStatus.isSyncing}
 					Syncing...

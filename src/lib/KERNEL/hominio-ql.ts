@@ -5,8 +5,8 @@ import { canRead, canDelete, type CapabilityUser, canWrite } from './hominio-cap
 import { readable, type Readable, get } from 'svelte/store';
 import { docChangeNotifier } from './hominio-db'; // Import the notifier
 import { authClient } from '$lib/KERNEL/hominio-auth'; // Import authClient
-// ---------------------------------------------------
 import { LoroMap } from 'loro-crdt'; // <-- ADDED LoroMap import
+import { browser } from '$app/environment'; // <<< IMPORT BROWSER HERE for _handleCreate logic
 
 type LoroJsonValue = string | number | boolean | null | LoroJsonObject | LoroJsonArray;
 interface LoroJsonObject { [key: string]: LoroJsonValue }
@@ -101,7 +101,7 @@ class HominioQLService {
         // 1. Fetch ALL document metadata
         const allDbDocsMetadata = await hominioDB.loadAllDocsReturn();
 
-        // 2. Filter by Read Capability
+        // 2. Filter by Read Capability (Now handled centrally by `canRead`)
         const accessibleDocsMetadata = allDbDocsMetadata.filter(docMeta => canRead(user, docMeta));
 
         // 3. Build Combined Filter Criteria
@@ -415,19 +415,20 @@ class HominioQLService {
     // --- Mutation Handling (To be refactored next) ---
 
     private async _handleMutate(request: HqlMutationRequest, user: CapabilityUser | null): Promise<HqlMutationResult> {
-        if (!user) {
-            throw new Error("Authentication required for mutations.");
-        }
+        // <<< REMOVED isOffline CHECK, effectiveUser, mutationUser >>>
+        // The `can` functions called by the handlers below will now manage offline permissions.
+        // We pass the potentially null `user` directly.
+
         let result: HqlMutationResult;
         switch (request.action) {
             case 'create':
-                result = await this._handleCreate(request, user);
+                result = await this._handleCreate(request, user); // <<< Pass original user (can be null)
                 break;
             case 'update':
-                result = await this._handleUpdate(request, user);
+                result = await this._handleUpdate(request, user); // <<< Pass original user (can be null)
                 break;
             case 'delete':
-                result = await this._handleDelete(request, user);
+                result = await this._handleDelete(request, user); // <<< Pass original user (can be null)
                 break;
             default:
                 throw new Error(`Invalid mutation action: ${request.action}`);
@@ -441,7 +442,9 @@ class HominioQLService {
         return result;
     }
 
-    private async _handleCreate(request: HqlMutationRequest, user: CapabilityUser): Promise<Docs> {
+    private async _handleCreate(request: HqlMutationRequest, user: CapabilityUser | null): Promise<Docs> { // <<< Allow null user
+        // NOTE: Capability check (canWrite) happens implicitly in hominioDB.createEntity IF needed,
+        // but here we primarily need the user ID for ownership.
         if (!request.schema) {
             throw new Error("Schema reference ('schema') is required for create action.");
         }
@@ -451,8 +454,21 @@ class HominioQLService {
             schemaPubKey = request.schema.substring(1);
         } else {
             throw new Error("Schema creation via name resolution is not implemented. Use @pubKey format.");
-            // ... (schema name lookup logic commented out) ...
         }
+
+        // --- Determine Owner ID --- <<< MODIFIED
+        let ownerId: string;
+        if (user?.id) {
+            ownerId = user.id;
+        } else if (browser && !navigator.onLine) {
+            ownerId = 'offline_owner'; // Placeholder for offline creation
+            console.warn("[HQL Create] Running offline, setting owner to 'offline_owner'.");
+        } else {
+            // This case (online but no user) should ideally be prevented by upstream checks,
+            // but throw an error defensively.
+            throw new Error("Cannot create entity: User is not authenticated.");
+        }
+        // -------------------------
 
         // --- Derive entity name from x1 --- 
         let derivedName: string | undefined = undefined;
@@ -485,13 +501,12 @@ class HominioQLService {
         // ----------------------------------
 
         // --- Prepare entity data for validation ---
-        const finalName = derivedName || 'Unnamed Entity'; // Keep this calculation
+        const finalName = derivedName || 'Unnamed Entity';
         const entityJsonToValidate: LoroJsonObject = {
             meta: {
                 schema: `@${schemaPubKey}`,
-                owner: user.id, // Set owner immediately
-                name: finalName // <-- Add the final name here for validation
-                // Consider adding other meta fields if validation needs them
+                owner: ownerId, // <<< Use determined ownerId
+                name: finalName
             },
             data: {
                 places: request.places ?? {}
@@ -513,12 +528,12 @@ class HominioQLService {
         // -------------------------------------
 
         // Perform actual creation via hominioDB
-        const newDocMetadata = await hominioDB.createEntity(schemaPubKey, request.places || {}, user.id, { name: finalName }); // Pass final name
+        const newDocMetadata = await hominioDB.createEntity(schemaPubKey, request.places || {}, ownerId, { name: finalName }); // <<< Use determined ownerId
 
         return newDocMetadata;
     }
 
-    private async _handleUpdate(request: HqlMutationRequest, user: CapabilityUser): Promise<Docs> {
+    private async _handleUpdate(request: HqlMutationRequest, user: CapabilityUser | null): Promise<Docs> { // <<< Allow null user
         if (!request.pubKey) {
             throw new Error("Document PubKey ('pubKey') is required for update action.");
         }
@@ -535,7 +550,7 @@ class HominioQLService {
         }
 
         // 2. Capability Check (using fetched metadata)
-        if (!canWrite(user, docMeta)) {
+        if (!canWrite(user, docMeta)) { // canWrite handles null user / offline logic
             throw new Error(`Permission denied: Cannot write to document ${pubKey}`);
         }
 
@@ -624,16 +639,15 @@ class HominioQLService {
         return updatedDocMeta;
     }
 
-    private async _handleDelete(request: HqlMutationRequest, user: CapabilityUser): Promise<{ success: boolean }> {
+    private async _handleDelete(request: HqlMutationRequest, user: CapabilityUser | null): Promise<{ success: boolean }> { // <<< Allow null user
         const pubKey = request.pubKey;
         if (!pubKey) throw new Error("HQL Delete: pubKey is required.");
 
         const docToDelete = await hominioDB.getDocument(pubKey);
         if (!docToDelete) {
-            // Allow delete requests for non-existent docs? Return success? For now, error.
             throw new Error(`HQL Delete: Document ${pubKey} not found.`);
         }
-        if (!canDelete(user, docToDelete)) {
+        if (!canDelete(user, docToDelete)) { // canDelete handles null user / offline logic
             throw new Error(`HQL Delete: Permission denied to delete document ${pubKey}.`);
         }
 
