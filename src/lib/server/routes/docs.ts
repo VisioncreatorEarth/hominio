@@ -5,10 +5,11 @@ import * as schema from '$db/schema';
 import { eq, inArray, ne, and, sql, count, or } from 'drizzle-orm';
 import { hashService } from '$lib/KERNEL/hash-service';
 import { loroService } from '$lib/KERNEL/loro-service';
-// Import capability functions and types
 import { canRead, canWrite, canDelete, type CapabilityUser } from '$lib/KERNEL/hominio-caps';
-// Import the constant directly from its source
 import { GENESIS_HOMINIO } from '$db/constants';
+
+// Configuration for auto-snapshotting
+const AUTO_SNAPSHOT_THRESHOLD = 50; // Create snapshot after this many updates
 
 // Helper function for binary data conversion
 function arrayToUint8Array(arr: number[]): Uint8Array {
@@ -424,12 +425,28 @@ docsHandlers.group('/:pubKey/update', app => app
                 .returning();
 
             console.log(`Registered ${newUpdateCids.length} updates with document ${pubKey}`);
+            const finalUpdatedCids = updateResult[0].updateCids || [];
 
-            // Return success
+            // --- Auto-Snapshot Trigger ---
+            let snapshotResult: Awaited<ReturnType<typeof createConsolidatedSnapshotInternal>> | null = null;
+            if (finalUpdatedCids.length >= AUTO_SNAPSHOT_THRESHOLD) {
+                console.log(`Threshold reached (${finalUpdatedCids.length}/${AUTO_SNAPSHOT_THRESHOLD}). Triggering auto-snapshot for ${pubKey}`);
+                snapshotResult = await createConsolidatedSnapshotInternal(pubKey, set);
+                if (!snapshotResult.success) {
+                    // Log error but don't fail the batch update response
+                    console.error(`Auto-snapshot failed for ${pubKey} after batch update: ${snapshotResult.error}`);
+                }
+            }
+            // --- End Auto-Snapshot Trigger ---
+
+
+            // Return success (return the state *after* potential snapshot)
             return {
                 success: true,
                 registeredCount: newUpdateCids.length,
-                updatedCids: updateResult[0].updateCids || []
+                // Return the CIDs list from the snapshot result if available, otherwise from the update result
+                updatedCids: snapshotResult?.document?.updateCids ?? finalUpdatedCids,
+                snapshotInfo: snapshotResult // Optionally include snapshot details
             };
         } catch (error) {
             console.error('Error batch updating document:', error);
@@ -531,12 +548,28 @@ docsHandlers.group('/:pubKey/update', app => app
             } else {
                 console.log(`Update ${cid} already in document's updateCids array, skipping`);
             }
+            const finalUpdatedCids = updateResult2[0].updateCids || [];
 
-            // Return success response with updated CIDs
+            // --- Auto-Snapshot Trigger ---
+            let snapshotResult: Awaited<ReturnType<typeof createConsolidatedSnapshotInternal>> | null = null;
+            if (finalUpdatedCids.length >= AUTO_SNAPSHOT_THRESHOLD) {
+                console.log(`Threshold reached (${finalUpdatedCids.length}/${AUTO_SNAPSHOT_THRESHOLD}). Triggering auto-snapshot for ${pubKey}`);
+                snapshotResult = await createConsolidatedSnapshotInternal(pubKey, set);
+                if (!snapshotResult.success) {
+                    // Log error but don't fail the update response
+                    console.error(`Auto-snapshot failed for ${pubKey} after single update: ${snapshotResult.error}`);
+                }
+            }
+            // --- End Auto-Snapshot Trigger ---
+
+
+            // Return success response with updated CIDs (after potential snapshot)
             return {
                 success: true,
                 updateCid: cid,
-                updatedCids: updateResult2[0].updateCids || []
+                // Return the CIDs list from the snapshot result if available, otherwise from the update result
+                updatedCids: snapshotResult?.document?.updateCids ?? finalUpdatedCids,
+                snapshotInfo: snapshotResult // Optionally include snapshot details
             };
         } catch (error) {
             console.error('Error updating document:', error);
@@ -638,11 +671,10 @@ docsHandlers.group('/:pubKey/snapshot', app => app
                 };
 
                 // Store the snapshot content
-                const contentResult = await db.insert(schema.content)
-                    .values(contentEntry)
-                    .returning();
+                await db.insert(schema.content)
+                    .values(contentEntry);
 
-                console.log('Created snapshot content entry:', contentResult[0].cid);
+                console.log('Created snapshot content entry:', snapshotCid);
             } else {
                 console.log('Content already exists with CID:', snapshotCid);
             }
@@ -672,6 +704,7 @@ docsHandlers.group('/:pubKey/snapshot', app => app
         }
     })
     // Add the missing endpoint for consolidated snapshots
+    /* << REMOVED START >>
     .post('/create', async ({ params, session, set }: AuthContext) => {
         try {
             const pubKey = params?.pubKey;
@@ -695,174 +728,20 @@ docsHandlers.group('/:pubKey/snapshot', app => app
                 return { error: 'Not authorized to snapshot this document' };
             }
 
-            // Check if the document has a snapshot and updates
-            if (!document.snapshotCid) {
-                if (set?.status) set.status = 400;
-                return { error: 'Document has no snapshot to consolidate' };
+            // Call the internal function
+            const snapshotResult = await createConsolidatedSnapshotInternal(pubKey, set);
+
+            if (!snapshotResult.success && snapshotResult.error) {
+                if (set?.status) set.status = 500; // Assume internal server error if internal function fails
+                return {
+                    error: snapshotResult.error,
+                    details: snapshotResult.details
+                };
             }
 
-            if (!document.updateCids || document.updateCids.length === 0) {
-                if (set?.status) set.status = 400;
-                return { error: 'No updates to consolidate into a new snapshot' };
-            }
+            // Return the result from the internal function
+            return snapshotResult;
 
-            console.log(`Creating consolidated snapshot for document ${pubKey} with ${document.updateCids.length} updates`);
-
-            // 1. Load the base snapshot
-            const snapshotData = await getBinaryContentByCid(document.snapshotCid);
-            if (!snapshotData) {
-                if (set?.status) set.status = 500;
-                return { error: 'Failed to load document snapshot' };
-            }
-
-            // Create a Loro document from the snapshot
-            const loroDoc = loroService.createEmptyDoc();
-            loroDoc.import(new Uint8Array(snapshotData));
-            console.log(`Loaded base snapshot from CID: ${document.snapshotCid}`);
-
-            // 2. Load all updates in memory first
-            const appliedUpdateCids: string[] = [];
-            const updatesData: Uint8Array[] = [];
-
-            for (const updateCid of document.updateCids) {
-                const updateData = await getBinaryContentByCid(updateCid);
-                if (updateData) {
-                    updatesData.push(new Uint8Array(updateData));
-                    appliedUpdateCids.push(updateCid);
-                } else {
-                    console.warn(`Could not load update data for CID: ${updateCid}`);
-                }
-            }
-
-            // 3. Apply all updates in one batch operation (much faster than individual imports)
-            if (updatesData.length > 0) {
-                try {
-                    console.log(`Applying ${updatesData.length} updates in batch`);
-                    loroDoc.importBatch(updatesData);
-                    console.log(`Successfully applied ${updatesData.length} updates in batch`);
-                } catch (err) {
-                    console.error('Error applying updates in batch:', err);
-                    if (set?.status) set.status = 500;
-                    return { error: 'Failed to apply updates in batch' };
-                }
-            }
-
-            // 4. Export a new snapshot
-            const newSnapshotData = loroDoc.export({ mode: 'snapshot' });
-            const newSnapshotCid = await hashService.hashSnapshot(newSnapshotData);
-
-            // 5. Save the new snapshot to content store
-            await db.insert(content).values({
-                cid: newSnapshotCid,
-                type: 'snapshot',
-                raw: Buffer.from(newSnapshotData),
-                metadata: { documentPubKey: pubKey },
-                createdAt: new Date()
-            });
-
-            console.log(`Created new consolidated snapshot with CID: ${newSnapshotCid}`);
-
-            // 6. Update the document to use the new snapshot and clear the update list
-            const updatedDoc = await db.update(schema.docs)
-                .set({
-                    snapshotCid: newSnapshotCid,
-                    updateCids: [], // Clear all updates as they're now in the snapshot
-                    updatedAt: new Date()
-                })
-                .where(eq(schema.docs.pubKey, pubKey))
-                .returning();
-
-            // Clean up any consolidated updates if needed
-            let deletedUpdates = 0;
-            if (appliedUpdateCids.length > 0) {
-                try {
-                    console.log(`Cleaning up ${appliedUpdateCids.length} consolidated updates`);
-
-                    // Get all documents except this one
-                    const allOtherDocs = await db.select().from(docs).where(ne(docs.pubKey, pubKey));
-
-                    // Keep track of which update CIDs are referenced by other documents
-                    const updateCidsReferencedByOtherDocs = new Set<string>();
-
-                    // Check each document for references to our consolidated updates
-                    for (const doc of allOtherDocs) {
-                        if (doc.updateCids) {
-                            for (const cid of doc.updateCids) {
-                                if (appliedUpdateCids.includes(cid)) {
-                                    updateCidsReferencedByOtherDocs.add(cid);
-                                }
-                            }
-                        }
-                    }
-
-                    // localState is client-side only and won't exist in server database
-                    // Skip checking for it here
-
-                    // Filter out update CIDs that are still referenced by other documents
-                    const updateCidsToDelete = appliedUpdateCids.filter(
-                        cid => !updateCidsReferencedByOtherDocs.has(cid)
-                    );
-
-                    if (updateCidsToDelete.length > 0) {
-                        console.log(`${updateCidsToDelete.length} update CIDs can be safely deleted`);
-
-                        // Double-check content metadata for any other references before deleting
-                        // Some content items might have references in their metadata
-                        const safeCidsToDelete = [];
-                        for (const cid of updateCidsToDelete) {
-                            // Check if any other content refers to this CID in metadata
-                            const refCount = await db
-                                .select({ count: count() })
-                                .from(content)
-                                .where(
-                                    and(
-                                        ne(content.cid, cid),
-                                        sql`${content.metadata}::text LIKE ${'%' + cid + '%'}`
-                                    )
-                                );
-
-                            // If no references found, safe to delete
-                            if (refCount[0].count === 0) {
-                                safeCidsToDelete.push(cid);
-                            } else {
-                                console.log(`Update ${cid} is referenced in content metadata, skipping deletion`);
-                            }
-                        }
-
-                        if (safeCidsToDelete.length > 0) {
-                            // Delete the update CIDs that are not referenced by any other document or content
-                            const deleteResult = await db.delete(content)
-                                .where(inArray(content.cid, safeCidsToDelete));
-
-                            console.log(`Deleted ${deleteResult.rowCount} consolidated updates`);
-
-                            // Store the count for the response
-                            deletedUpdates = deleteResult.rowCount ?? 0;
-                        } else {
-                            console.log(`No updates can be safely deleted after metadata check`);
-                            deletedUpdates = 0;
-                        }
-                    } else {
-                        console.log(`All consolidated updates are still referenced by other documents, none deleted`);
-                        deletedUpdates = 0;
-                    }
-                } catch (cleanupErr) {
-                    console.error(`Error cleaning up consolidated updates:`, cleanupErr);
-                    deletedUpdates = 0;
-                }
-            } else {
-                deletedUpdates = 0;
-            }
-
-            // 8. Return success with stats
-            return {
-                success: true,
-                document: updatedDoc[0],
-                newSnapshotCid,
-                appliedUpdates: appliedUpdateCids.length,
-                clearedUpdates: document.updateCids.length,
-                deletedUpdates
-            };
         } catch (error) {
             console.error('Error creating consolidated snapshot:', error);
             if (set) set.status = 500;
@@ -872,6 +751,292 @@ docsHandlers.group('/:pubKey/snapshot', app => app
             };
         }
     })
+    << REMOVED END >> */
 );
+
+// --- Internal Snapshot Creation Function ---
+async function createConsolidatedSnapshotInternal(pubKey: string, set: AuthContext['set']): Promise<{
+    success: boolean;
+    error?: string;
+    details?: string;
+    document?: schema.Doc;
+    newSnapshotCid?: string;
+    appliedUpdates?: number;
+    clearedUpdates?: number;
+    deletedUpdates?: number;
+    deletedOldSnapshot?: boolean;
+}> {
+    try {
+        // Re-verify document exists (might have been deleted between update and snapshot)
+        const docResult = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
+        if (!docResult.length) {
+            return { success: false, error: 'Document not found for snapshot creation' };
+        }
+
+        const document = docResult[0];
+
+        // No need to re-check capabilities here as it's called internally after a write operation
+
+        // Check if the document has a snapshot and updates
+        if (!document.snapshotCid) {
+            console.warn(`Skipping snapshot for ${pubKey}: No base snapshot found.`);
+            return { success: true, error: 'Document has no snapshot to consolidate' }; // Not an error, just nothing to do
+        }
+
+        if (!document.updateCids || document.updateCids.length === 0) {
+            console.warn(`Skipping snapshot for ${pubKey}: No updates to consolidate.`);
+            return { success: true, error: 'No updates to consolidate into a new snapshot' }; // Not an error, just nothing to do
+        }
+
+        console.log(`Creating consolidated snapshot for document ${pubKey} with ${document.updateCids.length} updates`);
+
+        // Store the old snapshot CID *before* updating the document
+        const oldSnapshotCid = document.snapshotCid;
+
+        // 1. Load the base snapshot
+        const snapshotData = await getBinaryContentByCid(document.snapshotCid);
+        if (!snapshotData) {
+            // Log error but don't fail the original request (update)
+            console.error(`Snapshot Creation Error: Failed to load base snapshot ${document.snapshotCid} for ${pubKey}`);
+            return { success: false, error: 'Failed to load document snapshot' };
+        }
+
+        // Create a Loro document from the snapshot
+        const loroDoc = loroService.createEmptyDoc();
+        loroDoc.import(new Uint8Array(snapshotData));
+        console.log(`Loaded base snapshot from CID: ${document.snapshotCid}`);
+
+        // 2. Load all updates in memory first
+        const appliedUpdateCids: string[] = [];
+        const updatesData: Uint8Array[] = [];
+
+        for (const updateCid of document.updateCids) {
+            const updateData = await getBinaryContentByCid(updateCid);
+            if (updateData) {
+                updatesData.push(new Uint8Array(updateData));
+                appliedUpdateCids.push(updateCid);
+            } else {
+                console.warn(`Snapshot Creation Warning: Could not load update data for CID: ${updateCid} during consolidation for ${pubKey}`);
+            }
+        }
+
+        // 3. Apply all updates in one batch operation (much faster than individual imports)
+        if (updatesData.length > 0) {
+            try {
+                console.log(`Applying ${updatesData.length} updates in batch for ${pubKey}`);
+                loroDoc.importBatch(updatesData);
+                console.log(`Successfully applied ${updatesData.length} updates in batch for ${pubKey}`);
+            } catch (err) {
+                console.error(`Snapshot Creation Error: Error applying updates in batch for ${pubKey}:`, err);
+                return { success: false, error: 'Failed to apply updates in batch' };
+            }
+        }
+
+        // 4. Export a new snapshot
+        const newSnapshotData = loroDoc.export({ mode: 'snapshot' });
+        const newSnapshotCid = await hashService.hashSnapshot(newSnapshotData);
+
+        // --- Check if snapshot changed ---
+        if (newSnapshotCid === oldSnapshotCid) {
+            console.log(`Snapshot for ${pubKey} unchanged after applying ${updatesData.length} updates. Clearing updates but keeping old snapshot.`);
+            // Still clear the updates list
+            const updatedDocResultUnchanged = await db.update(schema.docs)
+                .set({
+                    updateCids: [], // Clear updates
+                    updatedAt: new Date() // Update timestamp
+                })
+                .where(eq(schema.docs.pubKey, pubKey))
+                .returning();
+
+            // Cleanup applied updates (even if snapshot didn't change)
+            const { deletedUpdates } = await cleanupConsolidatedUpdates(pubKey, appliedUpdateCids);
+
+            return {
+                success: true,
+                document: updatedDocResultUnchanged[0],
+                newSnapshotCid: oldSnapshotCid, // Return old CID
+                appliedUpdates: appliedUpdateCids.length,
+                clearedUpdates: document.updateCids.length,
+                deletedUpdates,
+                deletedOldSnapshot: false // No new snapshot created
+            };
+        }
+        // --- End snapshot changed check ---
+
+        // 5. Save the new snapshot to content store (if it changed)
+        await db.insert(content).values({
+            cid: newSnapshotCid,
+            type: 'snapshot',
+            raw: Buffer.from(newSnapshotData),
+            metadata: { documentPubKey: pubKey },
+            createdAt: new Date()
+        }).onConflictDoNothing(); // Avoid errors if somehow created concurrently
+
+        console.log(`Created new consolidated snapshot with CID: ${newSnapshotCid} for ${pubKey}`);
+
+        // 6. Update the document to use the new snapshot and clear the update list
+        const updatedDocResult = await db.update(schema.docs)
+            .set({
+                snapshotCid: newSnapshotCid,
+                updateCids: [], // Clear all updates as they're now in the snapshot
+                updatedAt: new Date()
+            })
+            .where(eq(schema.docs.pubKey, pubKey))
+            .returning();
+
+        const updatedDoc = updatedDocResult[0]; // Get updated doc from result
+
+        // --- Cleanup Consolidated Updates ---
+        const { deletedUpdates } = await cleanupConsolidatedUpdates(pubKey, appliedUpdateCids);
+        // --- End Update Cleanup ---
+
+        // --- Cleanup Old Snapshot ---
+        const { deletedOldSnapshot } = await cleanupOldSnapshot(pubKey, oldSnapshotCid, newSnapshotCid);
+        // --- End Old Snapshot Cleanup ---
+
+        // 8. Return success with stats
+        return {
+            success: true,
+            document: updatedDoc,
+            newSnapshotCid,
+            appliedUpdates: appliedUpdateCids.length,
+            clearedUpdates: document.updateCids.length,
+            deletedUpdates,
+            deletedOldSnapshot
+        };
+    } catch (error) {
+        console.error(`Error creating consolidated snapshot internally for ${pubKey}:`, error);
+        // Don't set status here, return error object
+        return {
+            success: false,
+            error: 'Failed to create consolidated snapshot',
+            details: error instanceof Error ? error.message : 'Unknown error'
+        };
+    }
+}
+
+// --- Helper Function for Update Cleanup ---
+async function cleanupConsolidatedUpdates(pubKey: string, appliedUpdateCids: string[]): Promise<{ deletedUpdates: number }> {
+    let deletedUpdates = 0;
+    if (appliedUpdateCids.length > 0) {
+        try {
+            console.log(`Cleaning up ${appliedUpdateCids.length} consolidated updates for ${pubKey}`);
+
+            // Get all documents except this one
+            const allOtherDocs = await db.select({ pubKey: docs.pubKey, updateCids: docs.updateCids }).from(docs).where(ne(docs.pubKey, pubKey));
+
+            // Keep track of which update CIDs are referenced by other documents
+            const updateCidsReferencedByOtherDocs = new Set<string>();
+
+            // Check each document for references to our consolidated updates
+            for (const doc of allOtherDocs) {
+                if (doc.updateCids) {
+                    for (const cid of doc.updateCids) {
+                        if (appliedUpdateCids.includes(cid)) {
+                            updateCidsReferencedByOtherDocs.add(cid);
+                        }
+                    }
+                }
+            }
+
+            // localState is client-side only and won't exist in server database
+            // Skip checking for it here
+
+            // Filter out update CIDs that are still referenced by other documents
+            const updateCidsToDelete = appliedUpdateCids.filter(
+                cid => !updateCidsReferencedByOtherDocs.has(cid)
+            );
+
+            if (updateCidsToDelete.length > 0) {
+                console.log(`${updateCidsToDelete.length} update CIDs can be safely deleted for ${pubKey}`);
+
+                // Double-check content metadata for any other references before deleting
+                const safeCidsToDelete: string[] = [];
+                for (const cid of updateCidsToDelete) {
+                    // Check if any other content refers to this CID in metadata
+                    const refCount = await db
+                        .select({ count: count() })
+                        .from(content)
+                        .where(
+                            and(
+                                ne(content.cid, cid),
+                                sql`${content.metadata}::text LIKE ${'%' + cid + '%'}`
+                            )
+                        );
+
+                    // If no references found, safe to delete
+                    if (refCount[0].count === 0) {
+                        safeCidsToDelete.push(cid);
+                    } else {
+                        console.log(`Update ${cid} for ${pubKey} is referenced in content metadata, skipping deletion`);
+                    }
+                }
+
+                if (safeCidsToDelete.length > 0) {
+                    // Delete the update CIDs that are not referenced by any other document or content
+                    const deleteResult = await db.delete(content)
+                        .where(inArray(content.cid, safeCidsToDelete));
+
+                    console.log(`Deleted ${deleteResult.rowCount} consolidated updates for ${pubKey}`);
+                    deletedUpdates = deleteResult.rowCount ?? 0;
+                } else {
+                    console.log(`No updates can be safely deleted after metadata check for ${pubKey}`);
+                    deletedUpdates = 0;
+                }
+            } else {
+                console.log(`All consolidated updates for ${pubKey} are still referenced by other documents, none deleted`);
+                deletedUpdates = 0;
+            }
+        } catch (cleanupErr) {
+            console.error(`Error cleaning up consolidated updates for ${pubKey}:`, cleanupErr);
+            deletedUpdates = 0; // Ensure it's 0 on error
+        }
+    } else {
+        deletedUpdates = 0;
+    }
+    return { deletedUpdates };
+}
+
+// --- Helper Function for Old Snapshot Cleanup ---
+async function cleanupOldSnapshot(pubKey: string, oldSnapshotCid: string | undefined, newSnapshotCid: string): Promise<{ deletedOldSnapshot: boolean }> {
+    let deletedOldSnapshot = false;
+    if (oldSnapshotCid && oldSnapshotCid !== newSnapshotCid) { // Ensure there was an old one and it's different
+        try {
+            console.log(`Checking references for old snapshot CID: ${oldSnapshotCid} for ${pubKey}`);
+            // Check if any *other* document still references the old snapshot
+            const snapshotRefCountResult = await db
+                .select({ count: count() })
+                .from(docs)
+                .where(and(
+                    eq(docs.snapshotCid, oldSnapshotCid),
+                    ne(docs.pubKey, pubKey) // Exclude the current document
+                ));
+
+            const snapshotRefCount = snapshotRefCountResult[0]?.count ?? 1; // Default to 1 if query fails to prevent accidental deletion
+
+            if (snapshotRefCount === 0) {
+                console.log(`Old snapshot ${oldSnapshotCid} is not referenced by other documents. Attempting deletion.`);
+                // Delete the old snapshot content if no other docs reference it
+                const deleteSnapshotResult = await db.delete(content)
+                    .where(eq(content.cid, oldSnapshotCid));
+                // Check rowCount to confirm deletion
+                if (deleteSnapshotResult.rowCount && deleteSnapshotResult.rowCount > 0) {
+                    console.log(`Deleted old snapshot content ${oldSnapshotCid}`);
+                    deletedOldSnapshot = true;
+                } else {
+                    console.log(`Old snapshot content ${oldSnapshotCid} not found or already deleted.`);
+                }
+            } else {
+                console.log(`Old snapshot ${oldSnapshotCid} is still referenced by ${snapshotRefCount} other document(s). Skipping deletion.`);
+            }
+        } catch (snapshotCleanupErr) {
+            console.error(`Error cleaning up old snapshot ${oldSnapshotCid} for ${pubKey}:`, snapshotCleanupErr);
+            // Don't fail the request, just log the error
+        }
+    }
+    return { deletedOldSnapshot };
+}
+
+// --- End Internal Helper Functions ---
 
 export default docsHandlers; 

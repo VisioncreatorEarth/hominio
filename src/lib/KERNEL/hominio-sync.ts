@@ -607,56 +607,6 @@ export class HominioSync {
         }
     }
 
-    /**
-     * Requests the server to create a consolidated snapshot for a given document.
-     * Triggers a pull afterwards to refresh local state.
-     * @param pubKey The public key of the document to snapshot.
-     */
-    async createConsolidatedSnapshot(pubKey: string): Promise<void> {
-        if (!pubKey) {
-            this.setSyncError("No document pubKey provided to create snapshot for.");
-            return;
-        }
-
-        // --- Offline Check (Throw error as server interaction is mandatory) ---
-        if (!get(status).isOnline) {
-            this.setSyncError('Offline: Cannot create consolidated snapshot on server.');
-            return; // Don't throw, just set error and return
-        }
-        // ------------------------------------------------------------------
-
-        this.setSyncStatus(true);
-        this.setSyncError(null);
-
-        try {
-            // Call the server endpoint FIRST
-            // @ts-expect-error Eden Treaty doesn't fully type nested dynamic route POST bodies
-            const result = await hominio.api.docs({ pubKey }).snapshot.create.post({});
-            const response = result as ApiResponse<{ success: boolean; message?: string; newSnapshotCid?: string;[key: string]: unknown }>;
-
-            if (response.error) {
-                let errorMessage = 'Unknown server error creating snapshot';
-                const errorValue = response.error.value;
-                if (typeof errorValue === 'object' && errorValue !== null && 'message' in errorValue && typeof errorValue.message === 'string') {
-                    errorMessage = errorValue.message;
-                }
-                throw new Error(`Server error creating snapshot: ${errorMessage} (Status: ${response.error.status})`);
-            }
-
-            if (response.data?.success) {
-                await this.pullFromServer(); // Pull to get the new state reflected locally
-            } else {
-                throw new Error(`Server failed to create snapshot: ${response.data?.message || 'Unknown reason'}`);
-            }
-
-        } catch (err: unknown) {
-            console.error(`Error creating consolidated snapshot for ${pubKey}:`, err);
-            this.setSyncError(err instanceof Error ? err.message : 'Snapshot creation failed');
-        } finally {
-            this.setSyncStatus(false);
-        }
-    }
-
     // --- Online/Offline Handlers ---
     private handleOnline = () => {
         console.log("HominioSync: Connection established.");

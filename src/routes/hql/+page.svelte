@@ -141,24 +141,6 @@
 		}
 	}
 
-	// --- Snapshot Creation ---
-	let isCreatingSnapshot = $state(false);
-	async function handleCreateSnapshot(entityPubKey: string) {
-		if (isCreatingSnapshot || !entityPubKey) return;
-		isCreatingSnapshot = true;
-		try {
-			// Call the sync service method, which talks to the server
-			await hominioSync.createConsolidatedSnapshot(entityPubKey);
-
-			// No direct result needed here, sync relies on pullFromServer implicitly called after server success
-		} catch (err) {
-			console.error(`[Action] Error requesting server snapshot for ${entityPubKey}:`, err);
-			// TODO: Show error to user
-		} finally {
-			isCreatingSnapshot = false;
-		}
-	}
-
 	// --- Sync Status ---
 	const syncStatus = hominioSync.status;
 	function handlePull() {
@@ -355,18 +337,9 @@
 												<button
 													class="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600 shadow-sm transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
 													on:click={() => updatePrenuName(entity.pubKey)}
-													disabled={currentlyUpdatingPrenu !== null || isCreatingSnapshot}
+													disabled={currentlyUpdatingPrenu !== null}
 												>
 													{isUpdatingThis ? '...' : 'Edit Name'}
-												</button>
-												<!-- Snapshot Button (Moved Here) -->
-												<button
-													class="rounded border border-purple-300 bg-purple-50 px-2 py-1 text-xs text-purple-700 shadow-sm transition-colors hover:bg-purple-100 disabled:cursor-not-allowed disabled:opacity-50"
-													on:click={() => handleCreateSnapshot(entity.pubKey)}
-													disabled={isCreatingSnapshot || currentlyUpdatingPrenu !== null}
-													title="Request server snapshot (requires Pull)"
-												>
-													{isCreatingSnapshot ? '...' : 'Snapshot'}
 												</button>
 											</div>
 										{/if}
