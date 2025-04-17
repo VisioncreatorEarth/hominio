@@ -87,7 +87,6 @@ export class HominioSync {
                                 if (this._syncDebounceTimer) clearTimeout(this._syncDebounceTimer);
                                 this._syncDebounceTimer = setTimeout(() => {
                                     const user = getCurrentEffectiveUser();
-                                    console.warn('[Sync] Auto-sync triggered by document changes'); // Keep warn
                                     this.pushToServer(user).catch(err => console.error('[Sync] Auto-sync failed:', err));
                                 }, 500);
                             }
@@ -207,7 +206,6 @@ export class HominioSync {
                                     throw new Error(`Server error creating doc ${doc.pubKey}: ${createResult.error.value?.message ?? 'Unknown error'}`);
                                 }
 
-                                console.warn(`[Push] Successfully created doc ${doc.pubKey} on server.`); // LOG: Create success
                                 docExistsOnServer = true; // Mark as existing now
 
                                 // Mark this snapshot as synced for local state update
@@ -219,7 +217,6 @@ export class HominioSync {
                                 // Don't continue to next doc, allow update attempt if creation failed but check passed before?
                             }
                         } else {
-                            console.warn(`[Push] Doc ${doc.pubKey} needs creation, but local snapshot data ${localSnapshotCid} not found. Skipping create attempt.`); // LOG: Snapshot data missing
                             docPushError = `Local snapshot data missing for ${localSnapshotCid}`;
                         }
                     }
@@ -246,7 +243,6 @@ export class HominioSync {
                                     console.error(`[Push] Server error uploading update content for ${doc.pubKey}:`, contentResult.error); // LOG: Error uploading content
                                     throw new Error(`Server error uploading update content: ${contentResult.error.value?.message ?? 'Unknown error'}`);
                                 }
-                                console.warn(`[Push] Content uploaded. Registering updates with server...`); // LOG: Registering updates
 
                                 // Use direct API call
                                 const registerResult = await hominio.api.docs({ pubKey: doc.pubKey }).update.batch.post({ updateCids: updatesToUpload.map(u => u.cid) });
@@ -254,7 +250,6 @@ export class HominioSync {
                                     console.error(`[Push] Server error registering updates for ${doc.pubKey}:`, registerResult.error); // LOG: Error registering updates
                                     throw new Error(`Server error registering updates: ${registerResult.error.value?.message ?? 'Unknown error'}`);
                                 }
-                                console.warn(`[Push] Updates registered successfully for ${doc.pubKey}.`); // LOG: Updates registered
 
                                 // Check for Server-Side Consolidation
                                 let serverConsolidated = false;
@@ -302,7 +297,6 @@ export class HominioSync {
                                 serverConsolidated: syncedCids.serverConsolidated,
                                 newServerSnapshotCid: syncedCids.newServerSnapshotCid
                             });
-                            console.warn(`[Push] Local state updated successfully for ${doc.pubKey}.`); // LOG: Local state update success
                         } catch (updateStateErr) {
                             console.error(`[Push] Error updating local state for ${doc.pubKey} after sync:`, updateStateErr); // LOG: Error updating local state
                             // This is critical, as it might cause repeated sync attempts

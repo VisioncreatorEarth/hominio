@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { authClient } from '$lib/KERNEL/hominio-auth';
 	import { goto } from '$app/navigation';
 
@@ -16,12 +15,6 @@
 			goto('/me');
 		}
 	});
-
-	// onMount(() => { // Keep if needed for transitions/animations
-	// 	setTimeout(() => {
-	// 		ready = true;
-	// 	}, 500);
-	// });
 
 	async function handleGoogleSignIn() {
 		loading = true;
@@ -102,8 +95,6 @@
 		<!-- Footer/Spacing element -->
 		<div class="h-24"></div>
 	</main>
-
-	<!-- Optional: Add other sections like Features, Footer etc. later -->
 </div>
 
 <!-- Define custom colors (or configure in tailwind.config.js) -->
@@ -127,11 +118,5 @@
 	}
 	.hover\:text-custom-beige:hover {
 		color: var(--color-background);
-	}
-	.network-bg {
-		background-image: url('/network-background.svg'); /* Placeholder */
-		background-repeat: no-repeat;
-		background-position: center bottom;
-		background-size: contain;
 	}
 </style>
