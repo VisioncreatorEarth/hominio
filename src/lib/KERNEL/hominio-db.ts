@@ -311,18 +311,7 @@ class HominioDB {
         mutationFn(loroDoc);
 
         // *** Explicitly commit the transaction to trigger events ***
-        loroDoc.commit();
-
-
-
-        // *** Manually trigger persistence since subscribe isn't firing reliably ***
-        this._persistLoroUpdateAsync(pubKey, loroDoc).catch((err: unknown) => {
-            console.error(`[updateDocument] Manual persistence trigger failed for ${pubKey}:`, err);
-            // Handle error appropriately, maybe set an error state?
-            this._setError(`Background save failed after manual trigger: ${err instanceof Error ? err.message : 'Unknown error'}`);
-        });
-
-
+        loroDoc.commit(); // Commit triggers the subscribe callback which calls _persistLoroUpdateAsync
 
         // Return something? Maybe pubKey or void?
         // Returning pubKey seems reasonable.
@@ -494,62 +483,80 @@ class HominioDB {
     }
 
     /**
-     * Update local document state after successful sync to server.
-     * Moves synced snapshot/updates from localState to the main fields.
+     * Updates the local document state after a successful sync operation.
+     * Moves CIDs from localState to the main fields.
+     * Handles server-side snapshot consolidation signaled by the sync service.
      * @param pubKey Document public key
-     * @param changes Changes that were successfully synced
+     * @param changes Information about synced CIDs and potential server consolidation
      */
     async updateDocStateAfterSync(pubKey: string, changes: {
-        snapshotCid?: string,
-        updateCids?: string[]
+        snapshotCid?: string,     // Locally generated snapshot CID that was synced
+        updateCids?: string[],    // Locally generated update CIDs that were synced
+        serverConsolidated?: boolean; // Flag: Did server consolidate updates into a new snapshot?
+        newServerSnapshotCid?: string; // The CID of the new snapshot created by the server
     }): Promise<void> {
+        if (!browser) return;
+
         try {
             // --- Fetch directly instead of using store ---
             // const allDocs = get(docs); // Removed
-            // const docIndex = allDocs.findIndex(d => d.pubKey === pubKey); // Removed
-            const originalDoc = await this.getDocument(pubKey); // Fetch directly
+            const doc = await this.getDocument(pubKey); // Fetch directly
             // --------------------------------------------
 
-            if (!originalDoc) { // Check if doc exists
+            if (!doc) { // Check if doc exists
                 console.warn(`[updateDocStateAfterSync] Doc ${pubKey} not found.`);
                 return;
             }
 
-            const updatedDoc = { ...originalDoc }; // Create a mutable copy
+            const updatedDoc = { ...doc }; // Create a mutable copy
             let needsSave = false;
 
-            // 1. Handle Synced Snapshot
-            if (changes.snapshotCid && updatedDoc.localState?.snapshotCid === changes.snapshotCid) {
-                updatedDoc.snapshotCid = changes.snapshotCid; // Promote to main snapshot
+            // --- Handle Server Consolidation --- 
+            if (changes.serverConsolidated && changes.newServerSnapshotCid) {
+                console.log(`[Sync] Applying server consolidation for ${pubKey}. New snapshot: ${changes.newServerSnapshotCid}`);
+                // Set the main snapshot to the new one from the server
+                updatedDoc.snapshotCid = changes.newServerSnapshotCid;
+                // Clear ALL local and base updates, as they are now in the new server snapshot
+                updatedDoc.updateCids = [];
                 if (updatedDoc.localState) {
-                    updatedDoc.localState.snapshotCid = undefined; // Clear from local state
+                    updatedDoc.localState.updateCids = [];
+                    // Also clear local snapshot if it existed, it's irrelevant now
+                    delete updatedDoc.localState.snapshotCid;
                 }
                 needsSave = true;
-            }
+            } else {
+                // --- Standard Update Promotion (Only if NOT consolidated) --- 
+                // Promote synced updates (original logic)
+                if (changes.updateCids && changes.updateCids.length > 0) {
+                    const updatesToRemove = new Set(changes.updateCids);
+                    const originalLocalUpdatesCount = updatedDoc.localState?.updateCids?.length ?? 0;
 
-            // 2. Handle Synced Updates
-            if (changes.updateCids && changes.updateCids.length > 0 && updatedDoc.localState?.updateCids) {
-                const syncedCids = changes.updateCids;
-                const originalLocalUpdates = updatedDoc.localState.updateCids || [];
-
-                // Add synced updates to main list (avoid duplicates)
-                updatedDoc.updateCids = updatedDoc.updateCids || [];
-                syncedCids.forEach(cid => {
-                    if (!updatedDoc.updateCids?.includes(cid)) {
-                        updatedDoc.updateCids?.push(cid);
+                    // Remove synced CIDs from localState.updateCids
+                    if (updatedDoc.localState?.updateCids) {
+                        updatedDoc.localState.updateCids = updatedDoc.localState.updateCids.filter(cid => !updatesToRemove.has(cid));
                     }
-                });
 
-                // Remove synced updates from local state
-                updatedDoc.localState.updateCids = originalLocalUpdates.filter(
-                    cid => !syncedCids.includes(cid)
-                );
+                    // Add synced CIDs to the main updateCids array (if not already present)
+                    if (!updatedDoc.updateCids) updatedDoc.updateCids = [];
+                    const currentBaseUpdates = new Set(updatedDoc.updateCids);
+                    changes.updateCids.forEach(cid => {
+                        if (!currentBaseUpdates.has(cid)) {
+                            updatedDoc.updateCids!.push(cid);
+                            currentBaseUpdates.add(cid); // Keep set updated
+                        }
+                    });
 
-                needsSave = true;
+                    // If localState.updateCids changed length or base updateCids changed length
+                    if ((updatedDoc.localState?.updateCids?.length ?? 0) !== originalLocalUpdatesCount || updatedDoc.updateCids.length !== currentBaseUpdates.size) {
+                        needsSave = true;
+                    }
+                }
+                // --- End Standard Update Promotion --- 
             }
+            // --- End Handle Server Consolidation ---
 
-            // 3. Clean up localState if empty
-            if (updatedDoc.localState && !updatedDoc.localState.snapshotCid && (!updatedDoc.localState.updateCids || updatedDoc.localState.updateCids.length === 0)) {
+            // Clean up localState if empty
+            if (updatedDoc.localState && Object.keys(updatedDoc.localState).length === 0) {
                 delete updatedDoc.localState;
                 needsSave = true;
             }

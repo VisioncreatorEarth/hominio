@@ -42,6 +42,7 @@ const status = writable<SyncStatus>({
 export class HominioSync {
     status = status; // Expose the store for the UI
     private unsubscribeNotifier: (() => void) | null = null; // Store the unsubscribe function
+    private syncingDocs = new Set<string>(); // Track pubKeys currently being pushed
 
     constructor() {
         if (browser) {
@@ -112,7 +113,18 @@ export class HominioSync {
 
             for (const doc of localDocsToSync) {
                 let docPushError: string | null = null; // Track error for *this* doc
+                // --- Sync Lock Check --- 
+                if (this.syncingDocs.has(doc.pubKey)) {
+                    console.log(`[Push] Skipping ${doc.pubKey}: Sync already in progress.`);
+                    continue; // Skip this doc if already syncing
+                }
+                // --- End Sync Lock Check --- 
+
                 try {
+                    // --- Acquire Sync Lock --- 
+                    this.syncingDocs.add(doc.pubKey);
+                    // -----------------------
+
                     // *** Capability Check ***
                     if (!canWrite(currentUser, doc)) {
                         console.warn(`Permission denied: Cannot push changes for doc ${doc.pubKey} owned by ${doc.owner}. Skipping.`); // KEEP Warning
@@ -140,42 +152,38 @@ export class HominioSync {
                     }
 
                     let needsLocalUpdate = false;
-                    let syncedSnapshotCid: string | undefined = undefined;
                     const syncedUpdateCids: string[] = [];
 
-                    // 1. Sync Snapshot if needed
-                    if (doc.localState?.snapshotCid) {
+                    // --- Handle Initial Document Creation --- 
+                    if (!docExistsOnServer && doc.localState?.snapshotCid) {
                         const localSnapshotCid = doc.localState.snapshotCid;
                         const snapshotData = await hominioDB.getRawContent(localSnapshotCid);
-
                         if (snapshotData) {
                             try {
-                                if (!docExistsOnServer) {
-                                    // Create doc on server
-                                    // @ts-expect-error Eden Treaty doesn't fully type dynamic route POST bodies
-                                    const createResult = await hominio.api.docs.post({ pubKey: doc.pubKey, binarySnapshot: Array.from(snapshotData) });
-                                    if (createResult.error) throw new Error(`Server error creating doc: ${createResult.error.value?.message ?? 'Unknown error'}`);
-                                    docExistsOnServer = true;
-                                } else {
-                                    // Update snapshot on existing doc
-                                    // @ts-expect-error Eden Treaty doesn't fully type dynamic route POST bodies
-                                    const snapshotResult = await hominio.api.docs({ pubKey: doc.pubKey }).snapshot.post({ binarySnapshot: Array.from(snapshotData) });
-                                    if (snapshotResult.error && !(snapshotResult.error.value?.message?.includes('duplicate key'))) throw new Error(`Server error updating snapshot: ${snapshotResult.error.value?.message ?? 'Unknown error'}`);
+                                console.log(`[Push] Document ${doc.pubKey} not found on server. Creating with local snapshot ${localSnapshotCid}...`);
+                                // Create doc on server using the local snapshot
+                                // @ts-expect-error Eden Treaty may not fully type dynamic route POST bodies
+                                const createResult = await hominio.api.docs.post({ pubKey: doc.pubKey, binarySnapshot: Array.from(snapshotData) });
+                                if (createResult.error) {
+                                    throw new Error(`Server error creating doc ${doc.pubKey}: ${createResult.error.value?.message ?? 'Unknown error'}`);
                                 }
-                                // Mark snapshot as synced
-                                syncedSnapshotCid = localSnapshotCid;
+                                console.log(`[Push] Successfully created doc ${doc.pubKey} on server.`);
+                                docExistsOnServer = true; // Mark as existing now
+                                // Mark this snapshot as synced for local state update
+                                syncedUpdateCids.push(localSnapshotCid);
                                 needsLocalUpdate = true;
-                            } catch (err) {
-                                // Catch network errors or specific server errors during snapshot push
-                                console.error(`  - Error pushing snapshot ${localSnapshotCid}:`, err);
-                                docPushError = `Snapshot push failed: ${err instanceof Error ? err.message : 'Unknown error'}`;
-                                // Continue to next doc if snapshot push fails
-                                continue;
+                            } catch (creationErr) {
+                                console.error(`  - Error creating doc ${doc.pubKey} on server:`, creationErr);
+                                docPushError = `Document creation failed: ${creationErr instanceof Error ? creationErr.message : 'Unknown error'}`;
+                                continue; // Skip to the next document if creation fails
                             }
                         } else {
-                            console.warn(`  - Could not load local snapshot data for ${localSnapshotCid} via hominioDB.`); // KEEP Warning
+                            console.warn(`[Push] Doc ${doc.pubKey} needs creation, but local snapshot data ${localSnapshotCid} not found.`);
+                            // Cannot create without snapshot, skip this doc for now
+                            continue;
                         }
                     }
+                    // --- End Initial Document Creation --- 
 
                     // 2. Sync Updates if needed (only if doc exists or was just created)
                     if (docExistsOnServer && doc.localState?.updateCids && doc.localState.updateCids.length > 0) {
@@ -200,12 +208,39 @@ export class HominioSync {
                                 // @ts-expect-error Eden Treaty doesn't fully type nested batch route bodies
                                 const contentResult = await hominio.api.content.batch.upload.post({ items: updatesToUpload });
                                 if (contentResult.error) throw new Error(`Server error uploading update content: ${contentResult.error.value?.message ?? 'Unknown error'}`);
+
                                 // Batch register updates with document
                                 // @ts-expect-error Eden Treaty doesn't fully type nested dynamic route POST bodies
                                 const registerResult = await hominio.api.docs({ pubKey: doc.pubKey }).update.batch.post({ updateCids: updatesToUpload.map(u => u.cid) });
                                 if (registerResult.error) throw new Error(`Server error registering updates: ${registerResult.error.value?.message ?? 'Unknown error'}`);
+
+                                // --- Check for Server-Side Consolidation --- 
+                                let serverConsolidated = false;
+                                let newServerSnapshotCid: string | undefined = undefined;
+                                if (registerResult.data?.snapshotInfo?.success && registerResult.data.snapshotInfo.newSnapshotCid) {
+                                    serverConsolidated = true;
+                                    newServerSnapshotCid = registerResult.data.snapshotInfo.newSnapshotCid;
+                                    console.log(`[Push] Server consolidated updates for ${doc.pubKey} into new snapshot: ${newServerSnapshotCid}`);
+                                    // We still mark these updates as synced locally, as they were successfully sent
+                                    // The subsequent call to updateDocStateAfterSync will handle clearing them based on the flag.
+                                }
+                                // --------------------------------------------
+
+                                // Mark updates as successfully sent for local state update
                                 syncedUpdateCids.push(...updatesToUpload.map(u => u.cid));
                                 needsLocalUpdate = true;
+
+                                // --- Pass consolidation info to local update step --- 
+                                if (needsLocalUpdate) {
+                                    await hominioDB.updateDocStateAfterSync(doc.pubKey, {
+                                        snapshotCid: newServerSnapshotCid, // Pass ONLY the server-generated CID if consolidation happened
+                                        updateCids: syncedUpdateCids,   // Pass updates that were just pushed
+                                        serverConsolidated: serverConsolidated, // NEW FLAG
+                                        newServerSnapshotCid: newServerSnapshotCid // NEW CID if consolidated
+                                    });
+                                    needsLocalUpdate = false; // Mark as handled here
+                                }
+                                // -------------------------------------------------
                             } catch (err) {
                                 // Catch network errors or specific server errors during update push
                                 console.error(`  - Error pushing updates for ${doc.pubKey}:`, err);
@@ -219,9 +254,13 @@ export class HominioSync {
                     if (needsLocalUpdate) {
                         try {
                             // Call the new method in hominioDB to handle state promotion
+                            // This path is now only for snapshot-only pushes or failed update pushes where we still sync snapshot
+                            // If this block is reached, it means the update push failed or didn't happen,
+                            // but maybe a local snapshot was created earlier (though we removed that push).
+                            // Let's pass undefined for snapshotCid here as no *new* snapshot was confirmed.
                             await hominioDB.updateDocStateAfterSync(doc.pubKey, {
-                                snapshotCid: syncedSnapshotCid,
-                                updateCids: syncedUpdateCids
+                                snapshotCid: undefined, // No new snapshot confirmed in this path
+                                updateCids: syncedUpdateCids // Pass any updates that *might* have been synced before error (unlikely now)
                             });
                         } catch (err) {
                             console.error(`  - Failed to update local doc state for ${doc.pubKey}:`, err);
@@ -236,14 +275,19 @@ export class HominioSync {
                     docPushError = `Failed to process ${doc.pubKey}: ${outerDocError instanceof Error ? outerDocError.message : 'Unknown error'}`;
                 }
 
+                // --- Release Sync Lock --- 
+                finally {
+                    this.syncingDocs.delete(doc.pubKey);
+                }
+                // -----------------------
+
                 // Store the first error encountered during the loop
                 if (docPushError && !overallPushError) {
                     overallPushError = docPushError;
                 }
             } // End loop over docs
 
-        } catch (err) {
-            // Catch errors in the overall process (e.g., loading local changes)
+        } catch (err) { // Catch errors in the overall process (e.g., loading local changes)
             console.error('Error during push to server process:', err); // KEEP Error Log
             overallPushError = err instanceof Error ? err.message : 'Push to server failed';
         } finally {

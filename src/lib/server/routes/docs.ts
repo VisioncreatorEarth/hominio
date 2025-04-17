@@ -9,7 +9,7 @@ import { canRead, canWrite, canDelete, type CapabilityUser } from '$lib/KERNEL/h
 import { GENESIS_HOMINIO } from '$db/constants';
 
 // Configuration for auto-snapshotting
-const AUTO_SNAPSHOT_THRESHOLD = 50; // Create snapshot after this many updates
+const AUTO_SNAPSHOT_THRESHOLD = 10; // Create snapshot after this many updates
 
 // Helper function for binary data conversion
 function arrayToUint8Array(arr: number[]): Uint8Array {
@@ -431,7 +431,7 @@ docsHandlers.group('/:pubKey/update', app => app
             let snapshotResult: Awaited<ReturnType<typeof createConsolidatedSnapshotInternal>> | null = null;
             if (finalUpdatedCids.length >= AUTO_SNAPSHOT_THRESHOLD) {
                 console.log(`Threshold reached (${finalUpdatedCids.length}/${AUTO_SNAPSHOT_THRESHOLD}). Triggering auto-snapshot for ${pubKey}`);
-                snapshotResult = await createConsolidatedSnapshotInternal(pubKey, set);
+                snapshotResult = await createConsolidatedSnapshotInternal(pubKey);
                 if (!snapshotResult.success) {
                     // Log error but don't fail the batch update response
                     console.error(`Auto-snapshot failed for ${pubKey} after batch update: ${snapshotResult.error}`);
@@ -554,7 +554,7 @@ docsHandlers.group('/:pubKey/update', app => app
             let snapshotResult: Awaited<ReturnType<typeof createConsolidatedSnapshotInternal>> | null = null;
             if (finalUpdatedCids.length >= AUTO_SNAPSHOT_THRESHOLD) {
                 console.log(`Threshold reached (${finalUpdatedCids.length}/${AUTO_SNAPSHOT_THRESHOLD}). Triggering auto-snapshot for ${pubKey}`);
-                snapshotResult = await createConsolidatedSnapshotInternal(pubKey, set);
+                snapshotResult = await createConsolidatedSnapshotInternal(pubKey);
                 if (!snapshotResult.success) {
                     // Log error but don't fail the update response
                     console.error(`Auto-snapshot failed for ${pubKey} after single update: ${snapshotResult.error}`);
@@ -582,180 +582,8 @@ docsHandlers.group('/:pubKey/update', app => app
     })
 );
 
-// Document snapshot routes
-docsHandlers.group('/:pubKey/snapshot', app => app
-    .post('/', async ({ params, body, session, set }: AuthContext) => {
-        try {
-            const pubKey = params?.pubKey;
-            if (!pubKey) {
-                if (set?.status) set.status = 400;
-                return { error: 'Missing pubKey parameter' };
-            }
-            // Verify document exists and user owns it
-            const docResult = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
-            if (!docResult.length) {
-                if (set?.status) set.status = 404;
-                return { error: 'Document not found' };
-            }
-
-            const document = docResult[0];
-            const capabilityUser: CapabilityUser | null = session.user as CapabilityUser ?? null;
-
-            // *** Use canWrite for authorization ***
-            if (!canWrite(capabilityUser, document)) {
-                if (set?.status) set.status = 403;
-                return { error: 'Not authorized to update this document' };
-            }
-
-            // Parse the snapshot data from request body
-            const snapshotBody = body as {
-                data?: { binarySnapshot: number[] };
-                binarySnapshot?: number[]
-            };
-
-            // Extract binarySnapshot from either format
-            const binarySnapshot = snapshotBody.data?.binarySnapshot || snapshotBody.binarySnapshot;
-
-            if (!binarySnapshot || !Array.isArray(binarySnapshot)) {
-                if (set?.status) set.status = 400;
-                return { error: 'Invalid snapshot data. Binary snapshot required.' };
-            }
-
-            // Convert the array to Uint8Array for processing
-            const snapshotData = arrayToUint8Array(binarySnapshot);
-
-            // Verify this is a valid Loro snapshot
-            const loroDoc = loroService.createEmptyDoc();
-            try {
-                // Import to verify it's valid
-                loroDoc.import(snapshotData);
-            } catch (error) {
-                if (set?.status) set.status = 400;
-                return {
-                    error: 'Invalid Loro snapshot',
-                    details: error instanceof Error ? error.message : 'Unknown error'
-                };
-            }
-
-            // Generate a CID for the snapshot
-            const snapshotCid = await hashService.hashSnapshot(snapshotData);
-
-            // Check if this exact snapshot already exists (same CID)
-            if (snapshotCid === document.snapshotCid) {
-                return {
-                    success: true,
-                    document,
-                    snapshotCid,
-                    message: 'Document unchanged, snapshot is already up to date'
-                };
-            }
-
-            // Check if content with this CID already exists
-            const existingContent = await db.select()
-                .from(content)
-                .where(eq(content.cid, snapshotCid));
-
-            // If the content already exists, we can just update the document to point to it
-            if (existingContent.length === 0) {
-                // Create a content entry for the snapshot
-                const contentEntry: schema.InsertContent = {
-                    cid: snapshotCid,
-                    type: 'snapshot',
-                    // Store binary data directly
-                    raw: Buffer.from(snapshotData),
-                    // Store metadata with docState if available
-                    metadata: {
-                        updatedAt: new Date().toISOString(),
-                        previousSnapshotCid: document.snapshotCid
-                    }
-                };
-
-                // Store the snapshot content
-                await db.insert(schema.content)
-                    .values(contentEntry);
-
-                console.log('Created snapshot content entry:', snapshotCid);
-            } else {
-                console.log('Content already exists with CID:', snapshotCid);
-            }
-
-            // Update the document's snapshotCid to point to the new snapshot
-            const updatedDoc = await db.update(schema.docs)
-                .set({
-                    snapshotCid: snapshotCid,
-                    updatedAt: new Date()
-                })
-                .where(eq(schema.docs.pubKey, pubKey))
-                .returning();
-
-            // Return success response
-            return {
-                success: true,
-                document: updatedDoc[0],
-                snapshotCid
-            };
-        } catch (error) {
-            console.error('Error updating document snapshot:', error);
-            if (set?.status) set.status = 500;
-            return {
-                error: 'Failed to update document snapshot',
-                details: error instanceof Error ? error.message : 'Unknown error'
-            };
-        }
-    })
-    // Add the missing endpoint for consolidated snapshots
-    /* << REMOVED START >>
-    .post('/create', async ({ params, session, set }: AuthContext) => {
-        try {
-            const pubKey = params?.pubKey;
-            if (!pubKey) {
-                if (set?.status) set.status = 400;
-                return { error: 'Missing pubKey parameter' };
-            }
-            // Verify document exists and user owns it
-            const docResult = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
-            if (!docResult.length) {
-                if (set?.status) set.status = 404;
-                return { error: 'Document not found' };
-            }
-
-            const document = docResult[0];
-            const capabilityUser: CapabilityUser | null = session.user as CapabilityUser ?? null;
-
-            // *** Use canWrite for authorization ***
-            if (!canWrite(capabilityUser, document)) {
-                if (set?.status) set.status = 403;
-                return { error: 'Not authorized to snapshot this document' };
-            }
-
-            // Call the internal function
-            const snapshotResult = await createConsolidatedSnapshotInternal(pubKey, set);
-
-            if (!snapshotResult.success && snapshotResult.error) {
-                if (set?.status) set.status = 500; // Assume internal server error if internal function fails
-                return {
-                    error: snapshotResult.error,
-                    details: snapshotResult.details
-                };
-            }
-
-            // Return the result from the internal function
-            return snapshotResult;
-
-        } catch (error) {
-            console.error('Error creating consolidated snapshot:', error);
-            if (set) set.status = 500;
-            return {
-                error: 'Failed to create consolidated snapshot',
-                details: error instanceof Error ? error.message : 'Unknown error'
-            };
-        }
-    })
-    << REMOVED END >> */
-);
-
 // --- Internal Snapshot Creation Function ---
-async function createConsolidatedSnapshotInternal(pubKey: string, set: AuthContext['set']): Promise<{
+async function createConsolidatedSnapshotInternal(pubKey: string): Promise<{
     success: boolean;
     error?: string;
     details?: string;
@@ -767,15 +595,16 @@ async function createConsolidatedSnapshotInternal(pubKey: string, set: AuthConte
     deletedOldSnapshot?: boolean;
 }> {
     try {
-        // Re-verify document exists (might have been deleted between update and snapshot)
+        // --- Revert back to non-transactional operations --- 
+        // Get current document state
         const docResult = await db.select().from(docs).where(eq(docs.pubKey, pubKey));
+
         if (!docResult.length) {
+            // Don't throw, just return failure
             return { success: false, error: 'Document not found for snapshot creation' };
         }
 
         const document = docResult[0];
-
-        // No need to re-check capabilities here as it's called internally after a write operation
 
         // Check if the document has a snapshot and updates
         if (!document.snapshotCid) {
@@ -796,7 +625,6 @@ async function createConsolidatedSnapshotInternal(pubKey: string, set: AuthConte
         // 1. Load the base snapshot
         const snapshotData = await getBinaryContentByCid(document.snapshotCid);
         if (!snapshotData) {
-            // Log error but don't fail the original request (update)
             console.error(`Snapshot Creation Error: Failed to load base snapshot ${document.snapshotCid} for ${pubKey}`);
             return { success: false, error: 'Failed to load document snapshot' };
         }
@@ -809,7 +637,6 @@ async function createConsolidatedSnapshotInternal(pubKey: string, set: AuthConte
         // 2. Load all updates in memory first
         const appliedUpdateCids: string[] = [];
         const updatesData: Uint8Array[] = [];
-
         for (const updateCid of document.updateCids) {
             const updateData = await getBinaryContentByCid(updateCid);
             if (updateData) {
@@ -820,7 +647,7 @@ async function createConsolidatedSnapshotInternal(pubKey: string, set: AuthConte
             }
         }
 
-        // 3. Apply all updates in one batch operation (much faster than individual imports)
+        // 3. Apply all updates in one batch operation
         if (updatesData.length > 0) {
             try {
                 console.log(`Applying ${updatesData.length} updates in batch for ${pubKey}`);
@@ -864,33 +691,52 @@ async function createConsolidatedSnapshotInternal(pubKey: string, set: AuthConte
         // --- End snapshot changed check ---
 
         // 5. Save the new snapshot to content store (if it changed)
-        await db.insert(content).values({
-            cid: newSnapshotCid,
-            type: 'snapshot',
-            raw: Buffer.from(newSnapshotData),
-            metadata: { documentPubKey: pubKey },
-            createdAt: new Date()
-        }).onConflictDoNothing(); // Avoid errors if somehow created concurrently
-
-        console.log(`Created new consolidated snapshot with CID: ${newSnapshotCid} for ${pubKey}`);
+        // Insert content first, so if doc update fails, we have the content but doc points to old one (recoverable)
+        try {
+            await db.insert(content).values({
+                cid: newSnapshotCid,
+                type: 'snapshot',
+                raw: Buffer.from(newSnapshotData),
+                metadata: { documentPubKey: pubKey },
+                createdAt: new Date()
+            }).onConflictDoNothing();
+            console.log(`Created new consolidated snapshot content with CID: ${newSnapshotCid} for ${pubKey}`);
+        } catch (contentInsertError) {
+            console.error(`Snapshot Creation Error: Failed to insert new snapshot content ${newSnapshotCid} for ${pubKey}:`, contentInsertError);
+            return { success: false, error: 'Failed to save snapshot content', details: contentInsertError instanceof Error ? contentInsertError.message : undefined };
+        }
 
         // 6. Update the document to use the new snapshot and clear the update list
-        const updatedDocResult = await db.update(schema.docs)
-            .set({
-                snapshotCid: newSnapshotCid,
-                updateCids: [], // Clear all updates as they're now in the snapshot
-                updatedAt: new Date()
-            })
-            .where(eq(schema.docs.pubKey, pubKey))
-            .returning();
+        let updatedDocResult;
+        try {
+            updatedDocResult = await db.update(schema.docs)
+                .set({
+                    snapshotCid: newSnapshotCid,
+                    updateCids: [], // Clear all updates as they're now in the snapshot
+                    updatedAt: new Date()
+                })
+                .where(eq(schema.docs.pubKey, pubKey))
+                .returning();
+            console.log(`Updated document ${pubKey} to use new snapshot ${newSnapshotCid}`);
+        } catch (docUpdateError) {
+            console.error(`Snapshot Creation Error: Failed to update document ${pubKey} to new snapshot ${newSnapshotCid}:`, docUpdateError);
+            // Attempt to delete the potentially orphaned snapshot content we just inserted
+            try {
+                await db.delete(content).where(eq(content.cid, newSnapshotCid));
+                console.log(`Rolled back snapshot content insert for ${newSnapshotCid}`);
+            } catch (rollbackError) {
+                console.error(`Snapshot Creation Error: Failed to rollback snapshot content insert ${newSnapshotCid}:`, rollbackError);
+            }
+            return { success: false, error: 'Failed to update document with new snapshot', details: docUpdateError instanceof Error ? docUpdateError.message : undefined };
+        }
 
-        const updatedDoc = updatedDocResult[0]; // Get updated doc from result
+        const updatedDoc = updatedDocResult[0];
 
-        // --- Cleanup Consolidated Updates ---
+        // --- Cleanup Consolidated Updates (outside transaction) ---
         const { deletedUpdates } = await cleanupConsolidatedUpdates(pubKey, appliedUpdateCids);
         // --- End Update Cleanup ---
 
-        // --- Cleanup Old Snapshot ---
+        // --- Cleanup Old Snapshot (outside transaction) ---
         const { deletedOldSnapshot } = await cleanupOldSnapshot(pubKey, oldSnapshotCid, newSnapshotCid);
         // --- End Old Snapshot Cleanup ---
 
@@ -900,12 +746,14 @@ async function createConsolidatedSnapshotInternal(pubKey: string, set: AuthConte
             document: updatedDoc,
             newSnapshotCid,
             appliedUpdates: appliedUpdateCids.length,
-            clearedUpdates: document.updateCids.length,
+            clearedUpdates: document.updateCids.length, // Use original count before clearing
             deletedUpdates,
             deletedOldSnapshot
         };
+
     } catch (error) {
-        console.error(`Error creating consolidated snapshot internally for ${pubKey}:`, error);
+        // Catch errors from transaction or pre/post transaction steps
+        console.error(`Error during consolidated snapshot process for ${pubKey}:`, error);
         // Don't set status here, return error object
         return {
             success: false,
@@ -980,7 +828,7 @@ async function cleanupConsolidatedUpdates(pubKey: string, appliedUpdateCids: str
                     console.log(`Deleted ${deleteResult.rowCount} consolidated updates for ${pubKey}`);
                     deletedUpdates = deleteResult.rowCount ?? 0;
                 } else {
-                    console.log(`No updates can be safely deleted after metadata check for ${pubKey}`);
+                    console.log(`All consolidated updates for ${pubKey} are still referenced by other documents, none deleted`);
                     deletedUpdates = 0;
                 }
             } else {
@@ -1036,7 +884,5 @@ async function cleanupOldSnapshot(pubKey: string, oldSnapshotCid: string | undef
     }
     return { deletedOldSnapshot };
 }
-
-// --- End Internal Helper Functions ---
 
 export default docsHandlers; 

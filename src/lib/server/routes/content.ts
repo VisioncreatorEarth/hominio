@@ -204,16 +204,17 @@ contentHandlers.group('/batch', app => app
                 };
             }
 
-            // Insert new content items
-            const contentEntries = newItems.map(item => ({
+            // Prepare items for insertion
+            const itemsToInsert = newItems.map(item => ({
                 cid: item.cid,
                 type: item.type,
-                raw: Buffer.from(new Uint8Array(item.binaryData)),
+                raw: Buffer.from(new Uint8Array(item.binaryData)), // Ensure conversion
                 metadata: item.metadata || {},
                 createdAt: new Date()
             }));
 
-            await db.insert(content).values(contentEntries);
+            // Use onConflictDoNothing to handle potential race conditions
+            await db.insert(content).values(itemsToInsert).onConflictDoNothing();
 
             return {
                 success: true,
