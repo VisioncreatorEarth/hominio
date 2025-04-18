@@ -721,10 +721,9 @@ class HominioQLService {
         // Client-side reactive logic
         return readable<HqlQueryResult | null | undefined>(undefined, (set) => {
             let debounceTimer: NodeJS.Timeout | null = null;
-            const DEBOUNCE_MS = 200; // Increase debounce time
+            const DEBOUNCE_MS = 50; // REDUCED from 200ms
             let lastSessionState: unknown = undefined; // Track session state
             let currentResults: HqlQueryResult | null = null; // Track current results
-            let pendingNotificationCount = 0; // Track pending notifications
 
             const triggerDebouncedQuery = () => {
                 if (debounceTimer) {
@@ -736,13 +735,7 @@ class HominioQLService {
                     set(undefined); // Only show loading on initial load
                 }
 
-                // Increment pending notification count
-                pendingNotificationCount++;
-
                 debounceTimer = setTimeout(async () => {
-                    // Reset pending count for this batch
-                    pendingNotificationCount = 0;
-
                     const currentUser = getCurrentUserFn(); // Get FRESH user context
                     try {
                         const result = await this._handleQuery(currentUser, request);

@@ -14,11 +14,11 @@ export const docChangeNotifier = writable(0);
 
 // Debounced notification for batch operations
 let notificationDebounceTimer: NodeJS.Timeout | null = null;
-const NOTIFICATION_DEBOUNCE_MS = 150; // Increase from 50ms to 150ms for smoother UI
+const NOTIFICATION_DEBOUNCE_MS = 50; // REDUCED from 150ms 
 
 // Add variables to track notification timing
 let lastNotificationTime: number = 0;
-const NOTIFICATION_THROTTLE_MS = 200; // Minimum time between notifications
+const NOTIFICATION_THROTTLE_MS = 75; // REDUCED from 200ms 
 
 // Helper to trigger notification with debounce
 export function triggerDocChangeNotification(): void {
