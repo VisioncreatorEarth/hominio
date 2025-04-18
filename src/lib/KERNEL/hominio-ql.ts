@@ -426,17 +426,40 @@ class HominioQLService {
                 const value = places[key];
                 if (typeof value === 'string' && value.startsWith('@')) {
                     const refPubKey = value.substring(1);
-                    // Fetch referenced doc LoroDoc to get its name, but don't recurse resolution
+                    // Fetch referenced doc LoroDoc to get its name and potentially status
                     const refLoroDoc = await hominioDB.getLoroDoc(refPubKey);
                     if (refLoroDoc) {
                         const refMeta = refLoroDoc.getMap('meta');
                         const refName = refMeta?.get('name') as string | undefined;
-                        // Store a marker object with essential info, not the full resolved node
-                        resolvedPlaces[key] = {
+                        const refSchemaRef = refMeta?.get('schema') as string | undefined;
+
+                        // Prepare the marker object
+                        const marker: Record<string, unknown> = {
                             $ref: true,
                             pubKey: refPubKey,
-                            name: refName ?? refPubKey // Use pubKey as fallback name 
+                            name: refName ?? refPubKey // Use pubKey as fallback name
                         };
+
+                        // --- Specific handling for tcini status --- 
+                        // If the referenced doc is a tcini schema, get its x1 place (status)
+                        // Compare against the known TCINI_SCHEMA_PUBKEY
+                        const TCINI_SCHEMA_PUBKEY = '0x6b0f40bcb19564eb2607ba56fb977f67c459c46f199d80576490defccf41cc6a'; // Define or import this
+                        if (refSchemaRef === `@${TCINI_SCHEMA_PUBKEY}`) {
+                            try {
+                                const refData = refLoroDoc.getMap('data');
+                                const refPlaces = refData?.get('places');
+                                if (refPlaces instanceof LoroMap) {
+                                    marker.statusText = refPlaces.get('x1') ?? null; // Add status text to marker
+                                } else {
+                                    console.warn(`[HQL Resolve] Referenced tcini ${refPubKey} places is not a LoroMap.`);
+                                }
+                            } catch (e) {
+                                console.error(`[HQL Resolve] Error getting status from referenced tcini ${refPubKey}:`, e);
+                            }
+                        }
+                        // --- End tcini handling ---
+
+                        resolvedPlaces[key] = marker; // Assign the potentially augmented marker
                     } else {
                         // Keep original reference string or mark as not found
                         resolvedPlaces[key] = {
@@ -818,7 +841,7 @@ class HominioQLService {
 
 
 // --- Export Singleton Instance ---
-export const hominioQLService = new HominioQLService();
+export const hql = new HominioQLService();
 
 // Add this section for query optimization
 interface QueryCacheEntry<T> {

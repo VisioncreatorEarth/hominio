@@ -121,14 +121,6 @@ export interface StorageTransaction {
     abort(): void;
 }
 
-// Define a type for the raw item structure in IDB
-interface RawStorageItem {
-    key: string;
-    value: unknown; // Use unknown initially
-    metadata: Record<string, unknown>;
-    createdAt: string;
-}
-
 /**
  * IndexedDB implementation of the StorageAdapter interface
  */
@@ -155,18 +147,21 @@ export class IndexedDBAdapter implements StorageAdapter {
         try {
             this.db = await openDB(DB_NAME, DB_VERSION, {
                 upgrade(db) {
-                    // Create the store if it doesn't exist
+                    // Create the store if it doesn't exist, without keyPath
                     if (!db.objectStoreNames.contains('content')) {
-                        const store = db.createObjectStore('content', { keyPath: 'key' });
-                        store.createIndex('createdAt', 'createdAt', { unique: false });
-                        store.createIndex('type', 'metadata.type', { unique: false });
+                        db.createObjectStore('content'); // Removed keyPath and unused variable 'store'
+                        // Note: Indexes referencing metadata might need adjustment if metadata isn't stored with the value anymore
+                        // For now, keep indices simple or remove if not strictly needed for direct value storage
+                        // store.createIndex('createdAt', 'createdAt', { unique: false }); // Removed index
+                        // store.createIndex('type', 'metadata.type', { unique: false }); // Removed index
                     }
 
-                    // Create docs store with keyPath 'key' to match how we're storing data
+                    // Create docs store without keyPath
                     if (!db.objectStoreNames.contains('docs')) {
-                        const docsStore = db.createObjectStore('docs', { keyPath: 'key' });
-                        docsStore.createIndex('pubKey', 'value.pubKey', { unique: true });
-                        docsStore.createIndex('updatedAt', 'value.updatedAt', { unique: false });
+                        db.createObjectStore('docs'); // Removed keyPath and unused variable 'docsStore'
+                        // Note: Indexes referencing value properties need adjustment
+                        // docsStore.createIndex('pubKey', 'value.pubKey', { unique: true }); // Removed index
+                        // docsStore.createIndex('updatedAt', 'value.updatedAt', { unique: false }); // Removed index
                     }
                 }
             });
@@ -196,27 +191,15 @@ export class IndexedDBAdapter implements StorageAdapter {
     async get(key: string): Promise<Uint8Array | null> {
         try {
             const db = await this.ensureDB();
-            const item = await db.get(this.storeName, key) as StorageItem | undefined;
+            // Get the wrapper object using the key
+            const storedItem = await db.get(this.storeName, key) as { value: unknown, metadata: Record<string, unknown>, createdAt: string } | undefined;
 
-            if (!item) {
+            if (storedItem === undefined || storedItem === null || storedItem.value === undefined || storedItem.value === null) {
                 return null;
             }
 
-            // Special handling for docs store
-            if (this.storeName === 'docs') {
-                if (!item.value) return null;
-
-                // Convert the stored object back to a string and then to Uint8Array
-                const jsonString = JSON.stringify(item.value as object);
-                return new TextEncoder().encode(jsonString);
-            }
-
-            // For content store
-            if (!item.value) {
-                return null;
-            }
-
-            return this.ensureUint8Array(item.value);
+            // Ensure the 'value' property from the wrapper is a Uint8Array
+            return this.ensureUint8Array(storedItem.value);
         } catch (err) {
             console.error(`Error getting key ${key}:`, err);
             throw new Error(`Failed to get item: ${err instanceof Error ? err.message : String(err)}`);
@@ -229,43 +212,21 @@ export class IndexedDBAdapter implements StorageAdapter {
     async put(key: string, value: Uint8Array, metadata: Record<string, unknown> = {}): Promise<void> {
         try {
             const db = await this.ensureDB();
-            const now = new Date().toISOString();
+            const now = new Date().toISOString(); // Re-introduce timestamp for the wrapper object
 
-            // Special handling for docs store
-            if (this.storeName === 'docs') {
-                try {
-                    // For docs store, we expect value to be a JSON string that we can parse
-                    const text = new TextDecoder().decode(value);
-                    const docObj = JSON.parse(text);
-
-                    // Create a proper storage item with the key as the keyPath
-                    const item = {
-                        key,
-                        value: docObj, // Store the parsed object
-                        metadata,
-                        createdAt: now
-                    };
-
-                    await db.put(this.storeName, item);
-                    return;
-                } catch (parseErr) {
-                    console.error(`Error parsing doc data for ${key}:`, parseErr);
-                    throw new Error(`Failed to parse document data: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`);
-                }
-            }
-
-            // For other stores (content), use the standard approach
-            const item: StorageItem = {
-                key,
-                value,
-                metadata,
-                createdAt: now
+            // Store a wrapper object containing the value and metadata
+            const itemToStore = {
+                value: value, // Store the actual Uint8Array
+                metadata: metadata,
+                createdAt: now // Include timestamp in the stored object
             };
 
-            await db.put(this.storeName, item);
+            // Store the wrapper object using the provided key
+            await db.put(this.storeName, itemToStore, key);
+
         } catch (err) {
             console.error(`Error putting key ${key}:`, err);
-            throw new Error(`Failed to store item: ${err instanceof Error ? err.message : String(err)}`);
+            throw new Error(`Failed to put item: ${err instanceof Error ? err.message : String(err)}`);
         }
     }
 
@@ -296,36 +257,36 @@ export class IndexedDBAdapter implements StorageAdapter {
     async getAll(prefix?: string): Promise<Array<StorageItem>> {
         try {
             const db = await this.ensureDB();
-            // Use the RawStorageItem type here
-            const allItems = await db.getAll(this.storeName) as RawStorageItem[];
+            const tx = db.transaction(this.storeName, 'readonly');
+            const store = tx.objectStore(this.storeName);
+            const results: StorageItem[] = [];
+            let cursor = await store.openCursor();
 
-            // For docs store, we need to handle the different structure
-            if (this.storeName === 'docs') {
-                // No need for 'any' here, use RawStorageItem
-                return allItems.map(item => ({
-                    key: item.key,
-                    // Ensure value is treated as an object before stringifying
-                    value: new TextEncoder().encode(JSON.stringify(item.value as object)),
-                    metadata: item.metadata || {},
-                    createdAt: item.createdAt
-                }));
+            while (cursor) {
+                const key = cursor.key as string; // Get the key from the cursor
+
+                // Apply prefix filter if provided
+                if (!prefix || key.startsWith(prefix)) {
+                    // Get the stored wrapper object
+                    const storedItem = cursor.value as { value: unknown, metadata: Record<string, unknown>, createdAt: string } | undefined;
+
+                    if (storedItem && storedItem.value !== undefined && storedItem.value !== null) {
+                        results.push({
+                            key: key,
+                            value: this.ensureUint8Array(storedItem.value),
+                            metadata: storedItem.metadata || {},
+                            createdAt: storedItem.createdAt
+                        });
+                    } else {
+                        console.warn(`[getAll] Found key ${key} but stored item or value was invalid.`);
+                    }
+                }
+                cursor = await cursor.continue();
             }
 
-            if (!prefix) {
-                // Cast the RawStorageItem to StorageItem, ensuring value is Uint8Array
-                return allItems.map(item => ({
-                    ...item,
-                    value: this.ensureUint8Array(item.value)
-                }));
-            }
+            await tx.done; // Ensure transaction completes
+            return results;
 
-            // Filter by prefix and ensure value is Uint8Array
-            return allItems
-                .filter(item => item.key.startsWith(prefix))
-                .map(item => ({
-                    ...item,
-                    value: this.ensureUint8Array(item.value)
-                }));
         } catch (err) {
             console.error('Error getting all items:', err);
             throw new Error(`Failed to get items: ${err instanceof Error ? err.message : String(err)}`);

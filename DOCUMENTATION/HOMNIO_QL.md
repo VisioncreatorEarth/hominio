@@ -1,6 +1,6 @@
 # Hominio Query Language (HQL) Guide
 
-This document outlines the structure and usage of Hominio Query Language (HQL) for interacting with HominioDB documents via the `hominioQLService`. HQL provides a JSON-based interface for querying and mutating documents based on their metadata and content.
+This document outlines the structure and usage of Hominio Query Language (HQL) for interacting with HominioDB documents via the `hql` service. HQL provides a JSON-based interface for querying and mutating documents based on their metadata and content.
 
 ## Core Concepts
 
@@ -278,7 +278,7 @@ const mutation: HqlMutationRequest = {
 
 ## 3. Reactive Queries (`processReactive`)
 
-The `hominioQLService` also provides a `processReactive` method specifically for Svelte components.
+The `hql` service also provides a `processReactive` method specifically for Svelte components.
 
 ```typescript
 processReactive(request: HqlQueryRequest): Readable<HqlQueryResult | null | undefined>;
@@ -294,7 +294,7 @@ processReactive(request: HqlQueryRequest): Readable<HqlQueryResult | null | unde
 
 ```svelte
 <script lang="ts">
-  import { hominioQLService, type HqlQueryRequest, type HqlQueryResult } from '$lib/KERNEL/hominio-ql';
+  import { hql, type HqlQueryRequest, type HqlQueryResult } from '$lib/KERNEL/hominio-ql';
   import { type Readable } from 'svelte/store';
 
   const myQuery: HqlQueryRequest = {
@@ -303,7 +303,7 @@ processReactive(request: HqlQueryRequest): Readable<HqlQueryResult | null | unde
   };
 
   // Get the readable store
-  const prenuReadable: Readable<HqlQueryResult | null | undefined> = hominioQLService.processReactive(myQuery);
+  const prenuReadable: Readable<HqlQueryResult | null | undefined> = hql.processReactive(myQuery);
 
   // In Svelte 5, use $derived or auto-subscription ($prenuReadable) in the template
   // const prenuList = $derived(prenuReadable);

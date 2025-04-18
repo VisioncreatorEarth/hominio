@@ -1,6 +1,6 @@
 <script lang="ts">
 	import {
-		hominioQLService,
+		hql,
 		type HqlQueryRequest,
 		type HqlQueryResult,
 		type HqlMutationRequest
@@ -28,8 +28,10 @@
 		}
 	};
 	// Get current user BEFORE creating reactive query
-	const schemasReadable: Readable<HqlQueryResult | null | undefined> =
-		hominioQLService.processReactive(getCurrentEffectiveUser, allSchemasQuery);
+	const schemasReadable: Readable<HqlQueryResult | null | undefined> = hql.processReactive(
+		getCurrentEffectiveUser,
+		allSchemasQuery
+	);
 
 	// Selected Schema State
 	let selectedSchemaPubKey = $state<string | null>(null);
@@ -49,7 +51,7 @@
 			};
 			// Get current user BEFORE creating reactive query
 			// Get the new readable store for entities and assign it to the state variable
-			entitiesReadable = hominioQLService.processReactive(getCurrentEffectiveUser, entityQuery);
+			entitiesReadable = hql.processReactive(getCurrentEffectiveUser, entityQuery);
 			selectedEntityPubKey = null; // <-- Reset selected entity when schema changes
 		} else {
 			// If no schema selected, reset to an empty/loading state
@@ -106,7 +108,7 @@
 
 			// Get current user before processing mutation
 			const currentUser = getCurrentEffectiveUser();
-			const result = await hominioQLService.process(currentUser, mutation);
+			const result = await hql.process(currentUser, mutation);
 		} catch (err) {
 			console.error('[Action] Error creating Prenu:', err);
 		} finally {
@@ -134,28 +136,13 @@
 
 			// Get current user before processing mutation
 			const currentUser = getCurrentEffectiveUser();
-			const result = await hominioQLService.process(currentUser, mutation);
+			const result = await hql.process(currentUser, mutation);
 		} catch (err) {
 			console.error(`[Action] Error updating Prenu ${entityPubKey} name:`, err);
 		} finally {
 			currentlyUpdatingPrenu = null;
 		}
 	}
-
-	// --- Sync Status ---
-	// const syncStatus = hominioSync.status;
-	// function handlePull() {
-	// 	if (!$syncStatus.isSyncing) {
-	// 		hominioSync.pullFromServer();
-	// 	}
-	// }
-
-	// function handlePush() {
-	// 	if (!$syncStatus.isSyncing && $syncStatus.pendingLocalChanges > 0) {
-	// 		const currentUser = getCurrentEffectiveUser();
-	// 		hominioSync.pushToServer(currentUser);
-	// 	}
-	// }
 </script>
 
 <div class="grid h-screen grid-cols-1 bg-gray-100 md:grid-cols-[250px_3fr_2fr]">

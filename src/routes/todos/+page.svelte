@@ -1,6 +1,6 @@
 <script lang="ts">
 	import {
-		hominioQLService,
+		hql,
 		type HqlQueryRequest,
 		type HqlMutationRequest,
 		type HqlQueryResult,
@@ -11,10 +11,14 @@
 	import { getCurrentEffectiveUser as getCurrentEffectiveUserType } from '$lib/KERNEL/hominio-auth';
 	import type { CapabilityUser } from '$lib/KERNEL/hominio-caps';
 
-	// --- Constants ---
-	const LISTE_SCHEMA_NAME = 'liste';
-	const GUNKA_SCHEMA_NAME = 'gunka';
-	const TCINI_SCHEMA_NAME = 'tcini';
+	// --- Constants --- Define PubKeys directly ---
+	const LISTE_SCHEMA_PUBKEY = '0x3fe09dd2eb611a10f3438692f60165fcc350d14f47a5de72ca603c1504bb38aa';
+	const GUNKA_SCHEMA_PUBKEY = '0x379da4ae0349663a8a1f8a8972bb6294aeb187e0da77df1bef7406651a8cc79a';
+	const TCINI_SCHEMA_PUBKEY = '0x6b0f40bcb19564eb2607ba56fb977f67c459c46f199d80576490defccf41cc6a';
+
+	// const LISTE_SCHEMA_NAME = 'liste'; // Removed
+	// const GUNKA_SCHEMA_NAME = 'gunka'; // Removed
+	// const TCINI_SCHEMA_NAME = 'tcini'; // Removed
 	const DEFAULT_LIST_NAME = 'Main';
 	const STATUS_TODO = 'todo';
 	const STATUS_DONE = 'done';
@@ -31,6 +35,7 @@
 
 	// --- Reactive Stores ---
 	let todoItemsReadable = $state(readable<HqlQueryResult | null | undefined>(undefined));
+	let tciniItemsReadable = $state(readable<HqlQueryResult | null | undefined>(undefined)); // New store for tcini items
 
 	// Get session store from context provided by layout
 	// Define the expected type for the store more accurately if possible
@@ -63,20 +68,35 @@
 	// Effect to fetch todo items once the list pubKey is available
 	$effect(() => {
 		const listKey = todoListPubKey;
-		console.log('[Todos Debug] Effect to fetch items running. listKey:', listKey);
+		console.log('[Todos Debug] Effect to fetch gunka items running. listKey:', listKey);
 		if (listKey) {
-			const query: HqlQueryRequest = {
+			const gunkaQuery: HqlQueryRequest = {
 				operation: 'query',
 				filter: {
-					meta: { schema: '@0x379da4ae0349663a8a1f8a8972bb6294aeb187e0da77df1bef7406651a8cc79a' }, // Hardcoded Gunka PubKey Ref
+					meta: { schema: `@${GUNKA_SCHEMA_PUBKEY}` }, // Use Gunka PubKey constant
 					places: {
 						// Ensure x3 references the specific list
 						x3: `@${listKey}`
 					}
 				}
 			};
-			const currentUser = getCurrentEffectiveUser();
-			todoItemsReadable = hominioQLService.processReactive(currentUser, query);
+			// Pass the function to get the user for reactive queries
+			todoItemsReadable = hql.processReactive(getCurrentEffectiveUser, gunkaQuery);
+
+			// Also fetch related tcini items (could be optimized later)
+			const tciniQuery: HqlQueryRequest = {
+				operation: 'query',
+				filter: {
+					meta: { schema: `@${TCINI_SCHEMA_PUBKEY}` }
+					// We fetch ALL tcini for now and filter client-side.
+					// TODO: Optimize by filtering tcini where x2 references a gunka whose x3 is the listKey
+				}
+			};
+			tciniItemsReadable = hql.processReactive(getCurrentEffectiveUser, tciniQuery);
+		} else {
+			// Reset both readables if listKey is null
+			todoItemsReadable = readable(undefined);
+			tciniItemsReadable = readable(undefined);
 		}
 	});
 
@@ -112,12 +132,13 @@
 			const findListQuery: HqlQueryRequest = {
 				operation: 'query',
 				filter: {
-					meta: { schema: `@${LISTE_SCHEMA_NAME}` }, // Base schema
+					meta: { schema: `@${LISTE_SCHEMA_PUBKEY}` }, // Use Liste PubKey constant
 					places: { x1: DEFAULT_LIST_NAME }
 				}
 			};
+			// Pass the current user object for non-reactive queries/mutations
 			const currentUser = getCurrentEffectiveUser();
-			const result = await hominioQLService.process(currentUser, findListQuery);
+			const result = await hql.process(currentUser, findListQuery);
 
 			// --- Type Guard for Query Result ---
 			if (result && Array.isArray(result) && result.length > 0) {
@@ -129,15 +150,16 @@
 				const createListMutation: HqlMutationRequest = {
 					operation: 'mutate',
 					action: 'create',
-					schema: LISTE_SCHEMA_NAME, // Use base schema name
+					schema: `@${LISTE_SCHEMA_PUBKEY}`, // Use Liste PubKey constant
 					places: {
 						x1: DEFAULT_LIST_NAME,
 						x2: '' // Add default empty string for required x2 place
 						// No hominio_type marker needed
 					}
 				};
+				// Pass the current user object for non-reactive queries/mutations
 				const createListUser = getCurrentEffectiveUser();
-				const createResult = await hominioQLService.process(createListUser, createListMutation);
+				const createResult = await hql.process(createListUser, createListMutation);
 				// --- Type Guard for Mutation Result (expecting Docs on create) ---
 				if (createResult && !Array.isArray(createResult) && 'pubKey' in createResult) {
 					todoListPubKey = createResult.pubKey;
@@ -164,7 +186,7 @@
 			const createTodoMutation: HqlMutationRequest = {
 				operation: 'mutate',
 				action: 'create',
-				schema: GUNKA_SCHEMA_NAME, // Use base schema name
+				schema: `@${GUNKA_SCHEMA_PUBKEY}`, // Use Gunka PubKey constant
 				places: {
 					x1: FIONA_REF, // Assignee (Hardcoded to Fiona)
 					x2: newTodoText.trim(), // Task description
@@ -172,8 +194,9 @@
 					// x4 (status ref) will be added in step 3
 				}
 			};
+			// Pass the current user object for non-reactive queries/mutations
 			const createTodoUser = getCurrentEffectiveUser();
-			const todoResult = await hominioQLService.process(createTodoUser, createTodoMutation);
+			const todoResult = await hql.process(createTodoUser, createTodoMutation);
 			// --- Type Guard for Mutation Result (expecting Docs on create) ---
 			if (!todoResult || Array.isArray(todoResult) || !('pubKey' in todoResult)) {
 				// TODO: Consider cleanup of the created tcini document if todo creation fails
@@ -186,14 +209,15 @@
 			const createTciniMutation: HqlMutationRequest = {
 				operation: 'mutate',
 				action: 'create',
-				schema: TCINI_SCHEMA_NAME,
+				schema: `@${TCINI_SCHEMA_PUBKEY}`, // Use Tcini PubKey constant
 				places: {
 					x1: STATUS_TODO, // Default status
 					x2: `@${gunkaPubKey}` // Link to the gunka document
 				}
 			};
+			// Pass the current user object for non-reactive queries/mutations
 			const createTciniUser = getCurrentEffectiveUser();
-			const tciniResult = await hominioQLService.process(createTciniUser, createTciniMutation);
+			const tciniResult = await hql.process(createTciniUser, createTciniMutation);
 			if (!tciniResult || Array.isArray(tciniResult) || !('pubKey' in tciniResult)) {
 				// Attempt cleanup: Delete the gunka created in step 1
 				console.warn(
@@ -201,45 +225,16 @@
 					gunkaPubKey
 				);
 				const cleanupUser1 = getCurrentEffectiveUser();
-				await hominioQLService
+				await hql
 					.process(cleanupUser1, { operation: 'mutate', action: 'delete', pubKey: gunkaPubKey })
-					.catch((e) => console.error('Cleanup failed:', e));
+					.catch((e: unknown) => console.error('Cleanup failed:', e));
 				throw new Error('Failed to create status document for todo item. Unexpected result type.');
 			}
 			const tciniPubKey = tciniResult.pubKey;
 			console.log('[Todos Debug] Created Tcini (Step 2): ', tciniPubKey);
 
-			// 3. Update the gunka document to add the reference to the tcini document
-			const updateTodoMutation: HqlMutationRequest = {
-				operation: 'mutate',
-				action: 'update',
-				pubKey: gunkaPubKey,
-				places: {
-					x4: `@${tciniPubKey}` // Add the reference to the status document
-				}
-			};
-			const updateTodoUser = getCurrentEffectiveUser();
-			const updateResult = await hominioQLService.process(updateTodoUser, updateTodoMutation);
-			if (!updateResult || Array.isArray(updateResult) || !('pubKey' in updateResult)) {
-				// Attempt cleanup: Delete tcini and gunka
-				console.warn(
-					'[Todos Debug] Failed to update gunka (Step 3). Attempting to delete tcini and gunka.'
-				);
-				const cleanupUser2 = getCurrentEffectiveUser();
-				await hominioQLService
-					.process(cleanupUser2, { operation: 'mutate', action: 'delete', pubKey: tciniPubKey })
-					.catch((e) => console.error('Tcini cleanup failed:', e));
-				const cleanupUser3 = getCurrentEffectiveUser();
-				await hominioQLService
-					.process(cleanupUser3, { operation: 'mutate', action: 'delete', pubKey: gunkaPubKey })
-					.catch((e) => console.error('Gunka cleanup failed:', e));
-				throw new Error('Failed to update todo item with status reference.');
-			}
+			// --- Step 3 Removed: No longer need to update Gunka ---
 
-			console.log(
-				'[Todos Debug] Updated Gunka with Tcini ref (Step 3). Final Gunka PubKey:',
-				gunkaPubKey
-			);
 			newTodoText = ''; // Clear input
 		} catch (err: any) {
 			console.error('Error creating todo item:', err);
@@ -280,8 +275,9 @@
 					x1: newStatus
 				}
 			};
+			// Pass the current user object for non-reactive queries/mutations
 			const toggleUser = getCurrentEffectiveUser();
-			const updateResult = await hominioQLService.process(toggleUser, updateStatusMutation);
+			const updateResult = await hql.process(toggleUser, updateStatusMutation);
 
 			// --- Type Guard for Mutation Result (expecting Docs on update) ---
 			if (!updateResult || Array.isArray(updateResult) || !('pubKey' in updateResult)) {
@@ -347,43 +343,50 @@
 			<!-- Todo List Section -->
 			<div class="flex-grow rounded border border-gray-300 bg-white p-4 shadow-sm">
 				<h2 class="mb-4 text-xl font-semibold text-gray-800">Current Todos</h2>
-				{#if $todoItemsReadable === undefined}
-					<p class="text-gray-500">Loading todos...</p>
-				{:else if $todoItemsReadable === null}
-					<p class="text-red-600">Error loading todos.</p>
+				{#if $todoItemsReadable === undefined || $tciniItemsReadable === undefined}
+					<p class="text-gray-500">Loading todos and statuses...</p>
+				{:else if $todoItemsReadable === null || $tciniItemsReadable === null}
+					<p class="text-red-600">Error loading todos or statuses.</p>
 				{:else if $todoItemsReadable.length === 0}
 					<p class="text-yellow-700">No todos found in this list yet.</p>
-				{:else}
+				{:else if Array.isArray($todoItemsReadable) && Array.isArray($tciniItemsReadable)}
 					<ul class="divide-y divide-gray-200">
 						{#each $todoItemsReadable as item (item.pubKey)}
-							<!-- Check item.data and item.data.places before accessing -->
 							{@const itemData = item.data as Record<string, unknown> | undefined}
 							{@const itemPlaces = itemData?.places as Record<string, any> | undefined}
-							<!-- Access the resolved status document object -->
-							{@const statusDoc = itemPlaces?.x4 as Record<string, any> | undefined}
-							{@const statusDocPlaces = statusDoc?.data?.places as Record<string, any> | undefined}
-							{@const currentStatusText = statusDocPlaces?.x1 ?? 'Unknown Status'}
-							{@const statusPubKey = statusDoc?.pubKey as string | undefined}
+
+							<!-- Find the corresponding tcini item -->
+							{@const expectedTciniRef = `@${item.pubKey}`}
+							{@const relatedTcini = $tciniItemsReadable?.find(
+								// Compare the pubKey *within* the resolved reference object in tcini.data.places.x2
+								(tcini) => (tcini.data as any)?.places?.x2?.pubKey === item.pubKey
+							)}
+							<!-- Use type assertion to satisfy linter -->
+							{@const currentStatusText =
+								(relatedTcini?.data as any)?.places?.x1 ?? 'Unknown Status'}
+							{@const statusPubKey = relatedTcini?.pubKey as string | undefined}
 							{@const isDone = currentStatusText === STATUS_DONE}
+
 							<li
-								class="flex items-center justify-between py-3 transition-colors {statusPubKey
-									? 'hover:bg-gray-50'
-									: 'opacity-50'}"
+								class="flex cursor-pointer items-center justify-between py-3 transition-colors {selectedTodoPubKey ===
+								item.pubKey
+									? 'bg-indigo-50'
+									: 'hover:bg-gray-50'}"
+								on:click={() => (selectedTodoPubKey = item.pubKey)}
 							>
-								<div class="flex flex-grow items-center space-x-3">
+								<div class="flex flex-grow items-center space-x-3 overflow-hidden">
 									<input
 										type="checkbox"
 										checked={isDone}
-										class="h-5 w-5 cursor-pointer rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-75"
+										class="h-5 w-5 flex-shrink-0 cursor-pointer rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-75"
 										on:change={() => toggleTodoStatus(statusPubKey, currentStatusText)}
 										disabled={isSubmitting || !statusPubKey}
 									/>
-									<span class={isDone ? 'text-gray-500 line-through' : 'text-gray-800'}>
+									<span class="truncate {isDone ? 'text-gray-500 line-through' : 'text-gray-800'}">
 										{itemPlaces?.x2 ?? 'No description'}
 									</span>
 								</div>
-								<span class="text-xs text-gray-400">({currentStatusText})</span>
-								<!-- TODO: Add edit/delete buttons later -->
+								<span class="ml-2 flex-shrink-0 text-xs text-gray-400">({currentStatusText})</span>
 							</li>
 						{/each}
 					</ul>
@@ -393,4 +396,69 @@
 			<p class="text-center text-gray-500">Could not load or create the todo list.</p>
 		{/if}
 	</main>
+
+	<!-- Right Sidebar (Todo Details) -->
+	<aside class="col-span-1 flex flex-col overflow-y-auto border-l border-gray-300 bg-white p-6">
+		{#if selectedTodoPubKey && $todoItemsReadable}
+			{@const selectedTodo = $todoItemsReadable.find((item) => item.pubKey === selectedTodoPubKey)}
+			{#if selectedTodo}
+				{@const selectedData = selectedTodo.data as Record<string, any> | undefined}
+				{@const selectedPlaces = selectedData?.places as Record<string, any> | undefined}
+				<h2 class="mb-4 flex-shrink-0 text-xl font-semibold text-gray-700">Todo Details</h2>
+				<div class="flex-grow overflow-y-auto">
+					<p class="mb-1 text-sm text-gray-500">
+						PubKey: <code class="rounded bg-gray-200 px-1 text-xs">{selectedTodo.pubKey}</code>
+					</p>
+					<h3 class="mt-4 mb-3 text-lg font-semibold text-gray-700">Places</h3>
+					{#if selectedPlaces && Object.keys(selectedPlaces).length > 0}
+						<dl class="space-y-2">
+							<!-- Sort place entries by key (x1, x2, etc.) -->
+							{#each Object.entries(selectedPlaces).sort( ([keyA], [keyB]) => keyA.localeCompare(keyB) ) as [placeKey, placeValue] (placeKey)}
+								<div class="flex items-baseline">
+									<dt class="w-10 flex-shrink-0 font-mono font-medium text-indigo-600">
+										{placeKey}:
+									</dt>
+									<dd class="ml-2 text-sm text-gray-800">
+										{#if typeof placeValue === 'object' && placeValue !== null && placeValue.$ref}
+											<!-- Display resolved reference info -->
+											{@const isStatusRef = placeKey === 'x4'}
+											<!-- Check if it was the old status ref -->
+											<span class="text-purple-700">
+												[Ref: {placeValue.name ?? placeValue.pubKey}
+												{#if placeValue.statusText}({placeValue.statusText}){/if}]
+											</span>
+											<code class="ml-1 text-xs text-gray-500">({placeValue.pubKey})</code>
+											{#if isStatusRef}
+												<span class="text-xs text-red-500">(Old x4 Ref)</span>
+											{/if}
+										{:else}
+											<!-- Display literal value -->
+											{JSON.stringify(placeValue)}
+										{/if}
+									</dd>
+								</div>
+							{/each}
+						</dl>
+					{:else}
+						<p class="text-sm text-gray-500">No places defined for this entity.</p>
+					{/if}
+
+					<!-- Raw JSON Toggle -->
+					<details class="mt-6 rounded border border-gray-300 bg-white">
+						<summary class="cursor-pointer list-none p-3 font-medium text-gray-700 hover:bg-gray-50"
+							>Raw JSON</summary
+						>
+						<div class="border-t border-gray-300 p-3">
+							<pre
+								class="overflow-x-auto rounded bg-gray-50 p-3 font-mono text-xs whitespace-pre-wrap text-gray-700">{JSON.stringify(
+									selectedTodo,
+									null,
+									2
+								)}</pre>
+						</div>
+					</details>
+				</div>
+			{/if}
+		{/if}
+	</aside>
 </div>

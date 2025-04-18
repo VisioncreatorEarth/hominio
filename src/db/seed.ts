@@ -13,6 +13,8 @@ import * as schema from './schema';
 import { eq } from 'drizzle-orm'; // Removed unused sql import
 import { validateSchemaJsonStructure } from '../lib/KERNEL/hominio-validate';
 import { GENESIS_PUBKEY, GENESIS_HOMINIO } from './constants'; // Import from new constants file
+import { validateEntityJsonAgainstSchema } from '../lib/KERNEL/hominio-validate';
+import { LoroMap } from 'loro-crdt';
 
 // Basic placeholder types matching the structure used
 interface PlaceDefinition {
@@ -43,9 +45,13 @@ interface SchemaDefinition extends BaseDefinition {
     schema?: string | null; // Original schema key, will be replaced by generated ref
 }
 
-interface EntityDefinition extends BaseDefinition {
+// Allow simple values (string, number, boolean, null) or @ref strings directly in entity places
+interface EntityDefinition {
     pubkey?: string; // Optional original pubkey, will be generated
     schema: string; // Original schema key, will be replaced by generated ref
+    name: string;
+    places: Record<string, string | number | boolean | null>; // Places are direct values or @ref strings
+    translations?: TranslationDefinition[]; // Translations still use PlaceDefinition structure
 }
 
 // Schemas to seed (adapted from data.ts, using the new validation structure)
@@ -144,6 +150,64 @@ const schemasToSeed: Record<string, SchemaDefinition> = {
     // <<< Add other schemas here later >>>
 };
 
+// --- Entities to Seed ---
+const entitiesToSeed: Record<string, EntityDefinition> = {
+    // --- Prenu --- 
+    "fiona": {
+        schema: "prenu", // Refers to the 'prenu' schema defined above
+        name: "Fiona Example",
+        places: {
+            x1: "Fiona" // Name of the person
+        }
+    },
+    // --- Liste ---
+    "main_list": {
+        schema: "liste", // Refers to the 'liste' schema
+        name: "Main Todo List",
+        places: {
+            x1: "Main", // Name/Identifier of the list
+            x2: "" // Required place, initially empty conceptually (list holds gunka refs via tcini)
+        }
+    },
+    // --- Gunka (Tasks) ---
+    "task1_buy_milk": {
+        schema: "gunka", // Refers to the 'gunka' schema
+        name: "Buy Milk Task",
+        places: {
+            x1: "@fiona", // Assignee: Reference Fiona (will be resolved to @fiona_pubkey)
+            x2: "Buy Oat Milk", // Task description
+            x3: "@main_list" // Belongs to: Reference Main List (will be resolved to @main_list_pubkey)
+            // x4 (status link) is NOT part of gunka schema
+        }
+    },
+    "task2_feed_cat": {
+        schema: "gunka",
+        name: "Feed Cat Task",
+        places: {
+            x1: "@fiona",
+            x2: "Feed the cat",
+            x3: "@main_list"
+        }
+    },
+    // --- Tcini (Statuses) ---
+    "status_task1": {
+        schema: "tcini", // Refers to the 'tcini' schema
+        name: "Status for Task 1", // Optional descriptive name for the tcini doc itself
+        places: {
+            x1: "todo", // The actual status value
+            x2: "@task1_buy_milk" // Link to the entity this status is for (resolved to @task1_pubkey)
+        }
+    },
+    "status_task2": {
+        schema: "tcini",
+        name: "Status for Task 2",
+        places: {
+            x1: "done",
+            x2: "@task2_feed_cat"
+        }
+    }
+};
+
 // Helper functions
 // --------------------------------------------------------
 
@@ -164,58 +228,50 @@ async function hashSnapshot(snapshot: Uint8Array): Promise<string> {
 // --------------------------------------------------------
 // async function seedGismuSchemaDoc(db: ReturnType<typeof drizzle>) { ... } // REMOVED
 
-// Function to seed a single document (schema or entity)
+// Refactored function to seed a single document (schema or entity)
 async function seedDocument(
     db: ReturnType<typeof drizzle>,
     docKey: string,
     docDefinition: SchemaDefinition | EntityDefinition,
     docType: 'schema' | 'entity',
-    generatedKeys: Map<string, string>
+    generatedKeys: Map<string, string> // Map<name, pubkey>
 ) {
     let pubKey: string;
     let schemaRef: string | null = null; // Initialize as null
-    const isGismu = docKey === 'gismu' && docType === 'schema';
+    const isGismuSchema = docKey === 'gismu' && docType === 'schema';
 
     // 1. Determine PubKey
-    if (isGismu) {
+    if (isGismuSchema) {
         pubKey = GENESIS_PUBKEY;
-        // Explicitly set gismu key in map if not present
-        if (!generatedKeys.has(docKey)) {
-            generatedKeys.set(docKey, pubKey);
-        }
-    } else {
+    } else if (docDefinition.pubkey) { // Use pre-defined pubkey if available (e.g., for testing)
+        pubKey = docDefinition.pubkey;
+    } else { // Generate deterministically otherwise
         pubKey = await generateDeterministicPubKey(docKey);
     }
-    // Store generated key if not already present
+    // Store generated/used key if not already present (maps NAME to PUBKEY)
     if (!generatedKeys.has(docKey)) {
         generatedKeys.set(docKey, pubKey);
     }
 
-    // 2. Determine Schema Reference (Format: @pubKey)
-    if (isGismu) {
-        // Gismu references itself
+    // 2. Determine Schema Reference (@pubKey)
+    let referencedSchemaName: string | null | undefined = null;
+    if (isGismuSchema) {
+        // Gismu references itself according to validator expectation
         schemaRef = `@${pubKey}`;
-    } else if ('schema' in docDefinition && docDefinition.schema) {
-        // Other docs reference the schema defined in their definition
-        const schemaName = docDefinition.schema;
-        const schemaPubKey = generatedKeys.get(schemaName);
+        referencedSchemaName = docKey; // Gismu is its own schema name reference
+    } else if (docDefinition.schema) {
+        referencedSchemaName = docDefinition.schema; // Name like "gismu" or "prenu"
+        const schemaPubKey = generatedKeys.get(referencedSchemaName);
         if (!schemaPubKey) {
-            console.warn(`Schema PubKey for "${schemaName}" not found for "${docKey}", attempting generation...`);
-            const generatedSchemaKey = await generateDeterministicPubKey(schemaName);
-            if (!generatedKeys.has(schemaName)) generatedKeys.set(schemaName, generatedSchemaKey);
-            schemaRef = `@${generatedSchemaKey}`;
-        } else {
-            schemaRef = `@${schemaPubKey}`;
+            // This should not happen if schemas are seeded first
+            console.error(`❌ CRITICAL: Schema PubKey for referenced schema "${referencedSchemaName}" not found in generatedKeys map when seeding "${docKey}". Ensure schemas are seeded first.`);
+            return; // Stop processing this document
         }
-    } else if (!isGismu && docType === 'schema') {
-        // Fallback for non-gismu schemas without explicit schema: reference gismu
-        const gismuPubKey = generatedKeys.get("gismu");
-        if (!gismuPubKey) {
-            throw new Error(`Root schema "gismu" PubKey not found. Ensure 'gismu' is processed first in schemasToSeed.`);
-        }
-        schemaRef = `@${gismuPubKey}`;
+        schemaRef = `@${schemaPubKey}`;
+    } else {
+        console.error(`❌ CRITICAL: Document "${docKey}" (type: ${docType}) is missing the required 'schema' field.`);
+        return; // Stop processing this document
     }
-    // If none of the above, schemaRef remains null (shouldn't happen for schemas/entities defined)
 
     console.log(`Processing ${docType}: ${docKey} -> PubKey: ${pubKey}, SchemaRef: ${schemaRef}`);
 
@@ -229,47 +285,117 @@ async function seedDocument(
         return;
     }
 
+    // --- Resolve Place References for Entities ---
+    const resolvedPlaces = { ...docDefinition.places }; // Shallow copy
+    if (docType === 'entity') {
+        for (const placeKey in resolvedPlaces) {
+            const placeDef = resolvedPlaces[placeKey];
+            // Check if the place value itself is a reference string like "@someKey"
+            if (typeof placeDef === 'string' && placeDef.startsWith('@')) {
+                const referencedKeyName = placeDef.substring(1);
+                const referencedPubKey = generatedKeys.get(referencedKeyName);
+                if (!referencedPubKey) {
+                    console.error(`  - ❌ ERROR: Could not resolve reference "${placeDef}" for place "${placeKey}" in entity "${docKey}". Referenced key "${referencedKeyName}" not found in generatedKeys map.`);
+                    return; // Cannot seed this entity if reference is broken
+                }
+                resolvedPlaces[placeKey] = `@${referencedPubKey}`; // Replace name ref with pubkey ref
+            }
+            // Note: This doesn't handle nested references within place values that are objects/arrays yet.
+        }
+    }
+    // --- End Place Reference Resolution ---
+
     // 4. Prepare LoroDoc content
     const loroDoc = new LoroDoc();
     loroDoc.setPeerId(1);
 
-    const dataMapContent: Record<string, unknown> = {
-        places: docDefinition.places,
-        translations: docDefinition.translations || []
+    // Define the structure clearly for validation
+    // Revert to using Record<string, any> for flexibility before validation
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const docJsonForValidation: Record<string, any> = {
+        pubKey: pubKey,
+        meta: {
+            name: docDefinition.name,
+            schema: schemaRef,
+            owner: GENESIS_HOMINIO // Default owner for seeded docs
+        },
+        data: {
+            places: resolvedPlaces,
+            translations: docDefinition.translations || []
+        }
     };
 
-    const meta = loroDoc.getMap('meta');
-    meta.set('name', docDefinition.name);
-    meta.set('schema', schemaRef); // Set resolved @pubkey or null
-
-    const data = loroDoc.getMap('data');
-    data.set('places', dataMapContent.places);
-    if (dataMapContent.translations && Array.isArray(dataMapContent.translations) && dataMapContent.translations.length > 0) {
-        data.set('translations', dataMapContent.translations);
+    // Populate LoroDoc from the JSON structure
+    const metaMap = loroDoc.getMap('meta');
+    for (const key in docJsonForValidation.meta) {
+        metaMap.set(key, docJsonForValidation.meta[key]);
+    }
+    const dataMap = loroDoc.getMap('data');
+    const placesMap = dataMap.setContainer('places', new LoroMap());
+    for (const key in docJsonForValidation.data.places) {
+        placesMap.set(key, docJsonForValidation.data.places[key]);
+    }
+    if (docJsonForValidation.data.translations.length > 0) {
+        dataMap.set('translations', docJsonForValidation.data.translations);
     }
 
-    // --- UPDATED: 4.5 Validate the LoroDoc structure VIA JSON --- //
-    if (docType === 'schema') { // Only validate schema docs for now
+    // --- 4.5 Validate Structure --- //
+    let isValid = true;
+    let validationErrors: string[] = [];
+
+    if (docType === 'schema') {
         console.log(`  - Validating structure for schema: ${docKey}...`);
-        // Get JSON representation for validation
-        const schemaJsonForValidation = loroDoc.toJSON() as Record<string, unknown>;
-        // Add pubKey to JSON as the validator might expect it (depending on its implementation)
-        schemaJsonForValidation.pubKey = pubKey;
+        const result = validateSchemaJsonStructure(docJsonForValidation);
+        isValid = result.isValid;
+        validationErrors = result.errors;
+    } else if (docType === 'entity' && referencedSchemaName) {
+        const schemaPubKey = generatedKeys.get(referencedSchemaName);
+        if (schemaPubKey) {
+            console.log(`  - Validating entity "${docKey}" against schema "${referencedSchemaName}" (${schemaPubKey})...`);
+            const schemaDocData = await db.select({ snapshotCid: schema.docs.snapshotCid })
+                .from(schema.docs)
+                .where(eq(schema.docs.pubKey, schemaPubKey)).limit(1);
 
-        const { isValid, errors } = validateSchemaJsonStructure(schemaJsonForValidation);
-        if (!isValid) {
-            console.error(`  - ❌ Validation Failed for ${docKey}:`);
-            // Add type string to err parameter
-            errors.forEach((err: string) => console.error(`    - ${err}`));
-            console.warn(`  - Skipping database insertion for invalid schema: ${docKey}`);
-            return; // Do not proceed if validation fails
+            if (schemaDocData.length > 0 && schemaDocData[0].snapshotCid) {
+                // Fetch content directly from DB using Drizzle
+                const contentResult = await db.select({ raw: schema.content.raw })
+                    .from(schema.content)
+                    .where(eq(schema.content.cid, schemaDocData[0].snapshotCid))
+                    .limit(1);
+
+                if (contentResult.length > 0 && contentResult[0].raw) {
+                    const snapshotData = contentResult[0].raw; // This should be Buffer/Uint8Array
+                    const schemaLoroDoc = new LoroDoc();
+                    schemaLoroDoc.import(snapshotData);
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const schemaJson = schemaLoroDoc.toJSON() as Record<string, any>; // Revert to any
+                    const result = validateEntityJsonAgainstSchema(docJsonForValidation, schemaJson);
+                    isValid = result.isValid;
+                    validationErrors = result.errors;
+                } else {
+                    isValid = false;
+                    validationErrors.push(`Could not load snapshot content for schema ${schemaPubKey} (CID: ${schemaDocData[0].snapshotCid}) from database content table.`);
+                }
+            } else {
+                isValid = false;
+                validationErrors.push(`Could not find schema document ${schemaPubKey} in database docs table.`);
+            }
+        } else {
+            isValid = false;
+            validationErrors.push(`Schema ${referencedSchemaName} pubkey not found in generatedKeys.`);
         }
-        console.log(`  - ✅ Structure validation passed for schema: ${docKey}`);
     }
+
+    if (!isValid) {
+        console.error(`  - ❌ Validation Failed for ${docType} ${docKey}:`);
+        validationErrors.forEach((err: string) => console.error(`    - ${err}`));
+        console.warn(`  - Skipping database insertion for invalid ${docType}: ${docKey}`);
+        return; // Do not proceed if validation fails
+    }
+    console.log(`  - ✅ Structure validation passed for ${docType}: ${docKey}`);
+    // --- End Validation --- //
 
     // 5. Export snapshot and hash
-    // Use exportSnapshot() as export() with mode is deprecated/changed in newer Loro versions?
-    // Reverting to exportSnapshot as it seems to be the intended method based on context.
     const snapshot = loroDoc.exportSnapshot();
     const cid = await hashSnapshot(snapshot);
     const now = new Date();
@@ -280,14 +406,14 @@ async function seedDocument(
             cid: cid,
             type: 'snapshot',
             raw: Buffer.from(snapshot),
-            metadata: {
+            metadata: { // Add relevant metadata for content
                 name: docDefinition.name,
-                schema: schemaRef
+                schema: schemaRef,
+                docType: docType
             },
             createdAt: now
         })
         .onConflictDoNothing({ target: schema.content.cid });
-
     console.log(`  - Ensured content entry exists: ${cid}`);
 
     // 7. Insert Document Entry
@@ -295,13 +421,13 @@ async function seedDocument(
         pubKey: pubKey,
         snapshotCid: cid,
         updateCids: [],
-        owner: GENESIS_HOMINIO,
+        owner: docJsonForValidation.meta.owner, // Use owner from prepared JSON
         updatedAt: now,
         createdAt: now
     };
-
     await db.insert(schema.docs).values(docEntry);
     console.log(`  - Created document entry: ${pubKey}`);
+
     console.log(`✅ Successfully seeded ${docType}: ${docKey}`);
 }
 
@@ -328,12 +454,27 @@ async function main() {
 
         // --- Phase 1: Seed all Schemas ---
         console.log("\n--- Seeding Schemas ---");
-        // Ensure gismu is first to establish GENESIS_PUBKEY association
-        for (const schemaKey in schemasToSeed) {
-            await seedDocument(db, schemaKey, schemasToSeed[schemaKey], 'schema', generatedKeys);
+        // Ensure gismu is first
+        if (schemasToSeed['gismu']) {
+            await seedDocument(db, 'gismu', schemasToSeed['gismu'], 'schema', generatedKeys);
         }
+        // Seed remaining schemas
+        for (const schemaKey in schemasToSeed) {
+            if (schemaKey !== 'gismu') {
+                await seedDocument(db, schemaKey, schemasToSeed[schemaKey], 'schema', generatedKeys);
+            }
+        }
+        console.log("\n✅ Schema seeding completed.");
 
-        console.log('\n✅ Database schema seeding completed successfully.');
+        // --- Phase 2: Seed Entities ---
+        console.log("\n--- Seeding Entities ---");
+        for (const entityKey in entitiesToSeed) {
+            await seedDocument(db, entityKey, entitiesToSeed[entityKey], 'entity', generatedKeys);
+        }
+        console.log("\n✅ Entity seeding completed.");
+
+        // --- Final Output ---
+        console.log('\n✅ Database seeding completed successfully.');
         console.log('\nGenerated Keys Map:');
         console.log(generatedKeys);
 
