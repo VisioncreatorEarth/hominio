@@ -9,7 +9,7 @@ import { canRead, canWrite, canDelete, type CapabilityUser } from '$lib/KERNEL/h
 import { GENESIS_HOMINIO } from '$db/constants';
 
 // Configuration for auto-snapshotting
-const AUTO_SNAPSHOT_THRESHOLD = 10; // Create snapshot after this many updates
+const AUTO_SNAPSHOT_THRESHOLD = 50; // Create snapshot after this many updates
 
 // Helper function for binary data conversion
 function arrayToUint8Array(arr: number[]): Uint8Array {
