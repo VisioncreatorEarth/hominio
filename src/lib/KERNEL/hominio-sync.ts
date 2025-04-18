@@ -196,6 +196,7 @@ export class HominioSync {
                         if (snapshotData) {
                             try {
                                 // Use direct API call
+                                // @ts-expect-error Property 'post' does not exist on type '...' (Eden Treaty type inference issue)
                                 const createResult = await hominio.api.docs.post({
                                     pubKey: doc.pubKey,
                                     binarySnapshot: Array.from(snapshotData)
@@ -238,6 +239,7 @@ export class HominioSync {
 
                         if (updatesToUpload.length > 0) {
                             try {
+                                // @ts-expect-error Property 'batch' does not exist on type '...' (Eden Treaty type inference issue)
                                 const contentResult = await hominio.api.content.batch.upload.post({ items: updatesToUpload });
                                 if (contentResult.error) {
                                     console.error(`[Push] Server error uploading update content for ${doc.pubKey}:`, contentResult.error); // LOG: Error uploading content
@@ -245,6 +247,7 @@ export class HominioSync {
                                 }
 
                                 // Use direct API call
+                                // @ts-expect-error Property 'update' does not exist on type '...' (Eden Treaty type inference issue)
                                 const registerResult = await hominio.api.docs({ pubKey: doc.pubKey }).update.batch.post({ updateCids: updatesToUpload.map(u => u.cid) });
                                 if (registerResult.error) {
                                     console.error(`[Push] Server error registering updates for ${doc.pubKey}:`, registerResult.error); // LOG: Error registering updates

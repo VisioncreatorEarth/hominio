@@ -121,6 +121,14 @@ export interface StorageTransaction {
     abort(): void;
 }
 
+// Define a type for the raw item structure in IDB
+interface RawStorageItem {
+    key: string;
+    value: unknown; // Use unknown initially
+    metadata: Record<string, unknown>;
+    createdAt: string;
+}
+
 /**
  * IndexedDB implementation of the StorageAdapter interface
  */
@@ -199,7 +207,7 @@ export class IndexedDBAdapter implements StorageAdapter {
                 if (!item.value) return null;
 
                 // Convert the stored object back to a string and then to Uint8Array
-                const jsonString = JSON.stringify(item.value);
+                const jsonString = JSON.stringify(item.value as object);
                 return new TextEncoder().encode(jsonString);
             }
 
@@ -288,27 +296,36 @@ export class IndexedDBAdapter implements StorageAdapter {
     async getAll(prefix?: string): Promise<Array<StorageItem>> {
         try {
             const db = await this.ensureDB();
-            const allItems = await db.getAll(this.storeName);
+            // Use the RawStorageItem type here
+            const allItems = await db.getAll(this.storeName) as RawStorageItem[];
 
             // For docs store, we need to handle the different structure
             if (this.storeName === 'docs') {
-                const items = allItems as any[];
-                return items.map(item => ({
+                // No need for 'any' here, use RawStorageItem
+                return allItems.map(item => ({
                     key: item.key,
-                    value: new TextEncoder().encode(JSON.stringify(item.value)),
+                    // Ensure value is treated as an object before stringifying
+                    value: new TextEncoder().encode(JSON.stringify(item.value as object)),
                     metadata: item.metadata || {},
                     createdAt: item.createdAt
                 }));
             }
 
             if (!prefix) {
-                return allItems as StorageItem[];
+                // Cast the RawStorageItem to StorageItem, ensuring value is Uint8Array
+                return allItems.map(item => ({
+                    ...item,
+                    value: this.ensureUint8Array(item.value)
+                }));
             }
 
-            // Filter by prefix
-            return allItems.filter(item =>
-                item.key.startsWith(prefix)
-            ) as StorageItem[];
+            // Filter by prefix and ensure value is Uint8Array
+            return allItems
+                .filter(item => item.key.startsWith(prefix))
+                .map(item => ({
+                    ...item,
+                    value: this.ensureUint8Array(item.value)
+                }));
         } catch (err) {
             console.error('Error getting all items:', err);
             throw new Error(`Failed to get items: ${err instanceof Error ? err.message : String(err)}`);
@@ -420,7 +437,7 @@ export class IndexedDBAdapter implements StorageAdapter {
 
                 const storageItem: StorageItem = {
                     key: item.key,
-                    value: valueToStore as Uint8Array, // Cast here if necessary after checks
+                    value: valueToStore as Uint8Array,
                     metadata: metadataToStore,
                     createdAt: now // Consider if a per-item timestamp is needed
                 };
@@ -456,7 +473,7 @@ export class IndexedDBAdapter implements StorageAdapter {
      * Ensure value is a Uint8Array
      * Handles various formats that might be stored in IndexedDB
      */
-    private ensureUint8Array(value: any): Uint8Array {
+    private ensureUint8Array(value: unknown): Uint8Array {
         if (value instanceof Uint8Array) {
             return value;
         } else if (value instanceof ArrayBuffer) {
@@ -511,6 +528,9 @@ class IndexedDBTransaction implements StorageTransaction {
         }
         if (!this.tx) {
             this.tx = await this.dbPromise.then(db => db.transaction(this.storeName, 'readwrite'));
+            if (!this.tx) {
+                throw new Error('Failed to create transaction');
+            }
         }
         return this.tx;
     }
