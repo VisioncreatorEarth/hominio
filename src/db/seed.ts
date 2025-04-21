@@ -1,281 +1,251 @@
-#!/usr/bin/env bun
-/**
- * Standalone database seed script
- * This doesn't depend on any existing imports from src/db
- */
-
 import { neon } from '@neondatabase/serverless';
 import { drizzle } from 'drizzle-orm/neon-http';
-import { LoroDoc } from 'loro-crdt';
+import { LoroDoc, LoroMap, LoroText, LoroList } from 'loro-crdt';
 import { blake3 } from '@noble/hashes/blake3';
 import b4a from 'b4a';
 import * as schema from './schema';
-import { eq } from 'drizzle-orm'; // Removed unused sql import
-import { validateSchemaJsonStructure } from '../lib/KERNEL/hominio-validate';
-import { GENESIS_PUBKEY, GENESIS_HOMINIO } from './constants'; // Import from new constants file
-import { validateEntityJsonAgainstSchema } from '../lib/KERNEL/hominio-validate';
-import { LoroMap } from 'loro-crdt';
+import { eq } from 'drizzle-orm';
+import { validateSelbriDocStructure, validateBridiDocAgainstSelbri } from '../lib/KERNEL/hominio-validate';
+import { GENESIS_PUBKEY, GENESIS_HOMINIO } from './constants';
 
-// Basic placeholder types matching the structure used
-interface PlaceDefinition {
-    description: string;
-    required: boolean;
-    validation?: { // Optional validation object
-        schema?: (string | null)[]; // Allow null in schema array
-        value?: string | { options?: unknown[]; min?: number; max?: number; minLength?: number; maxLength?: number; regex?: string; custom?: string }; // Allowed literal type or rule object
-        rule?: Record<string, unknown>; // Added for consistency with rule object inside value
-    };
+// Define a type for the JSON representation expected by the validator
+// This helps avoid using 'any'
+type LoroDocJson = Record<string, unknown> & {
+    meta?: Record<string, unknown>;
+    data?: Record<string, unknown>;
+    pubKey?: string;
 }
 
-interface TranslationDefinition {
-    lang: string;
-    name: string;
+// Basic placeholder types matching the structure used
+interface SumtiDefinition {
     description: string;
-    places: Record<string, string>;
+}
+
+// New interface for validation rules per sumti place (Simplified)
+interface ValidationRule {
+    required: boolean;
+    type: string; // e.g., 'text', 'list', 'map', '@selbri_name'
+}
+
+interface TranslationContent { // Renamed from TranslationDefinition
+    cmene: string; // Renamed from name
+    sumti: Record<string, string>;
 }
 
 interface BaseDefinition {
-    name: string;
-    places: Record<string, PlaceDefinition>; // Use the correct interface
-    translations?: TranslationDefinition[];
+    cmene: string; // Renamed from name
+    sumti: Record<string, SumtiDefinition>; // Holds descriptions only
 }
 
-interface SchemaDefinition extends BaseDefinition {
+interface SelbriDefinition extends BaseDefinition {
     pubkey?: string; // Optional original pubkey, will be generated unless 'gismu'
-    schema?: string | null; // Original schema key, will be replaced by generated ref
+    validation: Record<string, ValidationRule>; // NEW: Holds required flag and validation rules
+    skicu?: Record<string, TranslationContent>; // NEW: Renamed from translations, map keyed by lang code
 }
 
-// Allow simple values (string, number, boolean, null) or @ref strings directly in entity places
-interface EntityDefinition {
+interface BridiDefinition {
     pubkey?: string; // Optional original pubkey, will be generated
-    schema: string; // Original schema key, will be replaced by generated ref
-    name: string;
-    places: Record<string, string | number | boolean | null>; // Places are direct values or @ref strings
-    translations?: TranslationDefinition[]; // Translations still use PlaceDefinition structure
+    selbriRefName: string;
+    cmene: string; // Renamed from name
+    // Allow object types for sumti values in seed data (for LoroMap)
+    sumti: Record<string, string | number | boolean | null | object>;
+    skicu?: Record<string, TranslationContent>; // Added skicu to Bridi for consistency? Optional.
 }
 
-// Schemas to seed (adapted from data.ts, using the new validation structure)
-const schemasToSeed: Record<string, SchemaDefinition> = {
+const selbriToSeed: Record<string, SelbriDefinition> = {
     "gismu": {
-        schema: null,
-        name: "gismu",
-        places: {
-            x1: { description: "lo lojbo ke krasi valsi", required: true, validation: { value: "string" } },
-            x2: { description: "lo bridi be lo ka ce'u skicu zo'e", required: true, validation: { value: "string" } },
-            x3: { description: "lo sumti javni", required: true, validation: {} }, // any
-            x4: { description: "lo rafsi", required: false, validation: { value: "string" } }
+        cmene: "gismu",
+        sumti: { // Descriptions only
+            x1: { description: "lo lojbo ke krasi valsi" },
+            x2: { description: "lo bridi be lo ka ce'u skicu zo'e" },
+            x3: { description: "lo sumti javni" },
+            x4: { description: "lo rafsi" }
         },
-        translations: [
-            { lang: "en", name: "Root Word", description: "A Lojban root word (gismu) defining a fundamental concept", places: { x1: "A Lojban root word", x2: "Relation/concept expressed by the word", x3: "Argument roles for the relation", x4: "Associated affix(es)" } },
-            { lang: "de", name: "Stammwort", description: "Ein Lojban-Stammwort (Gismu), das einen grundlegenden Begriff definiert", places: { x1: "Das Stammwort", x2: "Ausgedrückte Relation/Konzept", x3: "Argumentrollen der Relation", x4: "Zugehörige Affixe" } }
-        ]
+        validation: { // Validation rules separated
+            x1: { required: true, type: 'text' },
+            x2: { required: true, type: 'text' },
+            x3: { required: true, type: 'text' },
+            x4: { required: false, type: 'text' }
+        },
+        skicu: { // Renamed from translations, map keyed by lang
+            "en": { cmene: "Root Word", sumti: { x1: "A Lojban root word", x2: "Relation/concept expressed by the word", x3: "Argument roles for the relation", x4: "Associated affix(es)" } },
+            "de": { cmene: "Stammwort", sumti: { x1: "Das Stammwort", x2: "Ausgedrückte Relation/Konzept", x3: "Argumentrollen der Relation", x4: "Zugehörige Affixe" } }
+        }
     },
     "prenu": {
-        schema: "gismu", // References gismu by name
-        name: "prenu",
-        places: {
-            x1: { description: "lo prenu", required: true, validation: { value: "string" } }
+        cmene: "prenu",
+        sumti: {
+            x1: { description: "lo prenu" }
         },
-        translations: [
-            { lang: "en", name: "Person", description: "A person entity", places: { x1: "Person/entity with personhood" } },
-            { lang: "de", name: "Person", description: "Eine Person", places: { x1: "Person/Wesen mit Persönlichkeit" } }
-        ]
+        validation: {
+            x1: { required: true, type: 'text' }
+        },
+        skicu: {
+            "en": { cmene: "Person", sumti: { x1: "Person/entity with personhood" } },
+            "de": { cmene: "Person", sumti: { x1: "Person/Wesen mit Persönlichkeit" } }
+        }
     },
     "gunka": {
-        schema: "gismu", // References gismu by name
-        name: "gunka",
-        places: {
-            // Reference to 'prenu' schema by name - will be resolved to @prenuPubKey by seedDocument
-            x1: { description: "lo gunka", required: true, validation: { schema: ["prenu"] } },
-            x2: { description: "lo se gunka", required: true, validation: { value: "string" } },
-            x3: { description: "lo te gunka", required: false, validation: { value: "string" } }
+        cmene: "gunka",
+        sumti: {
+            x1: { description: "lo gunka" },
+            x2: { description: "lo se gunka" },
+            x3: { description: "lo te gunka" }
         },
-        translations: [
-            { lang: "en", name: "Work", description: "To work/labor on something with a purpose", places: { x1: "Worker/laborer", x2: "Task/activity worked on", x3: "Purpose/goal of the work" } },
-            { lang: "de", name: "Arbeit", description: "An etwas mit einem Zweck arbeiten", places: { x1: "Arbeiter", x2: "Aufgabe/Tätigkeit, an der gearbeitet wird", x3: "Zweck/Ziel der Arbeit" } }
-        ]
+        validation: {
+            x1: { required: true, type: '@prenu' },
+            x2: { required: true, type: 'text' },
+            x3: { required: false, type: 'text' }
+        },
+        skicu: {
+            "en": { cmene: "Work", sumti: { x1: "Worker/laborer", x2: "Task/activity worked on", x3: "Purpose/goal of the work" } },
+            "de": { cmene: "Arbeit", sumti: { x1: "Arbeiter", x2: "Aufgabe/Tätigkeit, an der gearbeitet wird", x3: "Zweck/Ziel der Arbeit" } }
+        }
     },
-    // Add tcini schema
     "tcini": {
-        schema: "gismu", // References gismu by name
-        name: "tcini",
-        places: {
-            x1: {
-                description: "lo tcini",
-                required: true,
-                validation: { value: { options: ["todo", "in_progress", "done", "blocked"] } }
-            },
-            x2: {
-                description: "lo se tcini",
-                required: true,
-                validation: { schema: ["gunka"] }
-            }
+        cmene: "tcini",
+        sumti: {
+            x1: { description: "lo tcini" },
+            x2: { description: "lo se tcini" }
         },
-        translations: [
-            {
-                lang: "en",
-                name: "Status",
-                description: "A situation, state or condition",
-                places: {
-                    x1: "Situation/state/condition",
-                    x2: "Entity in the situation/state/condition"
-                }
-            },
-            {
-                lang: "de",
-                name: "Status",
-                description: "Eine Situation, ein Zustand oder eine Bedingung",
-                places: {
-                    x1: "Situation/Zustand/Bedingung",
-                    x2: "Entität in der Situation/dem Zustand/der Bedingung"
-                }
-            }
-        ]
+        validation: {
+            x1: { required: true, type: 'text' },
+            x2: { required: true, type: '@gunka' }
+        },
+        skicu: {
+            "en": { cmene: "Status", sumti: { x1: "Situation/state/condition", x2: "Entity in the situation/state/condition" } },
+            "de": { cmene: "Status", sumti: { x1: "Situation/Zustand/Bedingung", x2: "Entität in der Situation/dem Zustand/der Bedingung" } }
+        }
     },
-    // Lojban 'liste' (list)
     "liste": {
-        schema: "gismu",
-        name: "liste",
-        places: {
-            x1: { description: "lo liste be lo se lista", required: true, validation: { value: "string" } }, // the list itself (e.g., its name or identifier)
-            x2: { description: "lo se lista", required: true, validation: { value: "any" } }, // element in list
-            x3: { description: "lo tcila be lo liste", required: false, validation: { value: "any" } }, // list property (e.g., ordering)
-            x4: { description: "lo ve lista", required: false, validation: { value: "any" } } // list containing elements (mass/set)
+        cmene: "liste",
+        sumti: {
+            x1: { description: "lo liste be lo se lista" },
+            x2: { description: "lo se lista" },
+            x3: { description: "lo tcila be lo liste" },
+            x4: { description: "lo ve lista" }
         },
-        translations: [
-            { lang: "en", name: "List", description: "A sequence/ordered set of items", places: { x1: "The list identifier/sequence", x2: "Item in the list", x3: "Property/ordering", x4: "Containing set/mass" } },
-            { lang: "de", name: "Liste", description: "Eine Sequenz/geordnete Menge von Elementen", places: { x1: "Der Listenbezeichner/Sequenz", x2: "Element in der Liste", x3: "Eigenschaft/Ordnung", x4: "Enthaltende Menge" } }
-        ]
+        validation: {
+            x1: { required: true, type: 'text' },
+            x2: { required: true, type: 'map' },
+            x3: { required: false, type: 'map' },
+            x4: { required: false, type: 'map' }
+        },
+        skicu: {
+            "en": { cmene: "List", sumti: { x1: "The list identifier/sequence", x2: "Item in the list", x3: "Property/ordering", x4: "Containing set/mass" } },
+            "de": { cmene: "Liste", sumti: { x1: "Der Listenbezeichner/Sequenz", x2: "Element in der Liste", x3: "Eigenschaft/Ordnung", x4: "Enthaltende Menge" } }
+        }
     },
-    // <<< Add other schemas here later >>>
 };
 
-// --- Entities to Seed ---
-const entitiesToSeed: Record<string, EntityDefinition> = {
-    // --- Prenu --- 
+const bridiToSeed: Record<string, BridiDefinition> = {
     "fiona": {
-        schema: "prenu", // Refers to the 'prenu' schema defined above
-        name: "Fiona Example",
-        places: {
-            x1: "Fiona" // Name of the person
+        selbriRefName: "prenu",
+        cmene: "Fiona Example", // Renamed from name
+        sumti: {
+            x1: "Fiona"
         }
     },
-    // --- Liste ---
     "main_list": {
-        schema: "liste", // Refers to the 'liste' schema
-        name: "Main Todo List",
-        places: {
-            x1: "Main", // Name/Identifier of the list
-            x2: "" // Required place, initially empty conceptually (list holds gunka refs via tcini)
+        selbriRefName: "liste",
+        cmene: "Main Todo List", // Renamed from name
+        sumti: {
+            x1: "Main",
+            x2: {}
         }
     },
-    // --- Gunka (Tasks) ---
     "task1_buy_milk": {
-        schema: "gunka", // Refers to the 'gunka' schema
-        name: "Buy Milk Task",
-        places: {
-            x1: "@fiona", // Assignee: Reference Fiona (will be resolved to @fiona_pubkey)
-            x2: "Buy Oat Milk", // Task description
-            x3: "@main_list" // Belongs to: Reference Main List (will be resolved to @main_list_pubkey)
-            // x4 (status link) is NOT part of gunka schema
+        selbriRefName: "gunka",
+        cmene: "Buy Milk Task", // Renamed from name
+        sumti: {
+            x1: "@fiona",
+            x2: "Buy Oat Milk",
+            x3: "@main_list"
         }
     },
     "task2_feed_cat": {
-        schema: "gunka",
-        name: "Feed Cat Task",
-        places: {
+        selbriRefName: "gunka",
+        cmene: "Feed Cat Task", // Renamed from name
+        sumti: {
             x1: "@fiona",
             x2: "Feed the cat",
             x3: "@main_list"
         }
     },
-    // --- Tcini (Statuses) ---
     "status_task1": {
-        schema: "tcini", // Refers to the 'tcini' schema
-        name: "Status for Task 1", // Optional descriptive name for the tcini doc itself
-        places: {
-            x1: "todo", // The actual status value
-            x2: "@task1_buy_milk" // Link to the entity this status is for (resolved to @task1_pubkey)
+        selbriRefName: "tcini",
+        cmene: "Status for Task 1", // Renamed from name
+        sumti: {
+            x1: "todo",
+            x2: "@task1_buy_milk"
         }
     },
     "status_task2": {
-        schema: "tcini",
-        name: "Status for Task 2",
-        places: {
+        selbriRefName: "tcini",
+        cmene: "Status for Task 2", // Renamed from name
+        sumti: {
             x1: "done",
             x2: "@task2_feed_cat"
         }
     }
 };
 
-// Helper functions
-// --------------------------------------------------------
+// Define LoroJsonValue locally
+type LoroJsonValue = string | number | boolean | null | LoroJsonObject | LoroJsonArray;
+interface LoroJsonObject { [key: string]: LoroJsonValue }
+type LoroJsonArray = LoroJsonValue[];
 
-// Deterministically generate pubkey from seed string (e.g., schema name or entity name)
 async function generateDeterministicPubKey(seed: string): Promise<string> {
     const hashBytes = blake3(b4a.from(seed, 'utf8'));
-    const hexString = b4a.toString(hashBytes, 'hex'); // Ensure 64 char hex
+    const hexString = b4a.toString(hashBytes, 'hex');
     return `0x${hexString}`;
 }
 
-// Hash snapshot data
 async function hashSnapshot(snapshot: Uint8Array): Promise<string> {
     const hashBytes = blake3(snapshot);
     return b4a.toString(hashBytes, 'hex');
 }
 
-// Seed function to create the Gismu schema document - REMOVED (Handled by seedDocument)
-// --------------------------------------------------------
-// async function seedGismuSchemaDoc(db: ReturnType<typeof drizzle>) { ... } // REMOVED
-
-// Refactored function to seed a single document (schema or entity)
 async function seedDocument(
     db: ReturnType<typeof drizzle>,
     docKey: string,
-    docDefinition: SchemaDefinition | EntityDefinition,
-    docType: 'schema' | 'entity',
-    generatedKeys: Map<string, string> // Map<name, pubkey>
+    docDefinition: SelbriDefinition | BridiDefinition,
+    gismuType: 'selbri' | 'bridi',
+    generatedKeys: Map<string, string>
 ) {
     let pubKey: string;
-    let schemaRef: string | null = null; // Initialize as null
-    const isGismuSchema = docKey === 'gismu' && docType === 'schema';
+    let selbriRef: string | null = null;
+    const isRootGismuSelbri = docKey === 'gismu' && gismuType === 'selbri';
 
-    // 1. Determine PubKey
-    if (isGismuSchema) {
+    if (isRootGismuSelbri) {
         pubKey = GENESIS_PUBKEY;
-    } else if (docDefinition.pubkey) { // Use pre-defined pubkey if available (e.g., for testing)
+    } else if (docDefinition.pubkey) {
         pubKey = docDefinition.pubkey;
-    } else { // Generate deterministically otherwise
+    } else {
         pubKey = await generateDeterministicPubKey(docKey);
     }
-    // Store generated/used key if not already present (maps NAME to PUBKEY)
     if (!generatedKeys.has(docKey)) {
         generatedKeys.set(docKey, pubKey);
     }
 
-    // 2. Determine Schema Reference (@pubKey)
-    let referencedSchemaName: string | null | undefined = null;
-    if (isGismuSchema) {
-        // Gismu references itself according to validator expectation
-        schemaRef = `@${pubKey}`;
-        referencedSchemaName = docKey; // Gismu is its own schema name reference
-    } else if (docDefinition.schema) {
-        referencedSchemaName = docDefinition.schema; // Name like "gismu" or "prenu"
-        const schemaPubKey = generatedKeys.get(referencedSchemaName);
-        if (!schemaPubKey) {
-            // This should not happen if schemas are seeded first
-            console.error(`❌ CRITICAL: Schema PubKey for referenced schema "${referencedSchemaName}" not found in generatedKeys map when seeding "${docKey}". Ensure schemas are seeded first.`);
-            return; // Stop processing this document
+    let referencedSelbriName: string | null = null;
+    if (gismuType === 'bridi') {
+        const bridiDef = docDefinition as BridiDefinition;
+        referencedSelbriName = bridiDef.selbriRefName;
+        if (!referencedSelbriName) {
+            console.error(`❌ CRITICAL: Bridi "${docKey}" is missing the required 'selbriRefName' field.`);
+            return;
         }
-        schemaRef = `@${schemaPubKey}`;
-    } else {
-        console.error(`❌ CRITICAL: Document "${docKey}" (type: ${docType}) is missing the required 'schema' field.`);
-        return; // Stop processing this document
+        const selbriPubKey = generatedKeys.get(referencedSelbriName);
+        if (!selbriPubKey) {
+            console.error(`❌ CRITICAL: Selbri PubKey for referenced selbri "${referencedSelbriName}" not found in generatedKeys map when seeding bridi "${docKey}". Ensure selbri are seeded first.`);
+            return;
+        }
+        selbriRef = `@${selbriPubKey}`;
     }
 
-    console.log(`Processing ${docType}: ${docKey} -> PubKey: ${pubKey}, SchemaRef: ${schemaRef}`);
+    console.log(`Processing ${gismuType}: ${docKey} -> PubKey: ${pubKey}${gismuType === 'bridi' ? `, Refers to Selbri: ${referencedSelbriName} (${selbriRef})` : ''}`);
 
-    // 3. Check for existing document
     const existingDoc = await db.select({ pubKey: schema.docs.pubKey })
         .from(schema.docs)
         .where(eq(schema.docs.pubKey, pubKey))
@@ -285,157 +255,247 @@ async function seedDocument(
         return;
     }
 
-    // --- Resolve Place References for Entities ---
-    const resolvedPlaces = { ...docDefinition.places }; // Shallow copy
-    if (docType === 'entity') {
-        for (const placeKey in resolvedPlaces) {
-            const placeDef = resolvedPlaces[placeKey];
-            // Check if the place value itself is a reference string like "@someKey"
-            if (typeof placeDef === 'string' && placeDef.startsWith('@')) {
-                const referencedKeyName = placeDef.substring(1);
-                const referencedPubKey = generatedKeys.get(referencedKeyName);
-                if (!referencedPubKey) {
-                    console.error(`  - ❌ ERROR: Could not resolve reference "${placeDef}" for place "${placeKey}" in entity "${docKey}". Referenced key "${referencedKeyName}" not found in generatedKeys map.`);
-                    return; // Cannot seed this entity if reference is broken
-                }
-                resolvedPlaces[placeKey] = `@${referencedPubKey}`; // Replace name ref with pubkey ref
-            }
-            // Note: This doesn't handle nested references within place values that are objects/arrays yet.
-        }
-    }
-    // --- End Place Reference Resolution ---
-
-    // 4. Prepare LoroDoc content
     const loroDoc = new LoroDoc();
     loroDoc.setPeerId(1);
 
-    // Define the structure clearly for validation
-    // Revert to using Record<string, any> for flexibility before validation
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const docJsonForValidation: Record<string, any> = {
-        pubKey: pubKey,
-        meta: {
-            name: docDefinition.name,
-            schema: schemaRef,
-            owner: GENESIS_HOMINIO // Default owner for seeded docs
-        },
-        data: {
-            places: resolvedPlaces,
-            translations: docDefinition.translations || []
+    // Prepare meta first
+    const metaForValidation: Record<string, unknown> = {
+        gismu: gismuType,
+        cmene: docDefinition.cmene,
+        owner: GENESIS_HOMINIO
+    };
+    // Special case: Add meta.selbri ONLY for the root gismu selbri BEFORE validation
+    if (isRootGismuSelbri) {
+        metaForValidation.selbri = `@${GENESIS_PUBKEY}`;
+    }
+
+    // Prepare data based on type
+    const dataForValidation: Record<string, unknown> = {};
+    if (gismuType === 'bridi') {
+        // Resolve bridi sumti references
+        const bridiDef = docDefinition as BridiDefinition;
+        const resolvedBridiSumti = { ...bridiDef.sumti };
+        for (const sumtiKey in resolvedBridiSumti) {
+            const sumtiValue = resolvedBridiSumti[sumtiKey];
+            if (typeof sumtiValue === 'string' && sumtiValue.startsWith('@')) {
+                const referencedKeyName = sumtiValue.substring(1);
+                const referencedPubKey = generatedKeys.get(referencedKeyName);
+                if (!referencedPubKey) {
+                    console.error(`  - ❌ ERROR: Could not resolve reference "${sumtiValue}" for sumti "${sumtiKey}" in bridi "${docKey}". Referenced key "${referencedKeyName}" not found.`);
+                    return; // Stop seeding this document
+                }
+                resolvedBridiSumti[sumtiKey] = `@${referencedPubKey}`;
+            }
         }
+        dataForValidation.sumti = resolvedBridiSumti;
+        dataForValidation.selbri = selbriRef; // Set selbri reference (@pubkey)
+        if (bridiDef.skicu) { // Optional: add skicu if present for bridi
+            dataForValidation.skicu = bridiDef.skicu;
+        }
+    } else { // gismuType === 'selbri'
+        const selbriDef = docDefinition as SelbriDefinition;
+        // Separate sumti descriptions, validation rules, and skicu
+        const sumtiDescriptions: Record<string, unknown> = {};
+        for (const key in selbriDef.sumti) {
+            sumtiDescriptions[key] = { description: selbriDef.sumti[key].description };
+        }
+        dataForValidation.sumti = sumtiDescriptions;
+        dataForValidation.javni = selbriDef.validation; // Assign to javni, not validation
+        if (selbriDef.skicu) {
+            dataForValidation.skicu = selbriDef.skicu; // Access skicu only for SelbriDefinition
+        }
+    }
+
+    const docJsonForValidation: LoroDocJson = {
+        pubKey: pubKey,
+        meta: metaForValidation,
+        data: dataForValidation
     };
 
-    // Populate LoroDoc from the JSON structure
+    // --- Populate LoroDoc ---
     const metaMap = loroDoc.getMap('meta');
-    for (const key in docJsonForValidation.meta) {
-        metaMap.set(key, docJsonForValidation.meta[key]);
+    for (const key in metaForValidation) {
+        if (Object.prototype.hasOwnProperty.call(metaForValidation, key)) {
+            metaMap.set(key, metaForValidation[key]);
+        }
     }
+    metaMap.set('gismu', gismuType);
+
     const dataMap = loroDoc.getMap('data');
-    const placesMap = dataMap.setContainer('places', new LoroMap());
-    for (const key in docJsonForValidation.data.places) {
-        placesMap.set(key, docJsonForValidation.data.places[key]);
-    }
-    if (docJsonForValidation.data.translations.length > 0) {
-        dataMap.set('translations', docJsonForValidation.data.translations);
+    let selbriJavniRules: Record<string, ValidationRule> | undefined = undefined;
+
+    if (gismuType === 'bridi' && referencedSelbriName) {
+        const selbriDef = selbriToSeed[referencedSelbriName];
+        if (selbriDef) {
+            selbriJavniRules = selbriDef.validation;
+        }
+        dataMap.set('selbri', dataForValidation.selbri);
     }
 
-    // --- 4.5 Validate Structure --- //
+    // Always set sumti (descriptions for selbri, values or containers for bridi)
+    if (dataForValidation.sumti && typeof dataForValidation.sumti === 'object') {
+        const sumtiMap = dataMap.setContainer('sumti', new LoroMap());
+        const sumtiData = dataForValidation.sumti as Record<string, LoroJsonValue>;
+
+        for (const key in sumtiData) {
+            if (Object.prototype.hasOwnProperty.call(sumtiData, key)) {
+                const value = sumtiData[key];
+                const rule = selbriJavniRules?.[key];
+                const ruleType = rule?.type; // Use simplified type field
+
+                try {
+                    if (gismuType === 'bridi' && ruleType) {
+                        if (ruleType.startsWith('@')) {
+                            // It's a reference, set the primitive string value
+                            if (typeof value === 'string' && value.startsWith('@')) {
+                                sumtiMap.set(key, value);
+                            } else {
+                                console.warn(`[Seed] Expected reference string for sumti "${key}" but got:`, value);
+                                sumtiMap.set(key, null); // Set null on mismatch
+                            }
+                        } else if (ruleType === 'text') {
+                            if (typeof value === 'string') {
+                                const textContainer = sumtiMap.setContainer(key, new LoroText());
+                                textContainer.insert(0, value);
+                            } else {
+                                console.warn(`[Seed] Expected string value for LoroText sumti "${key}" but got:`, value);
+                                // Create empty container on mismatch?
+                                sumtiMap.setContainer(key, new LoroText());
+                            }
+                        } else if (ruleType === 'list') {
+                            if (Array.isArray(value)) {
+                                const listContainer = sumtiMap.setContainer(key, new LoroList());
+                                value.forEach((item, index) => listContainer.insert(index, item));
+                            } else {
+                                console.warn(`[Seed] Expected array value for LoroList sumti "${key}" but got:`, value);
+                                sumtiMap.setContainer(key, new LoroList());
+                            }
+                        } else if (ruleType === 'map') {
+                            if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+                                const nestedMapContainer = sumtiMap.setContainer(key, new LoroMap());
+                                for (const nestedKey in value as Record<string, unknown>) {
+                                    nestedMapContainer.set(nestedKey, (value as Record<string, unknown>)[nestedKey]);
+                                }
+                            } else {
+                                console.warn(`[Seed] Expected object value for LoroMap sumti "${key}" but got:`, value);
+                                sumtiMap.setContainer(key, new LoroMap());
+                            }
+                        } else {
+                            console.warn(`[Seed] Unsupported validation type "${ruleType}" for sumti "${key}". Setting value as is.`);
+                            sumtiMap.set(key, value);
+                        }
+                    } else {
+                        // For selbri sumti (descriptions) or bridi sumti without specific ruleType
+                        sumtiMap.set(key, value);
+                    }
+                } catch (containerError) {
+                    console.error(`[Seed] Error setting container for sumti "${key}" with type "${ruleType}":`, containerError);
+                    // Fallback to setting primitive value on error
+                    sumtiMap.set(key, value);
+                }
+            }
+        }
+    }
+    // Set validation rules only for selbri
+    if (gismuType === 'selbri' && dataForValidation.javni) {
+        dataMap.set('javni', dataForValidation.javni);
+    }
+    // Set skicu (translations) if they exist
+    // Check if dataForValidation.skicu exists before setting
+    if (dataForValidation.skicu && typeof dataForValidation.skicu === 'object') {
+        dataMap.set('skicu', dataForValidation.skicu);
+    }
+
     let isValid = true;
     let validationErrors: string[] = [];
 
-    if (docType === 'schema') {
-        console.log(`  - Validating structure for schema: ${docKey}...`);
-        const result = validateSchemaJsonStructure(docJsonForValidation);
+    if (gismuType === 'selbri') {
+        console.log(`  - Validating structure for selbri: ${docKey}...`);
+        const result = validateSelbriDocStructure(docJsonForValidation);
         isValid = result.isValid;
         validationErrors = result.errors;
-    } else if (docType === 'entity' && referencedSchemaName) {
-        const schemaPubKey = generatedKeys.get(referencedSchemaName);
-        if (schemaPubKey) {
-            console.log(`  - Validating entity "${docKey}" against schema "${referencedSchemaName}" (${schemaPubKey})...`);
-            const schemaDocData = await db.select({ snapshotCid: schema.docs.snapshotCid })
+    } else if (gismuType === 'bridi' && referencedSelbriName) {
+        const selbriPubKey = generatedKeys.get(referencedSelbriName);
+        if (selbriPubKey) {
+            console.log(`  - Validating bridi "${docKey}" against selbri "${referencedSelbriName}" (${selbriPubKey})...`);
+            const selbriDocMeta = await db.select({ snapshotCid: schema.docs.snapshotCid })
                 .from(schema.docs)
-                .where(eq(schema.docs.pubKey, schemaPubKey)).limit(1);
+                .where(eq(schema.docs.pubKey, selbriPubKey)).limit(1);
 
-            if (schemaDocData.length > 0 && schemaDocData[0].snapshotCid) {
-                // Fetch content directly from DB using Drizzle
+            if (selbriDocMeta.length > 0 && selbriDocMeta[0].snapshotCid) {
                 const contentResult = await db.select({ raw: schema.content.raw })
                     .from(schema.content)
-                    .where(eq(schema.content.cid, schemaDocData[0].snapshotCid))
+                    .where(eq(schema.content.cid, selbriDocMeta[0].snapshotCid))
                     .limit(1);
 
                 if (contentResult.length > 0 && contentResult[0].raw) {
-                    const snapshotData = contentResult[0].raw; // This should be Buffer/Uint8Array
-                    const schemaLoroDoc = new LoroDoc();
-                    schemaLoroDoc.import(snapshotData);
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const schemaJson = schemaLoroDoc.toJSON() as Record<string, any>; // Revert to any
-                    const result = validateEntityJsonAgainstSchema(docJsonForValidation, schemaJson);
+                    const snapshotData = contentResult[0].raw;
+                    const selbriLoroDoc = new LoroDoc();
+                    selbriLoroDoc.import(snapshotData);
+                    // Use the defined LoroDocJson type here
+                    const selbriJson = selbriLoroDoc.toJSON() as LoroDocJson;
+                    selbriJson.pubKey = selbriPubKey;
+                    const result = validateBridiDocAgainstSelbri(docJsonForValidation, selbriJson);
                     isValid = result.isValid;
                     validationErrors = result.errors;
                 } else {
                     isValid = false;
-                    validationErrors.push(`Could not load snapshot content for schema ${schemaPubKey} (CID: ${schemaDocData[0].snapshotCid}) from database content table.`);
+                    validationErrors.push(`Could not load snapshot content for selbri ${selbriPubKey} (CID: ${selbriDocMeta[0].snapshotCid}) from database content table.`);
                 }
             } else {
                 isValid = false;
-                validationErrors.push(`Could not find schema document ${schemaPubKey} in database docs table.`);
+                validationErrors.push(`Could not find selbri document ${selbriPubKey} in database docs table.`);
             }
         } else {
             isValid = false;
-            validationErrors.push(`Schema ${referencedSchemaName} pubkey not found in generatedKeys.`);
+            validationErrors.push(`Could not find PubKey for referenced selbri name "${referencedSelbriName}"`);
         }
     }
 
     if (!isValid) {
-        console.error(`  - ❌ Validation Failed for ${docType} ${docKey}:`);
+        console.error(`  - ❌ Validation Failed for ${gismuType} ${docKey}:`);
         validationErrors.forEach((err: string) => console.error(`    - ${err}`));
-        console.warn(`  - Skipping database insertion for invalid ${docType}: ${docKey}`);
-        return; // Do not proceed if validation fails
+        console.warn(`  - Skipping database insertion for invalid ${gismuType}: ${docKey}`);
+        return;
     }
-    console.log(`  - ✅ Structure validation passed for ${docType}: ${docKey}`);
-    // --- End Validation --- //
+    console.log(`  - ✅ Structure validation passed for ${gismuType}: ${docKey}`);
 
-    // 5. Export snapshot and hash
     const snapshot = loroDoc.exportSnapshot();
     const cid = await hashSnapshot(snapshot);
     const now = new Date();
 
-    // 6. Upsert Content Entry
     await db.insert(schema.content)
         .values({
             cid: cid,
             type: 'snapshot',
             raw: Buffer.from(snapshot),
-            metadata: { // Add relevant metadata for content
-                name: docDefinition.name,
-                schema: schemaRef,
-                docType: docType
+            metadata: {
+                cmene: docDefinition.cmene,
+                gismu: gismuType,
+                selbri: gismuType === 'bridi' ? selbriRef : undefined
             },
             createdAt: now
         })
         .onConflictDoNothing({ target: schema.content.cid });
     console.log(`  - Ensured content entry exists: ${cid}`);
 
-    // 7. Insert Document Entry
+    // Check if meta exists before accessing owner
+    const owner = docJsonForValidation.meta?.owner as string ?? GENESIS_HOMINIO;
     const docEntry: schema.InsertDoc = {
         pubKey: pubKey,
         snapshotCid: cid,
         updateCids: [],
-        owner: docJsonForValidation.meta.owner, // Use owner from prepared JSON
+        owner: owner,
         updatedAt: now,
         createdAt: now
     };
     await db.insert(schema.docs).values(docEntry);
     console.log(`  - Created document entry: ${pubKey}`);
 
-    console.log(`✅ Successfully seeded ${docType}: ${docKey}`);
+    console.log(`✅ Successfully seeded ${gismuType}: ${docKey}`);
 }
 
-// Main function
-// --------------------------------------------------------
-
 async function main() {
-    // Get the database URL
     const dbUrl = process.env.SECRET_DATABASE_URL_HOMINIO;
 
     if (!dbUrl) {
@@ -443,39 +503,33 @@ async function main() {
         process.exit(1);
     }
 
-    console.log('🌱 Seeding database with core schemas...');
+    console.log('🌱 Seeding database with core selbri & bridi...');
 
     try {
-        // Create direct database connection
         const sql = neon(dbUrl);
-        const db = drizzle(sql, { schema }); // Pass schema correctly
+        const db = drizzle(sql, { schema });
 
-        const generatedKeys = new Map<string, string>(); // name -> pubkey
+        const generatedKeys = new Map<string, string>();
 
-        // --- Phase 1: Seed all Schemas ---
-        console.log("\n--- Seeding Schemas ---");
-        // Ensure gismu is first
-        if (schemasToSeed['gismu']) {
-            await seedDocument(db, 'gismu', schemasToSeed['gismu'], 'schema', generatedKeys);
+        console.log("\n--- Seeding Selbri ---");
+        if (selbriToSeed['gismu']) {
+            await seedDocument(db, 'gismu', selbriToSeed['gismu'], 'selbri', generatedKeys);
         }
-        // Seed remaining schemas
-        for (const schemaKey in schemasToSeed) {
-            if (schemaKey !== 'gismu') {
-                await seedDocument(db, schemaKey, schemasToSeed[schemaKey], 'schema', generatedKeys);
+        for (const selbriKey in selbriToSeed) {
+            if (selbriKey !== 'gismu') {
+                await seedDocument(db, selbriKey, selbriToSeed[selbriKey], 'selbri', generatedKeys);
             }
         }
-        console.log("\n✅ Schema seeding completed.");
+        console.log("\n✅ Selbri seeding completed.");
 
-        // --- Phase 2: Seed Entities ---
-        console.log("\n--- Seeding Entities ---");
-        for (const entityKey in entitiesToSeed) {
-            await seedDocument(db, entityKey, entitiesToSeed[entityKey], 'entity', generatedKeys);
+        console.log("\n--- Seeding Bridi ---");
+        for (const bridiKey in bridiToSeed) {
+            await seedDocument(db, bridiKey, bridiToSeed[bridiKey], 'bridi', generatedKeys);
         }
-        console.log("\n✅ Entity seeding completed.");
+        console.log("\n✅ Bridi seeding completed.");
 
-        // --- Final Output ---
         console.log('\n✅ Database seeding completed successfully.');
-        console.log('\nGenerated Keys Map:');
+        console.log('\nGenerated Keys Map: (Name -> PubKey)');
         console.log(generatedKeys);
 
     } catch (error) {
@@ -484,7 +538,6 @@ async function main() {
     }
 }
 
-// Run the main function
 main().catch(error => {
     console.error('❌ Unhandled error:', error);
     process.exit(1);

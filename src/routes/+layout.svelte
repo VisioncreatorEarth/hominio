@@ -11,6 +11,7 @@
 	import type { PageData } from './$types';
 	import type { LayoutData } from './$types';
 	import { type Snippet } from 'svelte';
+	import { goto } from '$app/navigation';
 
 	// Get the session store from the auth client
 	const sessionStore = authClient.useSession();
@@ -26,6 +27,7 @@
 	let isCallActive = $state(false);
 	let callStatus = $state<string>('off');
 	let isVibeInitialized = $state(false);
+	let signOutLoading = $state(false);
 
 	// Global state for notifications
 	let recentToolActivity = $state<{ action: string; message: string; timestamp: number } | null>(
@@ -107,6 +109,20 @@
 		}
 	}
 
+	// --- Sign Out Logic ---
+	async function handleSignOut() {
+		signOutLoading = true;
+		try {
+			await authClient.signOut();
+			goto('/');
+		} catch (error) {
+			console.error('Sign out error:', error);
+		} finally {
+			signOutLoading = false;
+		}
+	}
+	// --- End Sign Out Logic ---
+
 	onMount(async () => {
 		await initDocs();
 		await initVibe();
@@ -148,6 +164,30 @@
 				</button>
 			{/if}
 		</div>
+
+		{#if $sessionStore.data?.user}
+			<button
+				onclick={handleSignOut}
+				disabled={signOutLoading}
+				class="fixed right-4 bottom-4 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-red-600 text-white shadow-lg transition-colors hover:bg-red-700 disabled:opacity-50"
+				title="Sign out"
+			>
+				<svg
+					xmlns="http://www.w3.org/2000/svg"
+					class="h-6 w-6"
+					fill="none"
+					viewBox="0 0 24 24"
+					stroke="currentColor"
+				>
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						stroke-width="2"
+						d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+					/>
+				</svg>
+			</button>
+		{/if}
 
 		{#if isCallActive}
 			<CallInterface {callStatus} onEndCall={handleEndCall} />

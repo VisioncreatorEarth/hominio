@@ -3,22 +3,17 @@
 		hql,
 		type HqlQueryRequest,
 		type HqlMutationRequest,
-		type HqlQueryResult,
-		type ResolvedHqlDocument
+		type HqlQueryResult
 	} from '$lib/KERNEL/hominio-ql';
 	import { getContext } from 'svelte';
 	import { readable, type Readable } from 'svelte/store';
 	import { getCurrentEffectiveUser as getCurrentEffectiveUserType } from '$lib/KERNEL/hominio-auth';
-	import type { CapabilityUser } from '$lib/KERNEL/hominio-caps';
 
 	// --- Constants --- Define PubKeys directly ---
 	const LISTE_SCHEMA_PUBKEY = '0x3fe09dd2eb611a10f3438692f60165fcc350d14f47a5de72ca603c1504bb38aa';
 	const GUNKA_SCHEMA_PUBKEY = '0x379da4ae0349663a8a1f8a8972bb6294aeb187e0da77df1bef7406651a8cc79a';
 	const TCINI_SCHEMA_PUBKEY = '0x6b0f40bcb19564eb2607ba56fb977f67c459c46f199d80576490defccf41cc6a';
 
-	// const LISTE_SCHEMA_NAME = 'liste'; // Removed
-	// const GUNKA_SCHEMA_NAME = 'gunka'; // Removed
-	// const TCINI_SCHEMA_NAME = 'tcini'; // Removed
 	const DEFAULT_LIST_NAME = 'Main';
 	const STATUS_TODO = 'todo';
 	const STATUS_DONE = 'done';
@@ -73,9 +68,9 @@
 			const gunkaQuery: HqlQueryRequest = {
 				operation: 'query',
 				filter: {
-					meta: { schema: `@${GUNKA_SCHEMA_PUBKEY}` }, // Use Gunka PubKey constant
-					places: {
-						// Ensure x3 references the specific list
+					meta: { gismu: 'bridi' },
+					data: { selbri: `@${GUNKA_SCHEMA_PUBKEY}` },
+					sumti: {
 						x3: `@${listKey}`
 					}
 				}
@@ -87,9 +82,8 @@
 			const tciniQuery: HqlQueryRequest = {
 				operation: 'query',
 				filter: {
-					meta: { schema: `@${TCINI_SCHEMA_PUBKEY}` }
-					// We fetch ALL tcini for now and filter client-side.
-					// TODO: Optimize by filtering tcini where x2 references a gunka whose x3 is the listKey
+					meta: { gismu: 'bridi' },
+					data: { selbri: `@${TCINI_SCHEMA_PUBKEY}` }
 				}
 			};
 			tciniItemsReadable = hql.processReactive(getCurrentEffectiveUser, tciniQuery);
@@ -132,8 +126,9 @@
 			const findListQuery: HqlQueryRequest = {
 				operation: 'query',
 				filter: {
-					meta: { schema: `@${LISTE_SCHEMA_PUBKEY}` }, // Use Liste PubKey constant
-					places: { x1: DEFAULT_LIST_NAME }
+					meta: { gismu: 'bridi' },
+					data: { selbri: `@${LISTE_SCHEMA_PUBKEY}` },
+					sumti: { x1: DEFAULT_LIST_NAME }
 				}
 			};
 			// Pass the current user object for non-reactive queries/mutations
@@ -150,11 +145,10 @@
 				const createListMutation: HqlMutationRequest = {
 					operation: 'mutate',
 					action: 'create',
-					schema: `@${LISTE_SCHEMA_PUBKEY}`, // Use Liste PubKey constant
-					places: {
+					selbri: `@${LISTE_SCHEMA_PUBKEY}`,
+					sumti: {
 						x1: DEFAULT_LIST_NAME,
-						x2: '' // Add default empty string for required x2 place
-						// No hominio_type marker needed
+						x2: ''
 					}
 				};
 				// Pass the current user object for non-reactive queries/mutations
@@ -186,12 +180,11 @@
 			const createTodoMutation: HqlMutationRequest = {
 				operation: 'mutate',
 				action: 'create',
-				schema: `@${GUNKA_SCHEMA_PUBKEY}`, // Use Gunka PubKey constant
-				places: {
-					x1: FIONA_REF, // Assignee (Hardcoded to Fiona)
-					x2: newTodoText.trim(), // Task description
-					x3: `@${todoListPubKey}` // Reference to the list
-					// x4 (status ref) will be added in step 3
+				selbri: `@${GUNKA_SCHEMA_PUBKEY}`,
+				sumti: {
+					x1: FIONA_REF,
+					x2: newTodoText.trim(),
+					x3: `@${todoListPubKey}`
 				}
 			};
 			// Pass the current user object for non-reactive queries/mutations
@@ -209,10 +202,10 @@
 			const createTciniMutation: HqlMutationRequest = {
 				operation: 'mutate',
 				action: 'create',
-				schema: `@${TCINI_SCHEMA_PUBKEY}`, // Use Tcini PubKey constant
-				places: {
-					x1: STATUS_TODO, // Default status
-					x2: `@${gunkaPubKey}` // Link to the gunka document
+				selbri: `@${TCINI_SCHEMA_PUBKEY}`,
+				sumti: {
+					x1: STATUS_TODO,
+					x2: `@${gunkaPubKey}`
 				}
 			};
 			// Pass the current user object for non-reactive queries/mutations
@@ -271,7 +264,7 @@
 				operation: 'mutate',
 				action: 'update',
 				pubKey: statusPubKey,
-				places: {
+				sumti: {
 					x1: newStatus
 				}
 			};
@@ -353,17 +346,18 @@
 					<ul class="divide-y divide-gray-200">
 						{#each $todoItemsReadable as item (item.pubKey)}
 							{@const itemData = item.data as Record<string, unknown> | undefined}
-							{@const itemPlaces = itemData?.places as Record<string, any> | undefined}
+							{@const itemSumti = itemData?.sumti as Record<string, any> | undefined}
 
 							<!-- Find the corresponding tcini item -->
 							{@const expectedTciniRef = `@${item.pubKey}`}
 							{@const relatedTcini = $tciniItemsReadable?.find(
-								// Compare the pubKey *within* the resolved reference object in tcini.data.places.x2
-								(tcini) => (tcini.data as any)?.places?.x2?.pubKey === item.pubKey
+								// Updated: Compare the pubKey *within* the resolved reference object in tcini.data.sumti.x2
+								(tcini) => (tcini.data as any)?.sumti?.x2?.pubKey === item.pubKey
 							)}
 							<!-- Use type assertion to satisfy linter -->
 							{@const currentStatusText =
-								(relatedTcini?.data as any)?.places?.x1 ?? 'Unknown Status'}
+								// Updated: Get status from sumti.x1
+								(relatedTcini?.data as any)?.sumti?.x1 ?? 'Unknown Status'}
 							{@const statusPubKey = relatedTcini?.pubKey as string | undefined}
 							{@const isDone = currentStatusText === STATUS_DONE}
 
@@ -383,7 +377,7 @@
 										disabled={isSubmitting || !statusPubKey}
 									/>
 									<span class="truncate {isDone ? 'text-gray-500 line-through' : 'text-gray-800'}">
-										{itemPlaces?.x2 ?? 'No description'}
+										{itemSumti?.x2 ?? 'No description'}
 									</span>
 								</div>
 								<span class="ml-2 flex-shrink-0 text-xs text-gray-400">({currentStatusText})</span>
@@ -402,45 +396,43 @@
 		{#if selectedTodoPubKey && $todoItemsReadable}
 			{@const selectedTodo = $todoItemsReadable.find((item) => item.pubKey === selectedTodoPubKey)}
 			{#if selectedTodo}
+				{@const selectedMeta = selectedTodo.meta as Record<string, any> | undefined}
 				{@const selectedData = selectedTodo.data as Record<string, any> | undefined}
-				{@const selectedPlaces = selectedData?.places as Record<string, any> | undefined}
+				{@const selectedSumti = selectedData?.sumti as Record<string, any> | undefined}
 				<h2 class="mb-4 flex-shrink-0 text-xl font-semibold text-gray-700">Todo Details</h2>
 				<div class="flex-grow overflow-y-auto">
 					<p class="mb-1 text-sm text-gray-500">
 						PubKey: <code class="rounded bg-gray-200 px-1 text-xs">{selectedTodo.pubKey}</code>
 					</p>
-					<h3 class="mt-4 mb-3 text-lg font-semibold text-gray-700">Places</h3>
-					{#if selectedPlaces && Object.keys(selectedPlaces).length > 0}
+					<p class="mb-1 text-sm text-gray-500">
+						Cmene: <code class="rounded bg-gray-200 px-1 text-xs"
+							>{selectedMeta?.cmene ?? 'N/A'}</code
+						>
+					</p>
+					<h3 class="mt-4 mb-3 text-lg font-semibold text-gray-700">Sumti</h3>
+					{#if selectedSumti && Object.keys(selectedSumti).length > 0}
 						<dl class="space-y-2">
-							<!-- Sort place entries by key (x1, x2, etc.) -->
-							{#each Object.entries(selectedPlaces).sort( ([keyA], [keyB]) => keyA.localeCompare(keyB) ) as [placeKey, placeValue] (placeKey)}
+							{#each Object.entries(selectedSumti).sort( ([keyA], [keyB]) => keyA.localeCompare(keyB) ) as [sumtiKey, sumtiValue] (sumtiKey)}
 								<div class="flex items-baseline">
 									<dt class="w-10 flex-shrink-0 font-mono font-medium text-indigo-600">
-										{placeKey}:
+										{sumtiKey}:
 									</dt>
 									<dd class="ml-2 text-sm text-gray-800">
-										{#if typeof placeValue === 'object' && placeValue !== null && placeValue.$ref}
-											<!-- Display resolved reference info -->
-											{@const isStatusRef = placeKey === 'x4'}
-											<!-- Check if it was the old status ref -->
+										{#if typeof sumtiValue === 'object' && sumtiValue !== null && sumtiValue.$ref}
 											<span class="text-purple-700">
-												[Ref: {placeValue.name ?? placeValue.pubKey}
-												{#if placeValue.statusText}({placeValue.statusText}){/if}]
+												[Ref: {sumtiValue.cmene ?? sumtiValue.pubKey}
+												{#if sumtiValue.statusText}({sumtiValue.statusText}){/if}]
 											</span>
-											<code class="ml-1 text-xs text-gray-500">({placeValue.pubKey})</code>
-											{#if isStatusRef}
-												<span class="text-xs text-red-500">(Old x4 Ref)</span>
-											{/if}
+											<code class="ml-1 text-xs text-gray-500">({sumtiValue.pubKey})</code>
 										{:else}
-											<!-- Display literal value -->
-											{JSON.stringify(placeValue)}
+											{JSON.stringify(sumtiValue)}
 										{/if}
 									</dd>
 								</div>
 							{/each}
 						</dl>
 					{:else}
-						<p class="text-sm text-gray-500">No places defined for this entity.</p>
+						<p class="text-sm text-gray-500">No sumti defined for this bridi.</p>
 					{/if}
 
 					<!-- Raw JSON Toggle -->

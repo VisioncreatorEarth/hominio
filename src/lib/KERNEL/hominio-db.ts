@@ -1,11 +1,12 @@
 import { writable } from 'svelte/store';
 import { browser } from '$app/environment';
-import { LoroDoc, LoroMap } from 'loro-crdt';
+import { LoroDoc, LoroMap, LoroList, LoroText } from 'loro-crdt';
 import { hashService } from './hash-service';
 import { docIdService } from './docid-service';
 import { getContentStorage, getDocsStorage, initStorage } from './hominio-storage';
 import { canRead, canWrite, canDelete } from './hominio-caps'; // Import central capability functions
 import type { CapabilityUser } from './hominio-caps'; // Fixed import source
+import type { ValidationRuleStructure } from './hominio-validate';
 
 // --- Reactivity Notifier ---
 // Simple store that increments when any tracked document changes.
@@ -111,6 +112,16 @@ export interface DocContentState {
 const activeLoroDocuments = new Map<string, LoroDoc>();
 
 /**
+ * Define the structure for initialBridiData (add this near other types)
+ */
+interface InitialBridiData {
+    gismu: 'bridi';
+    selbriRef: string;
+    sumtiData: Record<string, LoroJsonValue | string>;
+    selbriJavni: Record<string, ValidationRuleStructure> | undefined;
+}
+
+/**
  * HominioDB class implements the Content layer functionality
  */
 class HominioDB {
@@ -171,11 +182,13 @@ class HominioDB {
     /**
      * Create a new document
      * @param options Document creation options
+     * @param initialBridiData Optional data to initialize a bridi document before the first snapshot
      * @returns PubKey of the created document
      */
     async createDocument(
         user: CapabilityUser | null,
-        options: { name?: string; description?: string; owner?: string } = {}
+        options: { name?: string; description?: string; owner?: string } = {},
+        initialBridiData?: InitialBridiData
     ): Promise<string> {
         this._setStatus({ creatingDoc: true });
         this._setError(null); // Clear previous error
@@ -197,15 +210,78 @@ class HominioDB {
                 updatedAt: now
             };
 
-            const loroDoc = await this.getOrCreateLoroDoc(pubKey); // Creates/loads LoroDoc, adds to map, subscribes
+            const loroDoc = await this.getOrCreateLoroDoc(pubKey); // Creates LoroDoc
 
+            // --- Apply Initial Data BEFORE Snapshot --- 
             const meta = loroDoc.getMap('meta');
-            if (options.name) meta.set('name', options.name);
-            if (options.description) meta.set('description', options.description);
-            // Applying meta triggers the Loro change event
+            if (options.name) meta.set('cmene', options.name); // Use 'cmene' now
+            // REMOVED description setting from meta
 
-            // Snapshotting and initial save logic remains largely the same
-            const snapshot = loroDoc.export({ mode: 'snapshot' });
+            // Apply initialBridiData if provided
+            if (initialBridiData) {
+                meta.set('gismu', initialBridiData.gismu);
+                const dataMap = loroDoc.getMap('data');
+                dataMap.set('selbri', initialBridiData.selbriRef);
+
+                // Set sumti data, applying container logic based on javni rules
+                const sumtiMap = dataMap.setContainer('sumti', new LoroMap());
+                const sumtiData = initialBridiData.sumtiData || {};
+                const selbriJavni = initialBridiData.selbriJavni;
+
+                for (const key in sumtiData) {
+                    if (Object.prototype.hasOwnProperty.call(sumtiData, key)) {
+                        const value = sumtiData[key] ?? null;
+                        const rule = selbriJavni?.[key];
+                        const ruleType = rule?.type;
+
+                        try {
+                            if (ruleType) {
+                                if (ruleType.startsWith('@')) {
+                                    if (typeof value === 'string' && value.startsWith('@')) {
+                                        sumtiMap.set(key, value);
+                                    } else {
+                                        sumtiMap.set(key, null);
+                                    }
+                                } else if (ruleType === 'text') {
+                                    if (typeof value === 'string') {
+                                        const textContainer = sumtiMap.setContainer(key, new LoroText());
+                                        textContainer.insert(0, value);
+                                    } else {
+                                        sumtiMap.setContainer(key, new LoroText());
+                                    }
+                                } else if (ruleType === 'list') {
+                                    if (Array.isArray(value)) {
+                                        const listContainer = sumtiMap.setContainer(key, new LoroList());
+                                        value.forEach((item, index) => listContainer.insert(index, item));
+                                    } else {
+                                        sumtiMap.setContainer(key, new LoroList());
+                                    }
+                                } else if (ruleType === 'map') {
+                                    if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+                                        const mapContainer = sumtiMap.setContainer(key, new LoroMap());
+                                        for (const mapKey in value as Record<string, unknown>) {
+                                            mapContainer.set(mapKey, (value as Record<string, unknown>)[mapKey]);
+                                        }
+                                    } else {
+                                        sumtiMap.setContainer(key, new LoroMap());
+                                    }
+                                } else {
+                                    sumtiMap.set(key, value);
+                                }
+                            } else {
+                                sumtiMap.set(key, value);
+                            }
+                        } catch (containerError) {
+                            console.error(`[CreateDocument] Error setting initial container for sumti "${key}" with type "${ruleType}":`, containerError);
+                            sumtiMap.set(key, value); // Fallback
+                        }
+                    }
+                }
+            }
+            // --- End Apply Initial Data ---
+
+            // Snapshotting and initial save logic 
+            const snapshot = loroDoc.export({ mode: 'snapshot' }); // Snapshot NOW includes initial data
             const snapshotCid = await hashService.hashSnapshot(snapshot);
             const contentStorage = getContentStorage();
             await contentStorage.put(snapshotCid, snapshot, {
@@ -340,26 +416,7 @@ class HominioDB {
         }
     }
 
-    /**
-     * Load document content including all updates
-     * THIS METHOD IS DEPRECATED as content loading is now externalized.
-     * Use getLoroDoc(pubKey) and then loroDoc.toJSON() instead.
-     * @param doc Document to load content for
-     */
-    async loadDocumentContent(user: CapabilityUser | null, doc: Docs): Promise<void> { // Added user argument
-        console.warn("[DEPRECATED] loadDocumentContent called. Use getLoroDoc(pubKey).then(d => d?.toJSON()) instead.");
 
-        // *** Capability Check ***
-        if (!canRead(user, doc)) { // Added user argument to canRead
-            console.warn(`Permission denied: Cannot read doc ${doc.pubKey} owned by ${doc.owner}`);
-            // Removed docContent.set error
-            this._setError(`Permission denied: Cannot read document ${doc.pubKey}.`);
-            return;
-        }
-        // *** End Capability Check ***
-
-        this._setError("loadDocumentContent is deprecated."); // Set general error
-    }
 
     /**
      * Update a document in storage
@@ -1007,81 +1064,6 @@ class HominioDB {
     }
 
     /**
-     * Creates a new entity document.
-     * Handles LoroDoc creation, snapshotting, content storage, and metadata storage.
-     * @param schemaPubKey PubKey of the schema this entity conforms to (without the '@').
-     * @param initialPlaces Initial data for the entity's 'places' map.
-     * @param ownerId The ID of the user creating the entity.
-     * @param options Optional data like name.
-     * @returns The metadata (Docs object) of the newly created entity document.
-     * @throws Error if creation fails.
-     */
-    public async createEntity(
-        user: CapabilityUser | null,
-        schemaPubKey: string,
-        initialPlaces: Record<string, LoroJsonValue>,
-        ownerId: string,
-        options: { name: string }
-    ): Promise<Docs> {
-        this._isInitializingDoc = true;
-        let pubKey: string | undefined = undefined;
-
-        try {
-            pubKey = await docIdService.generateDocId();
-            const now = new Date().toISOString();
-            const loroDoc = await this.getOrCreateLoroDoc(pubKey);
-
-            // Populate Metadata
-            const meta = loroDoc.getMap('meta');
-            meta.set('schema', `@${schemaPubKey}`);
-            meta.set('name', options.name);
-
-            // Populate Data
-            const dataMap = loroDoc.getMap('data');
-            const placesMap = dataMap.setContainer("places", new LoroMap());
-            for (const key in initialPlaces) {
-                if (Object.prototype.hasOwnProperty.call(initialPlaces, key)) {
-                    placesMap.set(key, initialPlaces[key]);
-                }
-            }
-
-            // Snapshotting, Content Saving, Metadata Saving
-            const snapshot = loroDoc.export({ mode: 'snapshot' });
-            const snapshotCid = await hashService.hashSnapshot(snapshot);
-            const contentStorage = getContentStorage();
-            await contentStorage.put(snapshotCid, snapshot, {
-                type: 'snapshot',
-                documentPubKey: pubKey,
-                created: now,
-                schema: `@${schemaPubKey}`
-            });
-            const docMetadata: Docs = {
-                pubKey,
-                owner: ownerId,
-                updatedAt: now,
-                snapshotCid,
-                localState: { snapshotCid: snapshotCid }
-            };
-            const docsStorage = getDocsStorage();
-            await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(docMetadata)));
-            activeLoroDocuments.set(pubKey, loroDoc);
-
-            triggerDocChangeNotification();
-
-            return docMetadata;
-        } catch (err) {
-            console.error('Error creating entity:', err);
-            this._setError(`Failed to create entity: ${err instanceof Error ? err.message : 'Unknown error'}`);
-            if (pubKey) {
-                activeLoroDocuments.delete(pubKey);
-            }
-            throw err;
-        } finally {
-            this._isInitializingDoc = false;
-        }
-    }
-
-    /**
      * Persists a pre-exported Loro update binary to storage and updates document metadata.
      * Calculates CID, stores content, and atomically appends CID to updateCids array.
      * Intended for use by HQL service after validation.
@@ -1152,16 +1134,21 @@ class HominioDB {
     private async _persistLoroUpdateAsync(pubKey: string, loroDoc: LoroDoc): Promise<void> {
         // Check initialization flag first
         if (this._isInitializingDoc) {
+            console.log(`[_persistLoroUpdateAsync] Skipping persistence for ${pubKey} (initializingDoc=true)`);
             return;
         }
+
+        console.log(`[_persistLoroUpdateAsync] Triggered for ${pubKey}`);
 
         try {
             // Get the update data
             const updateData = loroDoc.export({ mode: 'update' });
 
             if (updateData.byteLength > 0) {
+                console.log(`[_persistLoroUpdateAsync] Update data has ${updateData.byteLength} bytes for ${pubKey}.`);
                 // Calculate CID
                 const updateCid = await hashService.hashSnapshot(updateData);
+                console.log(`[_persistLoroUpdateAsync] Calculated update CID ${updateCid} for ${pubKey}.`);
 
                 // Store the update content
                 const contentStorage = getContentStorage();
@@ -1170,6 +1157,7 @@ class HominioDB {
                     documentPubKey: pubKey,
                     created: new Date().toISOString()
                 });
+                console.log(`[_persistLoroUpdateAsync] Stored update content ${updateCid} for ${pubKey}.`);
 
                 // Update document metadata
                 const docMeta = await this.getDocument(pubKey);
@@ -1177,6 +1165,7 @@ class HominioDB {
                     console.error(`[_persistLoroUpdateAsync] Document ${pubKey} not found during update persistence.`);
                     return;
                 }
+                console.log(`[_persistLoroUpdateAsync] Found metadata for ${pubKey}. Current localState:`, JSON.stringify(docMeta.localState));
 
                 // Prepare updated metadata
                 const updatedDocData: Docs = { ...docMeta };
@@ -1189,14 +1178,16 @@ class HominioDB {
                     updatedDocData.localState.updateCids = [];
                 }
 
-                // Add CID if not already present in localState.updateCids
+                // Add CID if not already present in localState
                 // Ensure updateCids is not undefined before accessing includes/push
                 if (updatedDocData.localState.updateCids && !updatedDocData.localState.updateCids.includes(updateCid)) {
                     updatedDocData.localState.updateCids.push(updateCid);
                     needsSave = true; // Mark that we need to save
+                    console.log(`[_persistLoroUpdateAsync] Added update CID ${updateCid} to localState for ${pubKey}. Needs save.`);
                 } else {
                     // CID already present or updateCids was somehow undefined
                     needsSave = false;
+                    console.log(`[_persistLoroUpdateAsync] Update CID ${updateCid} already in localState or localState.updateCids missing for ${pubKey}. No metadata save needed.`);
                     if (updatedDocData.localState.updateCids) { // Only log if array existed
                     }
                 }
@@ -1211,10 +1202,11 @@ class HominioDB {
                     await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDocData)));
 
                     // Trigger notification after successful persistence
+                    console.log(`[_persistLoroUpdateAsync] Saved updated metadata for ${pubKey}. Triggering notification.`);
                     triggerDocChangeNotification();
                 } // else: No need to save metadata if CID was already there
             } else {
-                console.log(`[Loro Event] No effective changes detected for ${pubKey}.`);
+                console.log(`[_persistLoroUpdateAsync] No effective changes detected for ${pubKey} (updateData.byteLength = 0).`);
             }
         } catch (error) {
             console.error(`[_persistLoroUpdateAsync] Error processing changes for ${pubKey}:`, error);
