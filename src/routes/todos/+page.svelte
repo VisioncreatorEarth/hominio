@@ -7,7 +7,7 @@
 	} from '$lib/KERNEL/hominio-ql';
 	import { getContext } from 'svelte';
 	import { readable, type Readable } from 'svelte/store';
-	import { getCurrentEffectiveUser as getCurrentEffectiveUserType } from '$lib/KERNEL/hominio-auth';
+	import { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
 
 	// --- Constants --- Define PubKeys directly ---
 	const LISTE_SCHEMA_PUBKEY = '0x3fe09dd2eb611a10f3438692f60165fcc350d14f47a5de72ca603c1504bb38aa';
@@ -42,8 +42,8 @@
 	const sessionStore = getContext<SessionStoreType>('sessionStore');
 
 	// --- Get Effective User Function from Context ---
-	type GetCurrentUserFn = typeof getCurrentEffectiveUserType;
-	const getCurrentEffectiveUser = getContext<GetCurrentUserFn>('getCurrentEffectiveUser');
+	type GetCurrentUserFn = typeof getMeType;
+	const getMe = getContext<GetCurrentUserFn>('getMe');
 
 	// --- State for Resolved Statuses (Workaround for missing $refSchema) ---
 	let todoStatuses = $state<Record<string, string>>({}); // pubKey -> status text
@@ -76,7 +76,7 @@
 				}
 			};
 			// Pass the function to get the user for reactive queries
-			todoItemsReadable = hql.processReactive(getCurrentEffectiveUser, gunkaQuery);
+			todoItemsReadable = hql.processReactive(getMe, gunkaQuery);
 
 			// Also fetch related tcini items (could be optimized later)
 			const tciniQuery: HqlQueryRequest = {
@@ -86,7 +86,7 @@
 					data: { selbri: `@${TCINI_SCHEMA_PUBKEY}` }
 				}
 			};
-			tciniItemsReadable = hql.processReactive(getCurrentEffectiveUser, tciniQuery);
+			tciniItemsReadable = hql.processReactive(getMe, tciniQuery);
 		} else {
 			// Reset both readables if listKey is null
 			todoItemsReadable = readable(undefined);
@@ -132,7 +132,7 @@
 				}
 			};
 			// Pass the current user object for non-reactive queries/mutations
-			const currentUser = getCurrentEffectiveUser();
+			const currentUser = getMe();
 			const result = await hql.process(currentUser, findListQuery);
 
 			// --- Type Guard for Query Result ---
@@ -152,7 +152,7 @@
 					}
 				};
 				// Pass the current user object for non-reactive queries/mutations
-				const createListUser = getCurrentEffectiveUser();
+				const createListUser = getMe();
 				const createResult = await hql.process(createListUser, createListMutation);
 				// --- Type Guard for Mutation Result (expecting Docs on create) ---
 				if (createResult && !Array.isArray(createResult) && 'pubKey' in createResult) {
@@ -188,7 +188,7 @@
 				}
 			};
 			// Pass the current user object for non-reactive queries/mutations
-			const createTodoUser = getCurrentEffectiveUser();
+			const createTodoUser = getMe();
 			const todoResult = await hql.process(createTodoUser, createTodoMutation);
 			// --- Type Guard for Mutation Result (expecting Docs on create) ---
 			if (!todoResult || Array.isArray(todoResult) || !('pubKey' in todoResult)) {
@@ -209,7 +209,7 @@
 				}
 			};
 			// Pass the current user object for non-reactive queries/mutations
-			const createTciniUser = getCurrentEffectiveUser();
+			const createTciniUser = getMe();
 			const tciniResult = await hql.process(createTciniUser, createTciniMutation);
 			if (!tciniResult || Array.isArray(tciniResult) || !('pubKey' in tciniResult)) {
 				// Attempt cleanup: Delete the gunka created in step 1
@@ -217,7 +217,7 @@
 					'[Todos Debug] Failed to create tcini (Step 2). Attempting to delete gunka ',
 					gunkaPubKey
 				);
-				const cleanupUser1 = getCurrentEffectiveUser();
+				const cleanupUser1 = getMe();
 				await hql
 					.process(cleanupUser1, { operation: 'mutate', action: 'delete', pubKey: gunkaPubKey })
 					.catch((e: unknown) => console.error('Cleanup failed:', e));
@@ -269,7 +269,7 @@
 				}
 			};
 			// Pass the current user object for non-reactive queries/mutations
-			const toggleUser = getCurrentEffectiveUser();
+			const toggleUser = getMe();
 			const updateResult = await hql.process(toggleUser, updateStatusMutation);
 
 			// --- Type Guard for Mutation Result (expecting Docs on update) ---

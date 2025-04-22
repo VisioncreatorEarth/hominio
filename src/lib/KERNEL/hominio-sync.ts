@@ -4,7 +4,7 @@ import { hominioDB, docChangeNotifier, triggerDocChangeNotification, type Docs }
 import { browser } from '$app/environment';
 import { canWrite, canDelete, type CapabilityUser } from './hominio-caps'; // Import capabilities
 import { getContentStorage } from '$lib/KERNEL/hominio-storage';
-import { getCurrentEffectiveUser } from '$lib/KERNEL/hominio-auth'; // Import effective user utility
+import { getMe } from '$lib/KERNEL/hominio-auth'; // Import renamed function
 
 // Helper type for API response structure
 type ApiResponse<T> = {
@@ -75,7 +75,7 @@ export class HominioSync {
                                         this._triggerSyncCount = 0;
                                         if (this._syncDebounceTimer) clearTimeout(this._syncDebounceTimer);
                                         this._syncDebounceTimer = setTimeout(() => {
-                                            const user = getCurrentEffectiveUser();
+                                            const user = getMe();
                                             console.warn('[Sync] Auto-sync triggered after multiple changes'); // Keep warn
                                             this.pushToServer(user).catch(err => console.error('[Sync] Auto-sync failed:', err));
                                         }, 500);
@@ -86,7 +86,7 @@ export class HominioSync {
                                 this._triggerSyncCount = 0;
                                 if (this._syncDebounceTimer) clearTimeout(this._syncDebounceTimer);
                                 this._syncDebounceTimer = setTimeout(() => {
-                                    const user = getCurrentEffectiveUser();
+                                    const user = getMe();
                                     this.pushToServer(user).catch(err => console.error('[Sync] Auto-sync failed:', err));
                                 }, 500);
                             }
@@ -728,7 +728,7 @@ export class HominioSync {
     private handleOnline = () => {
         status.update(s => ({ ...s, isOnline: true }));
         // Attempt to push changes immediately when coming online
-        const user = getCurrentEffectiveUser(); // Get user before pushing
+        const user = getMe(); // Call renamed function
         this.pushToServer(user); // Pass user
     };
 

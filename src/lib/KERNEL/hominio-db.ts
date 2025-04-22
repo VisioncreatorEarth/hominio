@@ -6,6 +6,7 @@ import { docIdService } from './docid-service';
 import { getContentStorage, getDocsStorage, initStorage } from './hominio-storage';
 import { canRead, canWrite, canDelete } from './hominio-caps'; // Import central capability functions
 import type { CapabilityUser } from './hominio-caps'; // Fixed import source
+import { getMe } from './hominio-auth'; // Import getMe
 import type { ValidationRuleStructure } from './hominio-validate';
 
 // --- Reactivity Notifier ---
@@ -67,6 +68,8 @@ const CONTENT_TYPE_SNAPSHOT = 'snapshot';
 type LoroJsonValue = string | number | boolean | null | LoroJsonObject | LoroJsonArray;
 interface LoroJsonObject { [key: string]: LoroJsonValue }
 type LoroJsonArray = LoroJsonValue[];
+
+const ME_STORAGE_KEY = 'hominio_me'; // Use the same key as in hominio-auth
 
 /**
  * Docs interface represents the document registry for tracking and searching
@@ -131,12 +134,36 @@ class HominioDB {
     private _lastError: string | null = null;
     private _isInitializingDoc: boolean = false; // Flag to prevent persistence during creation
 
+    // Store the local peer info for potential use (though Loro peerId needs to be numeric)
+    private _localUserId: string | null = null;
+    private _localPeerId: string | null = null;
+
     constructor() {
         if (browser) {
+            // Read initial MeData on construction
+            this._readLocalPeerInfo();
             this.initialize().catch(err => {
                 console.error('Failed to initialize HominioDB:', err);
                 this._setError(`Failed to initialize: ${err instanceof Error ? err.message : String(err)}`);
             });
+        }
+    }
+
+    /** Read local user/peer info from storage */
+    private _readLocalPeerInfo(): void {
+        if (!browser) return;
+        const ME_STORAGE_KEY = 'hominio_me'; // Use the same key as in hominio-auth
+        try {
+            const meDataString = localStorage.getItem(ME_STORAGE_KEY);
+            if (meDataString) {
+                const meStored = JSON.parse(meDataString);
+                this._localUserId = meStored?.id ?? null;
+                this._localPeerId = meStored?.peer ?? null;
+            }
+        } catch (e) {
+            console.warn('[HominioDB] Could not read/parse stored MeData for initial peer info.', e);
+            this._localUserId = null;
+            this._localPeerId = null;
         }
     }
 
@@ -348,6 +375,14 @@ class HominioDB {
             return activeLoroDocuments.get(pubKey)!;
         }
 
+        // --- Loro Peer ID (Must be numeric) ---
+        // Loro requires a numeric peer ID. Using a fixed '1' for local client.
+        // True multi-peer requires a more robust numeric ID assignment.
+        const loroNumericPeerId = 1;
+        // The string peerId (@user/shortId) stored in _localPeerId could be used
+        // for other metadata/debugging if needed, but not for loroDoc.setPeerId.
+        // --- End Loro Peer ID ---
+
         // Create a new/empty document if no snapshotCid provided
         if (!snapshotCid) {
             const loroDoc = new LoroDoc();
@@ -355,7 +390,7 @@ class HominioDB {
             // Initialize with default structure
             loroDoc.getMap('meta'); // Create meta map
             loroDoc.getMap('data'); // Create data map
-            loroDoc.setPeerId(1); // Set peer ID
+            loroDoc.setPeerId(loroNumericPeerId); // Set FIXED NUMERIC peer ID
 
             // Add subscription for changes
             loroDoc.subscribe(() => {
@@ -381,7 +416,7 @@ class HominioDB {
 
             const loroDoc = new LoroDoc();
             loroDoc.import(snapshotData);
-            loroDoc.setPeerId(1); // Set a standard peer ID
+            loroDoc.setPeerId(loroNumericPeerId); // Set FIXED NUMERIC peer ID
 
             // Apply any existing updates
             const docMeta = await this.getDocument(pubKey);

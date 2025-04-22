@@ -7,15 +7,15 @@
 	} from '$lib/KERNEL/hominio-ql';
 	import { readable, type Readable } from 'svelte/store';
 	import { getContext } from 'svelte';
-	import { getCurrentEffectiveUser as getCurrentEffectiveUserType } from '$lib/KERNEL/hominio-auth';
+	import { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
 	import SyncStatusUI from '$lib/components/SyncStatusUI.svelte';
 
 	// Define the specific Prenu schema pubkey
 	const PRENU_SCHEMA_PUBKEY = '0xfdd157564621e5bd35bc9276e6dfae3eb5b60076b0d0d20559ac588121be9cf7';
 
 	// --- Get Effective User Function from Context ---
-	type GetCurrentUserFn = typeof getCurrentEffectiveUserType;
-	const getCurrentEffectiveUser = getContext<GetCurrentUserFn>('getCurrentEffectiveUser');
+	type GetCurrentUserFn = typeof getMeType;
+	const getMe = getContext<GetCurrentUserFn>('getMe');
 
 	// Schemas -> Selbri
 	const allSelbriQuery: HqlQueryRequest = {
@@ -29,7 +29,7 @@
 	// Get current user BEFORE creating reactive query
 	const selbriReadable: Readable<HqlQueryResult | null | undefined> = hql.processReactive(
 		// Renamed from schemasReadable
-		getCurrentEffectiveUser,
+		getMe,
 		allSelbriQuery // Use renamed query variable
 	);
 
@@ -56,7 +56,7 @@
 			};
 			// Get current user BEFORE creating reactive query
 			// Get the new readable store for entities and assign it to the state variable
-			bridiReadable = hql.processReactive(getCurrentEffectiveUser, bridiQuery); // Use renamed state variable
+			bridiReadable = hql.processReactive(getMe, bridiQuery); // Use renamed state variable
 			selectedBridiPubKey = null; // <-- Reset selected bridi when selbri changes
 		} else {
 			// If no selbri selected, reset to an empty/loading state
@@ -142,7 +142,7 @@
 			};
 
 			// Get current user before processing mutation
-			const currentUser = getCurrentEffectiveUser();
+			const currentUser = getMe();
 			const result = await hql.process(currentUser, mutation);
 			console.log('[Action] Create Prenu Result:', result);
 		} catch (err) {
@@ -172,7 +172,7 @@
 			};
 
 			// Get current user before processing mutation
-			const currentUser = getCurrentEffectiveUser();
+			const currentUser = getMe();
 			const result = await hql.process(currentUser, mutation);
 		} catch (err) {
 			console.error(`[Action] Error updating Prenu ${entityPubKey} name:`, err);

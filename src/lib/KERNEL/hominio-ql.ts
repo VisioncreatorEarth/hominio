@@ -3,7 +3,7 @@ import { canRead, canDelete } from './hominio-caps';
 import { readable, get, type Readable } from 'svelte/store';
 import { LoroMap, LoroList, LoroText } from 'loro-crdt';
 import { browser } from '$app/environment';
-import { authClient, getCurrentEffectiveUser as getCurrentEffectiveUserType } from '$lib/KERNEL/hominio-auth';
+import { authClient, getMe as getMeType } from '$lib/KERNEL/hominio-auth';
 import type { CapabilityUser } from './hominio-caps';
 import { validateBridiDocAgainstSelbri, type ValidationRuleStructure } from './hominio-validate';
 
@@ -822,7 +822,7 @@ class HominioQLService {
 
     // --- Reactive Query Handling ---
     processReactive(
-        getCurrentUserFn: typeof getCurrentEffectiveUserType,
+        getCurrentUserFn: typeof getMeType,
         request: HqlQueryRequest
     ): Readable<HqlQueryResult | null | undefined> {
         if (!browser) {

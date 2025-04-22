@@ -3,12 +3,10 @@
 	import { onMount, onDestroy, setContext } from 'svelte';
 	import { startCall, endCall } from '$lib/ultravox/callFunctions';
 	import CallInterface from '$lib/components/CallInterface.svelte';
-	import { authClient, getCurrentEffectiveUser } from '$lib/KERNEL/hominio-auth';
+	import { authClient, getMe } from '$lib/KERNEL/hominio-auth';
 	import { initializeVibe } from '$lib/ultravox';
 	import { DEFAULT_CALL_CONFIG } from '$lib/ultravox/callConfig';
 	import { initDocs } from '$lib/docs';
-	import VibeRenderer from '$lib/components/VibeRenderer.svelte';
-	import type { PageData } from './$types';
 	import type { LayoutData } from './$types';
 	import { type Snippet } from 'svelte';
 	import { goto } from '$app/navigation';
@@ -20,7 +18,7 @@
 	setContext('sessionStore', sessionStore);
 
 	// Provide the effective user utility via context
-	setContext('getCurrentEffectiveUser', getCurrentEffectiveUser);
+	setContext('getMe', getMe);
 
 	const DEFAULT_VIBE = 'home';
 
