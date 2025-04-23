@@ -2,10 +2,13 @@ import type { LoroDoc } from 'loro-crdt';
 import type { BridiRecord, Pubkey, SelbriId } from './db';
 import {
     getSumtiDoc,
+    getSelbriDoc,
     findBridiDocsBySelbriAndPlace,
     getCkajiFromDoc,
     getDatniFromDoc,
-    getPathValue
+    getPathValue,
+    checkSumtiExists,
+    checkSelbriExists
 } from './loro-engine';
 
 // --- LORO_HQL Query Types (Map-Based Syntax) ---
@@ -67,7 +70,7 @@ interface LoroHqlTraverse {
 export interface LoroHqlQuery {
     from: {
         sumti_pubkeys?: Pubkey[];
-        // selbri_filter?: ... // TBD
+        selbri_pubkeys?: Pubkey[];
     };
     map: LoroHqlMap;
     where?: LoroHqlWhereClause[]; // Can be multiple conditions (implicitly ANDed)
@@ -87,27 +90,54 @@ type TraversalResult = QueryResult[] | QueryResult | unknown | null;
 export async function executeQuery(query: LoroHqlQuery): Promise<QueryResult[]> {
     const results: QueryResult[] = [];
 
-    // 1. Determine Starting Nodes
-    const startPubkeys = query.from.sumti_pubkeys || [];
-    if (startPubkeys.length === 0) {
-        console.warn('Query requires sumti_pubkeys in "from" clause.');
+    // 1. Determine Starting Nodes & Process
+    const startSumtiPubkeys = query.from.sumti_pubkeys || [];
+    const startSelbriPubkeys = query.from.selbri_pubkeys || [];
+
+    if (startSumtiPubkeys.length === 0 && startSelbriPubkeys.length === 0) {
+        console.warn('Query requires sumti_pubkeys or selbri_pubkeys in "from" clause.');
         return [];
     }
 
-    // 2. Process Each Starting Node
-    for (const pubkey of startPubkeys) {
+    // Process Sumti Starting Nodes
+    for (const pubkey of startSumtiPubkeys) {
+        // Check existence index first
+        if (!checkSumtiExists(pubkey)) {
+            console.warn(`Starting Sumti with pubkey ${pubkey} not found in existence index.`);
+            continue;
+        }
         const startDoc = getSumtiDoc(pubkey);
         if (!startDoc) {
+            // This check might be redundant if index is accurate, but good fallback
             console.warn(`Starting Sumti with pubkey ${pubkey} not found.`);
             continue;
         }
-
-        // 3. Apply Top-Level Where Clause(s) (if any)
+        // Apply Top-Level Where Clause(s) (if any) - Assuming 'where' applies to the starting node type
         if (query.where && !evaluateWhereClauses(startDoc, query.where)) {
-            continue; // Skip this starting node if it doesn't match filters
+            continue;
         }
+        // Process the Top-Level Map Clause
+        const nodeResult = await processMap(startDoc, query.map);
+        results.push(nodeResult);
+    }
 
-        // 4. Process the Top-Level Map Clause for the Starting Node
+    // Process Selbri Starting Nodes
+    for (const pubkey of startSelbriPubkeys) {
+        // Check existence index first
+        if (!checkSelbriExists(pubkey)) {
+            console.warn(`Starting Selbri with pubkey ${pubkey} not found in existence index.`);
+            continue;
+        }
+        const startDoc = getSelbriDoc(pubkey);
+        if (!startDoc) {
+            console.warn(`Starting Selbri with pubkey ${pubkey} not found.`);
+            continue;
+        }
+        // Apply Top-Level Where Clause(s) (if any) - Assuming 'where' applies to the starting node type
+        if (query.where && !evaluateWhereClauses(startDoc, query.where)) {
+            continue;
+        }
+        // Process the Top-Level Map Clause
         const nodeResult = await processMap(startDoc, query.map);
         results.push(nodeResult);
     }

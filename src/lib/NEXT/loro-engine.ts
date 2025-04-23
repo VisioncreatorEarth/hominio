@@ -216,6 +216,44 @@ function getOrInsertListContainerInternal(map: LoroMap, key: string): LoroList<s
 initializeDocs();
 
 
+// --- NEW: Existence Index Check Functions ---
+
+/**
+ * Checks if a Sumti pubkey exists in the Sumti existence index.
+ */
+export function checkSumtiExists(pubkey: Pubkey): boolean {
+    const fackiSumtiDoc = getSumtiDoc(FACKI_SUMTI_PUBKEY);
+    if (!fackiSumtiDoc) {
+        console.warn(`[Loro Engine] Facki Sumti Index document (${FACKI_SUMTI_PUBKEY}) not found for existence check.`);
+        return false; // Or throw error, depending on desired strictness
+    }
+    try {
+        const sumtiIndexMap = fackiSumtiDoc.getMap('datni');
+        return sumtiIndexMap.get(pubkey) !== undefined;
+    } catch (error) {
+        console.error(`[Loro Engine] Error checking Sumti existence for key '${pubkey}':`, error);
+        return false;
+    }
+}
+
+/**
+ * Checks if a Selbri pubkey exists in the Selbri existence index.
+ */
+export function checkSelbriExists(pubkey: Pubkey): boolean {
+    const fackiSelbriDoc = getSumtiDoc(FACKI_SELBRI_PUBKEY);
+    if (!fackiSelbriDoc) {
+        console.warn(`[Loro Engine] Facki Selbri Index document (${FACKI_SELBRI_PUBKEY}) not found for existence check.`);
+        return false;
+    }
+    try {
+        const selbriIndexMap = fackiSelbriDoc.getMap('datni');
+        return selbriIndexMap.get(pubkey) !== undefined;
+    } catch (error) {
+        console.error(`[Loro Engine] Error checking Selbri existence for key '${pubkey}':`, error);
+        return false;
+    }
+}
+
 // --- NEW: Composite Index Access Function ---
 
 /**

@@ -241,6 +241,25 @@
 		}
 	};
 
+	// Example Query 4: Fetch definitions for all known Selbri
+	const exampleQuery4: LoroHqlQuery = {
+		from: {
+			// List all Selbri pubkeys from db.ts
+			selbri_pubkeys: ['@selbri_zukte', '@selbri_gunka', '@selbri_ckaji', '@selbri_prenu']
+		},
+		map: {
+			// Map fields directly from the SelbriRecord datni structure
+			id: { field: 'self.ckaji.pubkey' }, // The pubkey itself
+			// Note: We removed cmene, so a "name" isn't directly available here unless linked
+			x1_def: { field: 'self.datni.sumti.x1' }, // Definition/role of x1
+			x2_def: { field: 'self.datni.sumti.x2' }, // Definition/role of x2
+			x3_def: { field: 'self.datni.sumti.x3' }, // Definition/role of x3
+			x4_def: { field: 'self.datni.sumti.x4' }, // Definition/role of x4
+			x5_def: { field: 'self.datni.sumti.x5' } // Definition/role of x5
+		}
+		// No 'where' clause needed as we are providing the specific pubkeys
+	};
+
 	async function runQuery(queryToRun: LoroHqlQuery) {
 		isLoading = true;
 		error = null;
@@ -263,7 +282,7 @@
 <div class="p-6 text-black">
 	<h1 class="mb-4 text-2xl font-bold">Loro HQL Test Page</h1>
 
-	<div class="mb-4 flex space-x-4">
+	<div class="mb-4 flex flex-wrap space-y-2 space-x-4">
 		<button
 			class="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 disabled:opacity-50"
 			on:click={() => runQuery(exampleQuery1)}
@@ -284,6 +303,13 @@
 			disabled={isLoading}
 		>
 			{isLoading ? 'Running...' : 'Run Query 3 (Person1 Details)'}
+		</button>
+		<button
+			class="rounded bg-slate-600 px-4 py-2 text-white hover:bg-slate-700 disabled:opacity-50"
+			on:click={() => runQuery(exampleQuery4)}
+			disabled={isLoading}
+		>
+			{isLoading ? 'Running...' : 'Run Query 4 (All Selbri Defs)'}
 		</button>
 	</div>
 
