@@ -7,7 +7,8 @@ import {
     getCkajiFromDoc,
     getDatniFromDoc,
     checkSumtiExists,
-    checkSelbriExists
+    checkSelbriExists,
+    FACKI_SELBRI_PUBKEY
 } from './loro-engine';
 import { canRead, type CapabilityUser } from '$lib/KERNEL/hominio-caps';
 import { docChangeNotifier } from '$lib/KERNEL/hominio-db';
@@ -110,10 +111,41 @@ export async function executeQuery(
 
     // 1. Determine Starting Nodes & Process
     const startSumtiPubkeys = query.from.sumti_pubkeys || [];
-    const startSelbriPubkeys = query.from.selbri_pubkeys || [];
+    let startSelbriPubkeys = query.from.selbri_pubkeys;
 
-    if (startSumtiPubkeys.length === 0 && startSelbriPubkeys.length === 0) {
-        console.warn('Query requires sumti_pubkeys or selbri_pubkeys in "from" clause.');
+    // --- Special Handling for All Selbri --- 
+    let fetchAllSelbri = false;
+    if (startSelbriPubkeys && Array.isArray(startSelbriPubkeys) && startSelbriPubkeys.length === 0) {
+        console.log('[Query Engine] Empty selbri_pubkeys array detected, attempting to fetch all Selbri from index.');
+        fetchAllSelbri = true;
+        try {
+            const fackiSelbriDoc = await getSelbriDoc(FACKI_SELBRI_PUBKEY);
+            if (fackiSelbriDoc) {
+                const dataMap = fackiSelbriDoc.getMap('data');
+                const datniMap = dataMap?.get('datni') as LoroMap | undefined;
+                const indexMap = datniMap?.get('vasru') as LoroMap | undefined;
+                if (indexMap instanceof LoroMap) {
+                    startSelbriPubkeys = Array.from(indexMap.keys());
+                    console.log(`[Query Engine] Fetched ${startSelbriPubkeys.length} Selbri pubkeys from index.`);
+                } else {
+                    console.warn('[Query Engine] Facki Selbri index map (data.datni.vasru) not found or not a LoroMap. Cannot fetch all Selbri.');
+                    startSelbriPubkeys = []; // Reset to empty to prevent processing
+                }
+            } else {
+                console.warn(`[Query Engine] Facki Selbri index document (${FACKI_SELBRI_PUBKEY}) not found. Cannot fetch all Selbri.`);
+                startSelbriPubkeys = []; // Reset to empty
+            }
+        } catch (error) {
+            console.error('[Query Engine] Error fetching all Selbri from index:', error);
+            startSelbriPubkeys = []; // Reset to empty on error
+        }
+    } else if (startSelbriPubkeys === undefined) {
+        startSelbriPubkeys = []; // Ensure it's an array if not provided
+    }
+    // --- End Special Handling ---
+
+    if (startSumtiPubkeys.length === 0 && startSelbriPubkeys.length === 0 && !fetchAllSelbri) {
+        console.warn('Query requires sumti_pubkeys or non-empty selbri_pubkeys (or empty array [] to fetch all) in "from" clause.');
         return [];
     }
 
@@ -154,11 +186,12 @@ export async function executeQuery(
 
     // Process Selbri Starting Nodes
     for (const pubkey of startSelbriPubkeys) {
-        // Check existence index first
+        // Check existence index first (still useful even if fetched from index)
         const exists = await checkSelbriExists(pubkey);
         if (!exists) {
-            console.warn(`Starting Selbri with pubkey ${pubkey} not found in existence index.`);
-            continue;
+            // This might happen if index is slightly out of sync, log warning but continue
+            console.warn(`Starting Selbri with pubkey ${pubkey} from index/query was not confirmed by checkSelbriExists.`);
+            // continue; // Decide whether to skip or proceed if check fails
         }
 
         // Get document metadata for capability check

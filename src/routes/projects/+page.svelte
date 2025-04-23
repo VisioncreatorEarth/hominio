@@ -6,7 +6,7 @@
 	// Define the example queries (keep these)
 	const exampleQuery4: LoroHqlQuery = {
 		from: {
-			selbri_pubkeys: ['0x17af593bc5411987e911d3d49e033cbfc34c0f885cc2fd6a5b4161629eafaa93']
+			selbri_pubkeys: []
 		},
 		map: {
 			id: { field: 'doc.pubkey' },
@@ -58,11 +58,11 @@
 		<button
 			class="rounded bg-slate-600 px-4 py-2 text-white hover:bg-slate-700 disabled:opacity-50"
 			on:click={() => runQuery(exampleQuery4)}
-			disabled={$queryResultsStore === undefined && $activeQueryDefinition?.from?.selbri_pubkeys}
+			disabled={$queryResultsStore === undefined && !!$activeQueryDefinition?.from?.selbri_pubkeys}
 		>
-			{$queryResultsStore === undefined && $activeQueryDefinition?.from?.selbri_pubkeys
+			{$queryResultsStore === undefined && !!$activeQueryDefinition?.from?.selbri_pubkeys
 				? 'Running...'
-				: 'Run Query  (Selbri Defs)'}
+				: 'Run Query (Selbri Defs)'}
 		</button>
 	</div>
 
