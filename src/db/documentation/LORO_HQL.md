@@ -4,27 +4,31 @@
 
 LORO_HQL is a JSON-based query language designed to query graph data stored across multiple Loro documents, where each document represents a specific entity (`Sumti`), relationship (`Bridi`), predicate type (`Selbri`), or index (`Facki`). It leverages the Lojban-inspired structure defined in `db.ts`.
 
+**Refactoring Note (Post meta/data removal):** The internal structure of standard Loro documents managed by HominioDB has been simplified. Instead of nesting application data under top-level `meta` and `data` maps, documents now typically have **`ckaji`** (metadata/classification) and **`datni`** (payload/content) as direct, top-level maps or containers within the LoroDoc root.
+
 The goal is to provide a declarative way to fetch and structure data by specifying starting nodes, relationship traversal paths, and a direct mapping to the desired output format. The server handles the underlying Loro document lookups (using existence and relationship indexes for efficiency) and joins automatically.
 
-**Important:** Entity names (for Projects, Tasks, People, etc.) should always be retrieved by traversing a `@selbri_ckaji` relationship to a dedicated `*_name` Sumti node and accessing the `self.datni.vasru` field of that node. Direct access to `self.ckaji.cmene` for entity names is discouraged and may return `undefined`.
+**Important:** Entity names (for Projects, Tasks, People, etc.) should always be retrieved by traversing a `@selbri_ckaji` relationship to a dedicated `*_name` Sumti node and accessing the `self.datni` field of that node (assuming the name Sumti node stores the name text directly in its root `datni` text container).
 
 ## Core Concepts
 
-1.  **Entry Points (`from`)**: Queries start from one or more specified `Sumti` or `Selbri` instances identified by their `pubkey`.
-2.  **Output Mapping (`map`)**: Defines the structure of the result object for each starting node.
-3.  **Data Sources (within `map`)**: Each value in the `map` specifies how to get data:
+1.  **Document Structure:** Each unique `pubkey` corresponds to a distinct `LoroDoc` instance. Inside the document, application data is primarily organized within two top-level Loro containers (usually Maps): `ckaji` and `datni`.
+    *   `ckaji`: Typically holds metadata like `klesi` (class).
+    *   `datni`: Holds the main payload, which could be simple values, nested maps (like `sumti` in Selbri/Bridi), or specific Loro container types (like a LoroText for a name Sumti).
+2.  **Entry Points (`from`)**: Queries start from one or more specified `Sumti` or `Selbri` instances identified by their `pubkey`.
+3.  **Output Mapping (`map`)**: Defines the structure of the result object for each starting node.
+4.  **Data Sources (within `map`)**: Each value in the `map` specifies how to get data:
     *   `{ "field": "doc.pubkey" }`: Accesses the **external pubkey** of the current document (the ID known to the database and query engine). This is the preferred way to get a document's ID.
-    *   `{ "field": "self.path.to.field" }`: Accesses a property from the current node's internal Loro data (`self`). Valid paths include fields within `datni` (e.g., `self.datni.vasru`, `self.datni.cneme`, `self.datni.sumti.x1`, `self.datni.fanva`). Direct access to `self.ckaji.*` fields is generally discouraged; use `doc.pubkey` for the ID.
+    *   `{ "field": "self.path.to.field" }`: Accesses a property from the current node's internal Loro data (`self`). Since `ckaji` and `datni` are top-level, paths now start directly with them (e.g., `self.datni.some_value`, `self.datni.sumti.x1`, `self.ckaji.klesi`).
     *   `{ "traverse": { ... } }`: Follows relationships (`Bridi`) to related nodes (typically starts from a `Sumti`).
-4.  **Traversal (`traverse`)**: Defines how to navigate relationships:
+5.  **Traversal (`traverse`)**: Defines how to navigate relationships:
     *   `bridi_where`: Specifies the `Selbri` type and the `place` the *current* node occupies.
     *   `map` (nested): Recursively defines the output structure for *each related* node found.
     *   `where_related` (optional): Filters the *related* nodes before they are mapped. Use `doc.pubkey` here for filtering related node IDs.
     *   `return`: Specifies whether to return an `'array'` (default) or just the `'first'` related node found.
-5.  **Node/Place Targeting (within nested `map`)**: Inside a `traverse.map`, each mapping value must specify the `place` (e.g., `x1`, `x2`) within the connecting `Bridi` that holds the node from which data should be sourced (`field`) or further traversed (`traverse`).
-6.  **Filtering (`where`, `where_related`)**: Apply conditions to filter results. Top-level `where` filters starting nodes; `where_related` filters nodes found during traversal.
-7.  **Server-Side Joins & Indexing**: The query engine automatically resolves `SumtiId` references within `Bridi` records (using the `@facki_bridi` index) and checks node existence (using `@facki_sumti` / `@facki_selbri`) before fetching the corresponding Loro documents.
-8.  **Document Mapping**: Each unique `pubkey` corresponds directly to a distinct `LoroDoc` instance.
+6.  **Node/Place Targeting (within nested `map`)**: Inside a `traverse.map`, each mapping value must specify the `place` (e.g., `x1`, `x2`) within the connecting `Bridi` that holds the node from which data should be sourced (`field`) or further traversed (`traverse`).
+7.  **Filtering (`where`, `where_related`)**: Apply conditions to filter results. Top-level `where` filters starting nodes; `where_related` filters nodes found during traversal.
+8.  **Server-Side Joins & Indexing**: The query engine automatically resolves `SumtiId` references within `Bridi` records (using the `@facki_bridi` index) and checks node existence (using `@facki_sumti` / `@facki_selbri`) before fetching the corresponding Loro documents.
 
 ## Query Structure (JSON)
 
@@ -41,7 +45,11 @@ The goal is to provide a declarative way to fetch and structure data by specifyi
     },
     // Example: Get name via traversal (if starting node is Sumti)
     "entity_name": { 
-      "traverse": { /* ... name traversal ... */ }
+      "traverse": {
+        "bridi_where": { "selbri": "@selbri_ckaji", "place": "x1" },
+        "return": "first",
+        "map": { "_value": { "place": "x2", "field": "self.datni" } }
+      }
     },
     // Example: Get Selbri definition field (if starting node is Selbri)
     "selbri_x1_def": {
@@ -68,7 +76,7 @@ The goal is to provide a declarative way to fetch and structure data by specifyi
       "traverse": {
         "bridi_where": { "selbri": "@selbri_ckaji", "place": "x1" },
         "return": "first",
-        "map": { "_value": { "place": "x2", "field": "self.datni.vasru" } }
+        "map": { "_value": { "place": "x2", "field": "self.datni" } }
       }
     },
     "tasks": { // Output array property
@@ -82,11 +90,11 @@ The goal is to provide a declarative way to fetch and structure data by specifyi
             "traverse": {
               "bridi_where": { "selbri": "@selbri_ckaji", "place": "x1" },
               "return": "first",
-              "map": { "_value": { "place": "x2", "field": "self.datni.vasru" } }
+              "map": { "_value": { "place": "x2", "field": "self.datni" } }
             }
           },
           "worker": { /* ... worker details, using doc.pubkey for ID ... */ },
-          "status": { /* ... status traversal, gets datni.vasru ... */ }
+          "status": { /* ... status traversal, gets datni ... */ }
         }
       }
     }
@@ -100,7 +108,7 @@ The goal is to provide a declarative way to fetch and structure data by specifyi
 {
   "from": { "sumti_pubkeys": ["@tag_frontend"] },
   "map": {
-    "tag_value": { "field": "self.datni.vasru" }, // Get the tag value
+    "tag_value": { "field": "self.datni" }, // Get the tag value
     "tagged_tasks": {
       "traverse": {
         "bridi_where": { "selbri": "@selbri_ckaji", "place": "x2" }, // Tag is x2
@@ -112,7 +120,7 @@ The goal is to provide a declarative way to fetch and structure data by specifyi
             "traverse": {
               "bridi_where": { "selbri": "@selbri_ckaji", "place": "x1" },
               "return": "first",
-              "map": { "_value": { "place": "x2", "field": "self.datni.vasru" } }
+              "map": { "_value": { "place": "x2", "field": "self.datni" } }
             }
           },
           // Nested traverse: Find the worker and their actual name
@@ -144,7 +152,7 @@ The goal is to provide a declarative way to fetch and structure data by specifyi
 *   **Document Instantiation**: The server needs access to all relevant instantiated Loro documents.
 *   **Indexing**: Efficiently finding `Bridi` records (via `@facki_bridi`) and checking node existence (via `@facki_sumti`, `@facki_selbri`) is crucial.
 *   **Query Planning/Execution**: Parse the JSON, plan traversals, handle recursion, apply filters (`where`, `where_related`).
-*   **Data Fetching**: Retrieve data from LoroDoc root maps.
+*   **Data Fetching**: Retrieve data from LoroDoc root maps (`ckaji`, `datni`).
 *   **Security & Performance**: Standard considerations apply.
 
 ## Querying All Bridi Instances

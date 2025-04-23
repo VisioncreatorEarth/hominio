@@ -37,6 +37,14 @@
 		activeQueryDefinition.set(queryToRun); // Use .set() on the writable store
 	}
 
+	// --- Reactive logging ---
+	$: {
+		if ($queryResultsStore !== undefined) {
+			// Log only when it's defined (or null)
+			console.log('UI Debug: queryResultsStore value:', $queryResultsStore);
+		}
+	}
+
 	// Update helper type
 	type SelbriQueryResult = {
 		id: string;

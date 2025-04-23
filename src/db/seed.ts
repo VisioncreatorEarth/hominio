@@ -1,6 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 import { drizzle } from 'drizzle-orm/neon-http';
-import { LoroDoc, LoroMap, LoroText, LoroList } from 'loro-crdt';
+import { LoroDoc, LoroMap } from 'loro-crdt';
 import { blake3 } from '@noble/hashes/blake3';
 import b4a from 'b4a';
 import * as schema from './schema';
@@ -21,14 +21,16 @@ const FACKI_SUMTI_PUBKEY = '@facki_sumti';
 const FACKI_SELBRI_PUBKEY = '@facki_selbri';
 const FACKI_BRIDI_PUBKEY = '@facki_bridi';
 
-// Define Facki records directly here
+// Define Facki records directly here - Radically Simplified Structure
+// Define Facki records directly here - Updated Structure
 const initialFacki: SumtiRecord[] = [
     // System Index Sumti Definitions (Facki)
     {
         pubkey: FACKI_META_PUBKEY,
-        ckaji: { klesi: 'Facki' },
+        ckaji: { klesi: 'Facki', cmene: '@facki_meta' }, // Added cmene for consistency
+        // Datni for meta now directly holds the map
         datni: {
-            klesi: 'LoroMap',
+            klesi: 'LoroMap', // This klesi describes the datni container itself
             vasru: {
                 sumti: FACKI_SUMTI_PUBKEY,
                 selbri: FACKI_SELBRI_PUBKEY,
@@ -38,18 +40,21 @@ const initialFacki: SumtiRecord[] = [
     },
     {
         pubkey: FACKI_SUMTI_PUBKEY,
-        ckaji: { klesi: 'Facki' },
-        datni: { klesi: 'LoroMap', vasru: {} }
+        ckaji: { klesi: 'Facki', cmene: '@facki_sumti' },
+        // Datni for Sumti index is now directly the map (no klesi/vasru needed inside datni)
+        datni: { klesi: 'LoroMap', vasru: {} } // Keep structure for seedSumtiDocument for now
     },
     {
         pubkey: FACKI_SELBRI_PUBKEY,
-        ckaji: { klesi: 'Facki' },
-        datni: { klesi: 'LoroMap', vasru: {} }
+        ckaji: { klesi: 'Facki', cmene: '@facki_selbri' },
+        // Datni for Selbri index is now directly the map
+        datni: { klesi: 'LoroMap', vasru: {} } // Keep structure for seedSumtiDocument for now
     },
     {
         pubkey: FACKI_BRIDI_PUBKEY,
-        ckaji: { klesi: 'Facki' },
-        datni: { klesi: 'LoroMap', vasru: {} }
+        ckaji: { klesi: 'Facki', cmene: '@facki_bridi' },
+        // Datni for Bridi index is now directly the map
+        datni: { klesi: 'LoroMap', vasru: {} } // Keep structure for seedSumtiDocument for now
     },
 ];
 
@@ -102,49 +107,50 @@ async function seedSumtiDocument(
     const loroDoc = new LoroDoc();
     loroDoc.setPeerId(1);
 
-    // Set meta data
-    const metaMap = loroDoc.getMap('meta');
-    metaMap.set('gismu', 'sumti');
-    metaMap.set('owner', GENESIS_HOMINIO);
-    if (sumtiRecord.ckaji.cmene) {
-        metaMap.set('cmene', sumtiRecord.ckaji.cmene);
+    // Set ckaji directly at the root
+    const ckajiMap = loroDoc.getMap('ckaji');
+    ckajiMap.set('klesi', sumtiRecord.ckaji.klesi);
+    if (sumtiRecord.ckaji.cmene) { // Keep cmene in ckaji for now
+        ckajiMap.set('cmene', sumtiRecord.ckaji.cmene);
     }
 
-    // Set data structure
-    const dataMap = loroDoc.getMap('data');
-
-    // Set ckaji
-    dataMap.set('ckaji', {
-        klesi: sumtiRecord.ckaji.klesi,
-        cmene: sumtiRecord.ckaji.cmene,
-    });
-
-    // Set datni with appropriate CRDT container
+    // Set datni directly at the root with appropriate CRDT container
     if (sumtiRecord.datni) {
-        const datniMap = dataMap.setContainer('datni', new LoroMap());
+        // Determine the type of container needed based on klesi
+        const datniKlesi = sumtiRecord.datni.klesi;
 
-        if (sumtiRecord.datni.klesi === 'LoroMap') {
-            const vasruMap = datniMap.setContainer('vasru', new LoroMap());
-            const vasruData = sumtiRecord.datni.vasru as Record<string, unknown>;
-            for (const key in vasruData) {
-                vasruMap.set(key, vasruData[key]);
+        if (datniKlesi === 'LoroMap' && 'vasru' in sumtiRecord.datni) {
+            const datniContainer = loroDoc.getMap('datni');
+            const mapData = sumtiRecord.datni.vasru as Record<string, unknown>; // Safe access
+            for (const key in mapData) {
+                datniContainer.set(key, mapData[key]);
             }
-            datniMap.set('klesi', 'LoroMap');
-        } else if (sumtiRecord.datni.klesi === 'LoroText') {
-            const textValue = sumtiRecord.datni.vasru as string;
-            const textContainer = datniMap.setContainer('vasru', new LoroText());
-            textContainer.insert(0, textValue);
-            datniMap.set('klesi', 'LoroText');
-        } else if (sumtiRecord.datni.klesi === 'LoroList' || sumtiRecord.datni.klesi === 'LoroMovableList') {
-            const listContainer = datniMap.setContainer('vasru', new LoroList());
-            const listData = sumtiRecord.datni.vasru as unknown[];
+        } else if (datniKlesi === 'LoroText' && 'vasru' in sumtiRecord.datni) {
+            // Dynamically import if needed
+            const { LoroText } = await import('loro-crdt');
+            const datniContainer = loroDoc.getText('datni');
+            const textValue = sumtiRecord.datni.vasru as string; // Safe access
+            datniContainer.insert(0, textValue);
+        } else if ((datniKlesi === 'LoroList' || datniKlesi === 'LoroMovableList') && 'vasru' in sumtiRecord.datni) {
+            // Dynamically import if needed
+            const { LoroList } = await import('loro-crdt');
+            const datniContainer = loroDoc.getList('datni');
+            const listData = sumtiRecord.datni.vasru as unknown[]; // Safe access
             listData.forEach((item, index) => {
-                listContainer.insert(index, item);
+                datniContainer.insert(index, item);
             });
-            datniMap.set('klesi', sumtiRecord.datni.klesi);
-        } else if (sumtiRecord.datni.klesi === 'concept') {
-            // For concept, no vasru property
-            datniMap.set('klesi', 'concept');
+        } else if (datniKlesi === 'concept') {
+            // For 'concept', ckaji might be enough, or datni could be a simple flag/map
+            // For now, let's just ensure ckaji is set (done above)
+            // If datni needs specific structure for 'concept', add it here.
+            // Example: loroDoc.getMap('datni').set('isConcept', true);
+        } else {
+            // Handle unknown or simple types - maybe store as plain value in a root datni map?
+            // This case needs clarification based on actual Sumti types used.
+            // Fallback: Create a map and put the raw datni object?
+            const datniContainer = loroDoc.getMap('datni');
+            datniContainer.set('raw', sumtiRecord.datni); // Store the original structure as fallback
+            console.warn(`Unhandled datni klesi '${datniKlesi}' for Sumti ${originalPubKey}. Storing raw datni.`);
         }
     }
 
@@ -158,10 +164,7 @@ async function seedSumtiDocument(
             cid: cid,
             type: 'snapshot',
             raw: Buffer.from(snapshot),
-            metadata: {
-                klesi: sumtiRecord.ckaji.klesi,
-                cmene: sumtiRecord.ckaji.cmene,
-            },
+
             createdAt: now
         })
         .onConflictDoNothing({ target: schema.content.cid });
@@ -212,23 +215,12 @@ async function seedSelbriDocument(
     const loroDoc = new LoroDoc();
     loroDoc.setPeerId(1);
 
-    // Set meta data
-    const metaMap = loroDoc.getMap('meta');
-    metaMap.set('gismu', 'selbri');
-    metaMap.set('owner', GENESIS_HOMINIO);
-
-    // Set data structure
-    const dataMap = loroDoc.getMap('data');
-
-    // Set ckaji
-    dataMap.set('ckaji', {
-        klesi: selbriRecord.ckaji.klesi
-    });
+    // Set ckaji directly at the root
+    const ckajiMap = loroDoc.getMap('ckaji');
+    ckajiMap.set('klesi', selbriRecord.ckaji.klesi);
 
     // Set datni with selbri reference remapped to the generated pubkey
-    const datniMap = dataMap.setContainer('datni', new LoroMap());
-
-    // Translate selbri reference if it exists in our map
+    const datniMap = loroDoc.getMap('datni');
     let selbriRef = selbriRecord.datni.selbri;
     if (generatedKeys.has(selbriRef)) {
         selbriRef = generatedKeys.get(selbriRef)!;
@@ -266,10 +258,7 @@ async function seedSelbriDocument(
             cid: cid,
             type: 'snapshot',
             raw: Buffer.from(snapshot),
-            metadata: {
-                klesi: 'Selbri',
-                cneme: selbriRecord.datni.cneme,
-            },
+
             createdAt: now
         })
         .onConflictDoNothing({ target: schema.content.cid });
@@ -328,21 +317,12 @@ async function seedBridiDocument(
     const loroDoc = new LoroDoc();
     loroDoc.setPeerId(1);
 
-    // Set meta data
-    const metaMap = loroDoc.getMap('meta');
-    metaMap.set('gismu', 'bridi');
-    metaMap.set('owner', GENESIS_HOMINIO);
-
-    // Set data structure
-    const dataMap = loroDoc.getMap('data');
-
-    // Set ckaji
-    dataMap.set('ckaji', {
-        klesi: bridiRecord.ckaji.klesi
-    });
+    // Set ckaji directly at the root
+    const ckajiMap = loroDoc.getMap('ckaji');
+    ckajiMap.set('klesi', bridiRecord.ckaji.klesi);
 
     // Set datni
-    const datniMap = dataMap.setContainer('datni', new LoroMap());
+    const datniMap = loroDoc.getMap('datni');
     datniMap.set('selbri', selbriRef);
 
     // Set sumti with place structure, remapping any references
@@ -370,10 +350,7 @@ async function seedBridiDocument(
             cid: cid,
             type: 'snapshot',
             raw: Buffer.from(snapshot),
-            metadata: {
-                klesi: 'Bridi',
-                selbri: selbriRef,
-            },
+
             createdAt: now
         })
         .onConflictDoNothing({ target: schema.content.cid });
@@ -433,19 +410,21 @@ async function populateBridiIndex(
     const loroDoc = new LoroDoc();
     loroDoc.import(contentResult[0].raw);
 
-    // Get the data.datni.vasru map
-    const dataMap = loroDoc.getMap('data');
-    const datniMap = dataMap.get('datni') as LoroMap;
-    const vasruMap = datniMap.get('vasru') as LoroMap;
+    // Get the index map directly from the root 'datni' map - FIX
+    const indexMap = loroDoc.getMap('datni'); // datni IS the index map
+    if (!indexMap) {
+        console.error(`❌ ERROR: Could not find root 'datni' map in ${FACKI_BRIDI_PUBKEY}`);
+        return;
+    }
 
     // Update the index with the bridi data
     // First check if there's an entry for this selbri
-    if (vasruMap.get(selbriId) === undefined) {
+    if (indexMap.get(selbriId) === undefined) {
         // Create a new map for this selbri
-        vasruMap.set(selbriId, {});
+        indexMap.set(selbriId, {});
     }
 
-    const selbriMap = vasruMap.get(selbriId) as Record<string, unknown>;
+    const selbriMap = indexMap.get(selbriId) as Record<string, unknown>;
 
     // For each place in the sumti, add the bridi to the index
     for (const place in bridiData.sumti) {
@@ -477,8 +456,8 @@ async function populateBridiIndex(
         selbriMap[place] = placeMap;
     }
 
-    // Update the vasru map with the updated selbri map
-    vasruMap.set(selbriId, selbriMap);
+    // Update the root index map with the updated selbri map
+    // indexMap.set(selbriId, selbriMap); // No longer needed, direct modification
 
     // Export snapshot and save to database
     const snapshot = loroDoc.exportSnapshot();
@@ -490,10 +469,6 @@ async function populateBridiIndex(
             cid: cid,
             type: 'snapshot',
             raw: Buffer.from(snapshot),
-            metadata: {
-                klesi: 'Facki',
-                gismu: 'bridi_index',
-            },
             createdAt: now
         })
         .onConflictDoNothing({ target: schema.content.cid });
@@ -542,10 +517,12 @@ async function populateSelbriIndex(
     const loroDoc = new LoroDoc();
     loroDoc.import(contentResult[0].raw);
 
-    // Get the data.datni.vasru map (the index map)
-    const dataMap = loroDoc.getMap('data');
-    const datniMap = dataMap.get('datni') as LoroMap;
-    const indexMap = datniMap.get('vasru') as LoroMap; // This is where we store selbri pubkeys
+    // Get the index map directly from the root 'datni' map - FIX
+    const indexMap = loroDoc.getMap('datni'); // datni IS the index map
+    if (!indexMap) {
+        console.error(`❌ ERROR: Could not find root 'datni' map in ${FACKI_SELBRI_PUBKEY}`);
+        return;
+    }
 
     // Iterate over all selbri records and add their generated pubkeys to the index
     let addedCount = 0;
@@ -579,10 +556,7 @@ async function populateSelbriIndex(
             cid: cid,
             type: 'snapshot',
             raw: Buffer.from(snapshot),
-            metadata: {
-                klesi: 'Facki',
-                gismu: 'selbri_index', // Indicate this is the selbri index content
-            },
+
             createdAt: now
         })
         .onConflictDoNothing({ target: schema.content.cid });

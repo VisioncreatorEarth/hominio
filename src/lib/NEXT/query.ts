@@ -121,14 +121,13 @@ export async function executeQuery(
         try {
             const fackiSelbriDoc = await getSelbriDoc(FACKI_SELBRI_PUBKEY);
             if (fackiSelbriDoc) {
-                const dataMap = fackiSelbriDoc.getMap('data');
-                const datniMap = dataMap?.get('datni') as LoroMap | undefined;
-                const indexMap = datniMap?.get('vasru') as LoroMap | undefined;
+                const indexMap = fackiSelbriDoc.getMap('datni');
+
                 if (indexMap instanceof LoroMap) {
                     startSelbriPubkeys = Array.from(indexMap.keys());
                     console.log(`[Query Engine] Fetched ${startSelbriPubkeys.length} Selbri pubkeys from index.`);
                 } else {
-                    console.warn('[Query Engine] Facki Selbri index map (data.datni.vasru) not found or not a LoroMap. Cannot fetch all Selbri.');
+                    console.warn('[Query Engine] Facki Selbri index map (root datni) not found or not a LoroMap. Cannot fetch all Selbri.');
                     startSelbriPubkeys = []; // Reset to empty to prevent processing
                 }
             } else {

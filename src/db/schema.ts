@@ -33,9 +33,6 @@ export const content = pgTable('content', {
     // Raw binary data (serialized LoroDoc)
     raw: bytea('raw').notNull(),
 
-    // Mirrored metadata for indexability
-    metadata: jsonb('metadata'),
-
     // Created timestamp
     createdAt: timestamp('created_at').notNull().defaultNow()
 });

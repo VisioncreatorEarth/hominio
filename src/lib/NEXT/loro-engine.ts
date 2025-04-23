@@ -1,5 +1,5 @@
 import type { BridiRecord, SumtiId, SelbriId, Pubkey, SumtiValue } from './db';
-import { LoroList, LoroMap } from 'loro-crdt';
+import { LoroList } from 'loro-crdt';
 import type { LoroDoc } from 'loro-crdt';
 
 // Define index pubkeys for easy reference using Facki
@@ -66,8 +66,12 @@ export async function getSelbriDoc(pubkey: Pubkey): Promise<LoroDoc | null> {
  */
 export function getCkajiFromDoc(doc: LoroDoc | null): Record<string, unknown> | undefined {
     if (!doc) return undefined;
-    // Access the 'data' map and then the ckaji field
-    return doc.getMap('data').get('ckaji') as Record<string, unknown> | undefined;
+    try {
+        return doc.toJSON()?.['ckaji'] as Record<string, unknown> | undefined;
+    } catch (e) {
+        console.error(`[Loro Engine] Error calling toJSON() on doc:`, e);
+        return undefined;
+    }
 }
 
 /**
@@ -75,8 +79,12 @@ export function getCkajiFromDoc(doc: LoroDoc | null): Record<string, unknown> | 
  */
 export function getDatniFromDoc(doc: LoroDoc | null): Record<string, unknown> | SumtiValue | undefined {
     if (!doc) return undefined;
-    // Access the 'data' map and then the datni field
-    return doc.getMap('data').get('datni') as Record<string, unknown> | SumtiValue | undefined;
+    try {
+        return doc.toJSON()?.['datni'] as Record<string, unknown> | SumtiValue | undefined;
+    } catch (e) {
+        console.error(`[Loro Engine] Error calling toJSON() on doc:`, e);
+        return undefined;
+    }
 }
 
 /**
@@ -125,13 +133,9 @@ export async function checkSelbriExists(pubkey: Pubkey): Promise<boolean> {
         return false;
     }
     try {
-        // Access the index map via data.datni.vasru
-        const dataMap = fackiSelbriDoc.getMap('data');
-        if (!dataMap) return false; // data map missing
-        const datniMap = dataMap.get('datni') as LoroMap | undefined;
-        if (!datniMap || !(datniMap instanceof LoroMap)) return false; // datni map missing or not a map
-        const selbriIndexMap = datniMap.get('vasru') as LoroMap | undefined;
-        if (!selbriIndexMap || !(selbriIndexMap instanceof LoroMap)) return false; // vasru map missing or not a map
+        // Access the index map directly from the root 'datni' map
+        const selbriIndexMap = fackiSelbriDoc.getMap('datni');
+        if (!selbriIndexMap) return false; // datni map (index) missing
 
         return selbriIndexMap.get(pubkey) !== undefined;
     } catch (error) {
@@ -155,7 +159,14 @@ export async function getBridiIndexList(compositeKey: string): Promise<LoroList<
     }
 
     try {
+        // Access the index map directly from the root 'datni' map
         const bridiIndexMap = fackiBridiDoc.getMap('datni');
+        if (!bridiIndexMap) {
+            console.warn(`[Loro Engine] Facki Bridi Index document (${FACKI_BRIDI_PUBKEY}) 'datni' map not found.`);
+            return undefined;
+        }
+
+        // Access the specific list using the composite key from the root datni map
         const container = bridiIndexMap.get(compositeKey);
 
         if (container instanceof LoroList) {
