@@ -10,6 +10,8 @@
 	import type { LayoutData } from './$types';
 	import { type Snippet } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { hominioDB } from '$lib/KERNEL/hominio-db';
+	import { initializeLoroEngine } from '$lib/NEXT/loro-engine';
 
 	// Get the session store from the auth client
 	const sessionStore = authClient.useSession();
@@ -124,6 +126,9 @@
 	onMount(async () => {
 		await initDocs();
 		await initVibe();
+		// Initialize NEXT loro-engine with the hominioDB instance
+		initializeLoroEngine(hominioDB);
+		console.log('[Layout] Initialized NEXT loro-engine with hominioDB');
 	});
 
 	onDestroy(async () => {

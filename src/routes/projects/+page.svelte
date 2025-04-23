@@ -1,334 +1,85 @@
 <script lang="ts">
-	import { executeQuery, type LoroHqlQuery, type QueryResult } from '$lib/NEXT/query';
+	import { processReactiveQuery, type LoroHqlQuery, type QueryResult } from '$lib/NEXT/query';
+	import { getMe } from '$lib/KERNEL/hominio-auth';
+	import { writable, type Readable } from 'svelte/store';
 
-	let results: QueryResult[] | null = null;
-	let isLoading = false;
-	let error: string | null = null;
-	let currentQueryDefinition: LoroHqlQuery | null = null; // Track displayed query
-
-	// Example Query 1 (Map-Based Syntax): Find tasks assigned to 'Project: Website' (@project1) and their status.
-	const exampleQuery1: LoroHqlQuery = {
-		from: { sumti_pubkeys: ['@project1'] },
-		map: {
-			project_name: {
-				traverse: {
-					bridi_where: { selbri: '@selbri_ckaji', place: 'x1' },
-					return: 'first',
-					map: { _value: { place: 'x2', field: 'self.datni.vasru' } }
-				}
-			},
-			tasks: {
-				traverse: {
-					bridi_where: { selbri: '@selbri_gunka', place: 'x3' },
-					return: 'array',
-					map: {
-						task_id: { place: 'x2', field: 'self.ckaji.pubkey' },
-						task_name: {
-							place: 'x2',
-							traverse: {
-								bridi_where: { selbri: '@selbri_ckaji', place: 'x1' },
-								return: 'first',
-								map: { _value: { place: 'x2', field: 'self.datni.vasru' } }
-							}
-						},
-						worker: {
-							place: 'x1', // Target the worker node (at place x1 of gunka)
-							map: {
-								// Map the worker node itself
-								id: { field: 'self.ckaji.pubkey' },
-								// Traverse from the worker node to find its linked name
-								name: {
-									traverse: {
-										bridi_where: { selbri: '@selbri_ckaji', place: 'x1' }, // Worker is x1 in ckaji
-										return: 'first',
-										map: {
-											// Map the related name Sumti node (at place x2 of ckaji)
-											// Use temporary key, engine extracts value
-											_value: { place: 'x2', field: 'self.datni.vasru' }
-										}
-									}
-								}
-							}
-						}, // End worker object definition
-						status: {
-							// Nested traversal to find the task's status
-							place: 'x2', // Start traversal from the task node (x2 in gunka bridi)
-							traverse: {
-								bridi_where: { selbri: '@selbri_ckaji', place: 'x1' }, // Task is x1 in ckaji
-								return: 'first',
-								where_related: [
-									{
-										place: 'x2',
-										field: 'self.ckaji.pubkey',
-										condition: {
-											in: ['@status_inprogress', '@status_notstarted', '@status_completed']
-										}
-									}
-								],
-								map: {
-									value: { place: 'x2', field: 'self.datni.vasru' },
-									pubkey: { place: 'x2', field: 'self.ckaji.pubkey' }
-								}
-							}
-						} // End status object definition
-					} // End map for the main traverse
-				} // End traverse object
-			} // End tasks definition
-		} // End top-level map
-	}; // End exampleQuery1 definition
-
-	// Example Query 2: Find people who worked on tasks with skill '@skill_dev'
-	const exampleQuery2: LoroHqlQuery = {
-		from: { sumti_pubkeys: ['@skill_dev'] }, // Start from the skill Sumti
-		map: {
-			skill_name: { field: 'self.datni.vasru' },
-			tasks_with_skill: {
-				traverse: {
-					// Find Bridi where @skill_dev is the property (x2 of ckaji)
-					bridi_where: { selbri: '@selbri_ckaji', place: 'x2' },
-					return: 'array',
-					map: {
-						// Map the task node (x1 of ckaji)
-						task_id: { place: 'x1', field: 'self.ckaji.pubkey' },
-						task_name: {
-							place: 'x1',
-							traverse: {
-								bridi_where: { selbri: '@selbri_ckaji', place: 'x1' },
-								return: 'first',
-								map: { _value: { place: 'x2', field: 'self.datni.vasru' } }
-							}
-						},
-						// Nested traverse: Find worker associated with this task
-						worker: {
-							place: 'x1', // Start from the task node (x1 of ckaji)
-							traverse: {
-								// Find the gunka relationship for the task
-								bridi_where: { selbri: '@selbri_gunka', place: 'x2' }, // Task is x2 in gunka
-								return: 'first', // Assume one worker assignment shown
-								map: {
-									// Map the worker node (x1 of gunka)
-									worker_details: {
-										// Nest worker details
-										place: 'x1', // Target worker node
-										map: {
-											// Map fields from the worker Sumti
-											id: { field: 'self.ckaji.pubkey' },
-											// Nested traverse to get worker name
-											name: {
-												traverse: {
-													bridi_where: { selbri: '@selbri_ckaji', place: 'x1' },
-													return: 'first',
-													map: {
-														// Get the value from the name Sumti (x2)
-														_value: { place: 'x2', field: 'self.datni.vasru' }
-													}
-												}
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	};
-
-	// Example Query 3: Find tasks Person1 works on, their tags, the project, and the project leader.
-	const exampleQuery3: LoroHqlQuery = {
-		from: { sumti_pubkeys: ['@person1'] }, // Start from Person 1
-		map: {
-			person_id: { field: 'self.ckaji.pubkey' },
-			person_name: {
-				// Get Person 1's name
-				traverse: {
-					bridi_where: { selbri: '@selbri_ckaji', place: 'x1' },
-					return: 'first',
-					map: {
-						_value: { place: 'x2', field: 'self.datni.vasru' } // Extract name value
-					}
-				}
-			},
-			work_assignments: {
-				// Find gunka relationships where Person 1 is the worker (x1)
-				traverse: {
-					bridi_where: { selbri: '@selbri_gunka', place: 'x1' },
-					return: 'array', // Person might work on multiple tasks/projects
-					map: {
-						// Map details from the gunka relationship
-						task: {
-							// Details about the task (x2 in gunka)
-							place: 'x2',
-							map: {
-								// Map fields from the task Sumti
-								id: { field: 'self.ckaji.pubkey' },
-								name: {
-									traverse: {
-										bridi_where: { selbri: '@selbri_ckaji', place: 'x1' },
-										return: 'first',
-										map: { _value: { place: 'x2', field: 'self.datni.vasru' } }
-									}
-								},
-								// Nested traverse: Find tags for this task
-								tags: {
-									traverse: {
-										bridi_where: { selbri: '@selbri_ckaji', place: 'x1' }, // Task is x1
-										return: 'array',
-										where_related: [
-											{
-												// Filter related node (x2) to be a known tag
-												place: 'x2',
-												field: 'self.ckaji.pubkey',
-												condition: { in: ['@tag_frontend', '@tag_qa'] } // Add more tags if needed
-											}
-										],
-										map: {
-											// Extract the tag value itself
-											_tag: { place: 'x2', field: 'self.datni.vasru' }
-										}
-									}
-								}
-							}
-						},
-						project: {
-							// Details about the project (x3 in gunka)
-							place: 'x3',
-							map: {
-								// Map fields from the project Sumti
-								id: { field: 'self.ckaji.pubkey' },
-								name: {
-									traverse: {
-										bridi_where: { selbri: '@selbri_ckaji', place: 'x1' },
-										return: 'first',
-										// Filter: find the ckaji relation where x2 IS a person
-										// This implicitly assumes this person is the leader based on initialBridi data structure
-										// A more robust way would be to have a specific '@prop_leader' Sumti
-										where_related: [
-											{
-												place: 'x2',
-												field: 'self.ckaji.pubkey',
-												condition: { in: ['@person1', '@person2', '@person3'] }
-											}
-										],
-										map: {
-											// Map the leader node (x2)
-											leader_details: {
-												place: 'x2', // Target the leader Sumti (x2)
-												map: {
-													// Map the leader's details
-													id: { field: 'self.ckaji.pubkey' },
-													// Traverse to get leader's actual name
-													name: {
-														traverse: {
-															bridi_where: { selbri: '@selbri_ckaji', place: 'x1' },
-															return: 'first',
-															map: {
-																_value: { place: 'x2', field: 'self.datni.vasru' }
-															}
-														}
-													}
-												}
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	};
-
-	// Example Query 4: Fetch definitions for all known Selbri
+	// Define the example queries (keep these)
 	const exampleQuery4: LoroHqlQuery = {
 		from: {
-			// List all Selbri pubkeys from db.ts
-			selbri_pubkeys: ['@selbri_zukte', '@selbri_gunka', '@selbri_ckaji', '@selbri_prenu']
+			selbri_pubkeys: ['0x17af593bc5411987e911d3d49e033cbfc34c0f885cc2fd6a5b4161629eafaa93']
 		},
 		map: {
-			// Map fields directly from the SelbriRecord datni structure
-			id: { field: 'self.ckaji.pubkey' }, // The pubkey itself
-			// Note: We removed cmene, so a "name" isn't directly available here unless linked
-			x1_def: { field: 'self.datni.sumti.x1' }, // Definition/role of x1
-			x2_def: { field: 'self.datni.sumti.x2' }, // Definition/role of x2
-			x3_def: { field: 'self.datni.sumti.x3' }, // Definition/role of x3
-			x4_def: { field: 'self.datni.sumti.x4' }, // Definition/role of x4
-			x5_def: { field: 'self.datni.sumti.x5' } // Definition/role of x5
+			id: { field: 'doc.pubkey' },
+			lojban_name: { field: 'self.datni.cneme' },
+			x1_def: { field: 'self.datni.sumti.x1' },
+			x2_def: { field: 'self.datni.sumti.x2' },
+			x3_def: { field: 'self.datni.sumti.x3' },
+			x4_def: { field: 'self.datni.sumti.x4' },
+			x5_def: { field: 'self.datni.sumti.x5' },
+			translations: { field: 'self.datni.fanva' },
+			prompts: { field: 'self.datni.stidi' }
 		}
-		// No 'where' clause needed as we are providing the specific pubkeys
 	};
 
-	async function runQuery(queryToRun: LoroHqlQuery) {
-		isLoading = true;
-		error = null;
-		results = null;
-		currentQueryDefinition = queryToRun; // Store the query being run
-		try {
-			console.log('Running Query:', JSON.stringify(queryToRun, null, 2));
-			const queryResults = await executeQuery(queryToRun);
-			console.log('Query Results:', queryResults);
-			results = queryResults;
-		} catch (err) {
-			console.error('Query execution failed:', err);
-			error = err instanceof Error ? err.message : 'An unknown error occurred';
-		} finally {
-			isLoading = false;
-		}
+	// --- Use writable store for active query ---
+	const activeQueryDefinition = writable<LoroHqlQuery | null>(null);
+
+	// --- Setup the main reactive query store using the writable store directly ---
+	const queryResultsStore: Readable<QueryResult[] | null | undefined> = processReactiveQuery(
+		getMe,
+		activeQueryDefinition
+	);
+
+	// --- Simplified runQuery function using .set ---
+	function runQuery(queryToRun: LoroHqlQuery) {
+		const queryName = queryToRun.from?.selbri_pubkeys ? 'Example 4' : 'Example 5'; // Determine name based on from clause
+		console.log(`[runQuery] Setting active query definition: ${queryName}`);
+		activeQueryDefinition.set(queryToRun); // Use .set() on the writable store
 	}
+
+	// Update helper type
+	type SelbriQueryResult = {
+		id: string;
+		lojban_name?: string;
+		x1_def?: string;
+		x2_def?: string;
+		x3_def?: string;
+		x4_def?: string;
+		x5_def?: string;
+		translations?: Record<string, Record<string, string>>;
+		prompts?: Record<string, string>;
+	};
 </script>
 
 <div class="p-6 text-black">
 	<h1 class="mb-4 text-2xl font-bold">Loro HQL Test Page</h1>
 
-	<div class="mb-4 flex flex-wrap space-y-2 space-x-4">
-		<button
-			class="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 disabled:opacity-50"
-			on:click={() => runQuery(exampleQuery1)}
-			disabled={isLoading}
-		>
-			{isLoading ? 'Running...' : 'Run Query 1 (Project Tasks)'}
-		</button>
-		<button
-			class="rounded bg-green-600 px-4 py-2 text-white hover:bg-green-700 disabled:opacity-50"
-			on:click={() => runQuery(exampleQuery2)}
-			disabled={isLoading}
-		>
-			{isLoading ? 'Running...' : 'Run Query 2 (Dev Skill Tasks)'}
-		</button>
-		<button
-			class="rounded bg-purple-600 px-4 py-2 text-white hover:bg-purple-700 disabled:opacity-50"
-			on:click={() => runQuery(exampleQuery3)}
-			disabled={isLoading}
-		>
-			{isLoading ? 'Running...' : 'Run Query 3 (Person1 Details)'}
-		</button>
+	<div class="mb-4 flex flex-wrap items-start gap-2">
 		<button
 			class="rounded bg-slate-600 px-4 py-2 text-white hover:bg-slate-700 disabled:opacity-50"
 			on:click={() => runQuery(exampleQuery4)}
-			disabled={isLoading}
+			disabled={$queryResultsStore === undefined && $activeQueryDefinition?.from?.selbri_pubkeys}
 		>
-			{isLoading ? 'Running...' : 'Run Query 4 (All Selbri Defs)'}
+			{$queryResultsStore === undefined && $activeQueryDefinition?.from?.selbri_pubkeys
+				? 'Running...'
+				: 'Run Query  (Selbri Defs)'}
 		</button>
 	</div>
 
-	{#if error}
+	{#if $queryResultsStore === null}
 		<div class="mt-4 rounded border border-red-400 bg-red-100 p-4 text-red-700">
 			<strong>Error:</strong>
-			{error}
+			Query execution failed
 		</div>
 	{/if}
 
-	<!-- 50/50 Layout Container -->
 	<div class="mt-6 flex w-full space-x-6">
-		<!-- Left Side: Query Definition -->
 		<div class="w-1/2">
 			<h2 class="mb-2 text-xl font-semibold">Query Definition Used:</h2>
-			{#if currentQueryDefinition}
+			{#if $activeQueryDefinition}
 				<pre
 					class="overflow-x-auto rounded border border-gray-300 bg-gray-100 p-4 text-sm">{JSON.stringify(
-						currentQueryDefinition,
+						$activeQueryDefinition,
 						null,
 						2
 					)}</pre>
@@ -341,28 +92,83 @@
 			{/if}
 		</div>
 
-		<!-- Right Side: Query Results -->
 		<div class="w-1/2">
 			<h2 class="mb-2 text-xl font-semibold">Query Results:</h2>
-			{#if results}
-				<pre
-					class="overflow-x-auto rounded border border-gray-300 bg-gray-100 p-4 text-sm">{JSON.stringify(
-						results,
-						null,
-						2
-					)}</pre>
-			{:else if !isLoading}
-				<!-- Optional: Placeholder if results are null and not loading -->
-				<div
-					class="flex h-48 items-center justify-center rounded border border-gray-300 bg-gray-100 p-4 text-gray-500"
-				>
-					{currentQueryDefinition ? 'No results returned.' : 'Click a button to run a query...'}
-				</div>
-			{:else if isLoading}
+			{#if $queryResultsStore === undefined}
 				<div
 					class="flex h-48 items-center justify-center rounded border border-gray-300 bg-gray-100 p-4 text-gray-500"
 				>
 					Loading results...
+				</div>
+			{:else if $queryResultsStore}
+				{#if $activeQueryDefinition?.from?.selbri_pubkeys && $queryResultsStore.length > 0}
+					<div class="space-y-4">
+						{#each $queryResultsStore as result (result.id)}
+							{@const selbri = result as SelbriQueryResult}
+							<div class="rounded border border-gray-300 bg-gray-50 p-4">
+								<h3 class="mb-2 text-lg font-semibold">
+									{selbri.id} ({selbri.lojban_name || 'N/A'})
+								</h3>
+								<div class="mb-3">
+									<h4 class="text-md mb-1 font-medium">Lojban Definitions:</h4>
+									<ul class="list-disc space-y-1 pl-5 text-sm">
+										{#if selbri.x1_def}<li><strong>x1:</strong> {selbri.x1_def}</li>{/if}
+										{#if selbri.x2_def}<li><strong>x2:</strong> {selbri.x2_def}</li>{/if}
+										{#if selbri.x3_def}<li><strong>x3:</strong> {selbri.x3_def}</li>{/if}
+										{#if selbri.x4_def}<li><strong>x4:</strong> {selbri.x4_def}</li>{/if}
+										{#if selbri.x5_def}<li><strong>x5:</strong> {selbri.x5_def}</li>{/if}
+									</ul>
+								</div>
+								{#if selbri.translations}
+									<div class="mb-3">
+										<h4 class="text-md mb-1 font-medium">Translations:</h4>
+										{#each Object.entries(selbri.translations) as [lang, trans] (lang)}
+											<div class="mb-2 pl-3">
+												<span class="font-semibold text-gray-700">{lang}:</span>
+												<ul class="list-disc space-y-1 pl-5 text-sm">
+													{#if trans.x1}<li><strong>x1:</strong> {trans.x1}</li>{/if}
+													{#if trans.x2}<li><strong>x2:</strong> {trans.x2}</li>{/if}
+													{#if trans.x3}<li><strong>x3:</strong> {trans.x3}</li>{/if}
+													{#if trans.x4}<li><strong>x4:</strong> {trans.x4}</li>{/if}
+													{#if trans.x5}<li><strong>x5:</strong> {trans.x5}</li>{/if}
+												</ul>
+											</div>
+										{/each}
+									</div>
+								{/if}
+								{#if selbri.prompts}
+									<div class="mt-3 border-t border-gray-200 pt-3">
+										<h4 class="text-md mb-1 font-medium">LLM Prompts:</h4>
+										{#each Object.entries(selbri.prompts) as [lang, prompt] (lang)}
+											<div class="mb-1 pl-3">
+												<span class="font-semibold text-gray-700">{lang}:</span>
+												<p class="text-sm text-gray-600 italic">{prompt}</p>
+											</div>
+										{/each}
+									</div>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				{:else if $activeQueryDefinition?.from?.sumti_pubkeys && $queryResultsStore.length > 0}
+					<h3 class="mb-2 text-lg font-semibold">LORO HQL Syntax Prompt:</h3>
+					{#each $queryResultsStore as result}
+						<pre
+							class="rounded border border-gray-300 bg-gray-100 p-4 font-mono text-sm whitespace-pre-wrap">{result.prompt_text}</pre>
+					{/each}
+				{:else}
+					<pre
+						class="overflow-x-auto rounded border border-gray-300 bg-gray-100 p-4 text-sm">{JSON.stringify(
+							$queryResultsStore,
+							null,
+							2
+						)}</pre>
+				{/if}
+			{:else}
+				<div
+					class="flex h-48 items-center justify-center rounded border border-gray-300 bg-gray-100 p-4 text-gray-500"
+				>
+					{$activeQueryDefinition ? 'No results returned.' : 'Click a button to run a query...'}
 				</div>
 			{/if}
 		</div>

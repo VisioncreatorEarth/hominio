@@ -11,7 +11,7 @@ import {
 const INDEX_ROOT_MAP_KEY = '__indexRoot';
 
 /** Helper to get or create the root LoroMap container used for indexing */
-function getOrCreateIndexRootMap(doc: Loro): LoroMap {
+export function getOrCreateIndexRootMap(doc: Loro): LoroMap {
     // Attempt to get the map
     // Use const as it's not reassigned
     const indexMap = doc.getMap(INDEX_ROOT_MAP_KEY);
@@ -30,7 +30,7 @@ function getOrCreateIndexRootMap(doc: Loro): LoroMap {
 
 
 /** Helper to get or insert a LoroList container in a LoroMap */
-function getOrInsertListContainer(map: LoroMap, key: string): LoroList<string> {
+export function getOrInsertListContainer(map: LoroMap, key: string): LoroList<string> {
     // Check if the key exists and holds a container
     const container = map.get(key);
 
@@ -55,55 +55,55 @@ function getOrInsertListContainer(map: LoroMap, key: string): LoroList<string> {
 }
 
 // Function to populate bridi index
-export function populateBridiIndex(doc: Loro, text: string, textContainerId: ContainerID): void {
-    // TEMP: Placeholder for Bridi type until import is fixed
-    type Bridi = { selbri: string; sumti: string[] };
-
+export function populateBridiIndex(doc: Loro, bridiData: { selbri: string; sumti: Record<string, string> }, textContainerId: ContainerID): void {
     console.log('[Indexing] Starting bridi index population');
     try {
-        // const parsed = await parseBridiInternal({ text, mode: 'strict', doc }); // Re-add when module fixed
-        // console.log('[Indexing] Parsed bridi:', parsed);
-
-        // TEMP: Placeholder for actual parsing result until available
-        const parsed: Bridi[] = [
-            // Add sample Bridi objects here based on the expected structure
-            // Example: { selbri: "...", sumti: ["...", "..."] }
-            // This needs to be replaced with actual parsing logic using `text`
-        ];
-        if (!parsed || parsed.length === 0) {
-            // console.log('[Indexing] No bridi found or parsing failed.'); // Less noisy log
-            return;
-        }
-
-        // Use the new helper function
+        // Use the exported helper function
         const indexMap = getOrCreateIndexRootMap(doc);
 
-        parsed.forEach((bridi) => {
-            const selbriKey = `selbri:${bridi.selbri}`;
-            const selbriList = getOrInsertListContainer(indexMap, selbriKey);
+        // Convert the bridiData into the format needed for indexing
+        const selbri = bridiData.selbri;
+        const sumtiEntries = Object.entries(bridiData.sumti);
 
-            // Use .toArray() and ensure ID is string
-            const listValue = selbriList.toArray();
-            const idString = textContainerId.toString();
-            if (!listValue.includes(idString)) {
-                selbriList.push(idString);
-                // console.log(`[Indexing] Added ${idString} to list for selbri: ${bridi.selbri}`);
-            }
+        // Index by selbri
+        const selbriKey = `selbri:${selbri}`;
+        const selbriList = getOrInsertListContainer(indexMap, selbriKey);
 
-            bridi.sumti.forEach((sumti: string) => {
-                const sumtiKey = `sumti:${sumti}`;
+        // Use .toArray() and ensure ID is string
+        const listValue = selbriList.toArray();
+        const idString = textContainerId.toString();
+        if (!listValue.includes(idString)) {
+            selbriList.push(idString);
+            console.log(`[Indexing] Added ${idString} to list for selbri: ${selbri}`);
+        }
+
+        // Index by sumti (for each place)
+        for (const [place, sumtiValue] of sumtiEntries) {
+            if (sumtiValue) {
+                // Create composite key for efficient relational lookups
+                // Format: selbri:place:sumtiValue (e.g., "@selbri_zukte:x1:@person1")
+                const compositeKey = `${selbri}:${place}:${sumtiValue}`;
+                const compositeList = getOrInsertListContainer(indexMap, compositeKey);
+
+                // Add bridi reference if not already present
+                const compositeListValue = compositeList.toArray();
+                if (!compositeListValue.includes(idString)) {
+                    compositeList.push(idString);
+                    console.log(`[Indexing] Added ${idString} to composite list for key: ${compositeKey}`);
+                }
+
+                // Also index by sumti value directly
+                const sumtiKey = `sumti:${sumtiValue}`;
                 const sumtiList = getOrInsertListContainer(indexMap, sumtiKey);
-                // Use .toArray() and ensure ID is string
                 const sumtiListValue = sumtiList.toArray();
                 if (!sumtiListValue.includes(idString)) {
                     sumtiList.push(idString);
-                    // console.log(`[Indexing] Added ${idString} to list for sumti: ${sumti}`);
+                    console.log(`[Indexing] Added ${idString} to list for sumti: ${sumtiValue}`);
                 }
-            });
-        });
+            }
+        }
 
-        // console.log('[Indexing] Bridi index population complete.'); // Less noisy log
-        // console.log('[Indexing] Final index map state:', indexMap.toJSON()); // Be careful logging large states
+        console.log('[Indexing] Bridi index population complete.');
     } catch (error) {
         console.error('[Indexing] Error during bridi index population:', error);
     }

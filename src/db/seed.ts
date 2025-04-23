@@ -5,195 +5,63 @@ import { blake3 } from '@noble/hashes/blake3';
 import b4a from 'b4a';
 import * as schema from './schema';
 import { eq } from 'drizzle-orm';
-import { validateSelbriDocStructure, validateBridiDocAgainstSelbri } from '../lib/KERNEL/hominio-validate';
-import { GENESIS_PUBKEY, GENESIS_HOMINIO } from './constants';
+import { GENESIS_HOMINIO } from './constants';
 
-// Define a type for the JSON representation expected by the validator
-// This helps avoid using 'any'
-type LoroDocJson = Record<string, unknown> & {
-    meta?: Record<string, unknown>;
-    data?: Record<string, unknown>;
-    pubKey?: string;
-}
+// Import data from seeding files
+import { initialSumti } from './seeding/sumti';
+import { initialSelbri } from './seeding/selbri';
+import { initialBridi } from './seeding/bridi';
+import type { SumtiRecord } from './seeding/sumti';
+import type { SelbriRecord } from './seeding/selbri';
+import type { BridiRecord } from './seeding/bridi';
 
-// Basic placeholder types matching the structure used
-interface SumtiDefinition {
-    description: string;
-}
+// Define Facki index pubkeys
+const FACKI_META_PUBKEY = '@facki_meta';
+const FACKI_SUMTI_PUBKEY = '@facki_sumti';
+const FACKI_SELBRI_PUBKEY = '@facki_selbri';
+const FACKI_BRIDI_PUBKEY = '@facki_bridi';
 
-// New interface for validation rules per sumti place (Simplified)
-interface ValidationRule {
-    required: boolean;
-    type: string; // e.g., 'text', 'list', 'map', '@selbri_name'
-}
-
-interface TranslationContent { // Renamed from TranslationDefinition
-    cmene: string; // Renamed from name
-    sumti: Record<string, string>;
-}
-
-interface BaseDefinition {
-    cmene: string; // Renamed from name
-    sumti: Record<string, SumtiDefinition>; // Holds descriptions only
-}
-
-interface SelbriDefinition extends BaseDefinition {
-    pubkey?: string; // Optional original pubkey, will be generated unless 'gismu'
-    validation: Record<string, ValidationRule>; // NEW: Holds required flag and validation rules
-    skicu?: Record<string, TranslationContent>; // NEW: Renamed from translations, map keyed by lang code
-}
-
-interface BridiDefinition {
-    pubkey?: string; // Optional original pubkey, will be generated
-    selbriRefName: string;
-    cmene: string; // Renamed from name
-    // Allow object types for sumti values in seed data (for LoroMap)
-    sumti: Record<string, string | number | boolean | null | object>;
-    skicu?: Record<string, TranslationContent>; // Added skicu to Bridi for consistency? Optional.
-}
-
-const selbriToSeed: Record<string, SelbriDefinition> = {
-    "gismu": {
-        cmene: "gismu",
-        sumti: { // Descriptions only
-            x1: { description: "lo lojbo ke krasi valsi" },
-            x2: { description: "lo bridi be lo ka ce'u skicu zo'e" },
-            x3: { description: "lo sumti javni" },
-            x4: { description: "lo rafsi" }
-        },
-        validation: { // Validation rules separated
-            x1: { required: true, type: 'text' },
-            x2: { required: true, type: 'text' },
-            x3: { required: true, type: 'text' },
-            x4: { required: false, type: 'text' }
-        },
-        skicu: { // Renamed from translations, map keyed by lang
-            "en": { cmene: "Root Word", sumti: { x1: "A Lojban root word", x2: "Relation/concept expressed by the word", x3: "Argument roles for the relation", x4: "Associated affix(es)" } },
-            "de": { cmene: "Stammwort", sumti: { x1: "Das Stammwort", x2: "Ausgedrückte Relation/Konzept", x3: "Argumentrollen der Relation", x4: "Zugehörige Affixe" } }
+// Define Facki records directly here
+const initialFacki: SumtiRecord[] = [
+    // System Index Sumti Definitions (Facki)
+    {
+        pubkey: FACKI_META_PUBKEY,
+        ckaji: { klesi: 'Facki' },
+        datni: {
+            klesi: 'LoroMap',
+            vasru: {
+                sumti: FACKI_SUMTI_PUBKEY,
+                selbri: FACKI_SELBRI_PUBKEY,
+                bridi: FACKI_BRIDI_PUBKEY
+            }
         }
     },
-    "prenu": {
-        cmene: "prenu",
-        sumti: {
-            x1: { description: "lo prenu" }
-        },
-        validation: {
-            x1: { required: true, type: 'text' }
-        },
-        skicu: {
-            "en": { cmene: "Person", sumti: { x1: "Person/entity with personhood" } },
-            "de": { cmene: "Person", sumti: { x1: "Person/Wesen mit Persönlichkeit" } }
-        }
+    {
+        pubkey: FACKI_SUMTI_PUBKEY,
+        ckaji: { klesi: 'Facki' },
+        datni: { klesi: 'LoroMap', vasru: {} }
     },
-    "gunka": {
-        cmene: "gunka",
-        sumti: {
-            x1: { description: "lo gunka" },
-            x2: { description: "lo se gunka" },
-            x3: { description: "lo te gunka" }
-        },
-        validation: {
-            x1: { required: true, type: '@prenu' },
-            x2: { required: true, type: 'text' },
-            x3: { required: false, type: 'text' }
-        },
-        skicu: {
-            "en": { cmene: "Work", sumti: { x1: "Worker/laborer", x2: "Task/activity worked on", x3: "Purpose/goal of the work" } },
-            "de": { cmene: "Arbeit", sumti: { x1: "Arbeiter", x2: "Aufgabe/Tätigkeit, an der gearbeitet wird", x3: "Zweck/Ziel der Arbeit" } }
-        }
+    {
+        pubkey: FACKI_SELBRI_PUBKEY,
+        ckaji: { klesi: 'Facki' },
+        datni: { klesi: 'LoroMap', vasru: {} }
     },
-    "tcini": {
-        cmene: "tcini",
-        sumti: {
-            x1: { description: "lo tcini" },
-            x2: { description: "lo se tcini" }
-        },
-        validation: {
-            x1: { required: true, type: 'text' },
-            x2: { required: true, type: '@gunka' }
-        },
-        skicu: {
-            "en": { cmene: "Status", sumti: { x1: "Situation/state/condition", x2: "Entity in the situation/state/condition" } },
-            "de": { cmene: "Status", sumti: { x1: "Situation/Zustand/Bedingung", x2: "Entität in der Situation/dem Zustand/der Bedingung" } }
-        }
+    {
+        pubkey: FACKI_BRIDI_PUBKEY,
+        ckaji: { klesi: 'Facki' },
+        datni: { klesi: 'LoroMap', vasru: {} }
     },
-    "liste": {
-        cmene: "liste",
-        sumti: {
-            x1: { description: "lo liste be lo se lista" },
-            x2: { description: "lo se lista" },
-            x3: { description: "lo tcila be lo liste" },
-            x4: { description: "lo ve lista" }
-        },
-        validation: {
-            x1: { required: true, type: 'text' },
-            x2: { required: true, type: 'map' },
-            x3: { required: false, type: 'map' },
-            x4: { required: false, type: 'map' }
-        },
-        skicu: {
-            "en": { cmene: "List", sumti: { x1: "The list identifier/sequence", x2: "Item in the list", x3: "Property/ordering", x4: "Containing set/mass" } },
-            "de": { cmene: "Liste", sumti: { x1: "Der Listenbezeichner/Sequenz", x2: "Element in der Liste", x3: "Eigenschaft/Ordnung", x4: "Enthaltende Menge" } }
-        }
-    },
-};
+];
 
-const bridiToSeed: Record<string, BridiDefinition> = {
-    "fiona": {
-        selbriRefName: "prenu",
-        cmene: "Fiona Example", // Renamed from name
-        sumti: {
-            x1: "Fiona"
-        }
-    },
-    "main_list": {
-        selbriRefName: "liste",
-        cmene: "Main Todo List", // Renamed from name
-        sumti: {
-            x1: "Main",
-            x2: {}
-        }
-    },
-    "task1_buy_milk": {
-        selbriRefName: "gunka",
-        cmene: "Buy Milk Task", // Renamed from name
-        sumti: {
-            x1: "@fiona",
-            x2: "Buy Oat Milk",
-            x3: "@main_list"
-        }
-    },
-    "task2_feed_cat": {
-        selbriRefName: "gunka",
-        cmene: "Feed Cat Task", // Renamed from name
-        sumti: {
-            x1: "@fiona",
-            x2: "Feed the cat",
-            x3: "@main_list"
-        }
-    },
-    "status_task1": {
-        selbriRefName: "tcini",
-        cmene: "Status for Task 1", // Renamed from name
-        sumti: {
-            x1: "todo",
-            x2: "@task1_buy_milk"
-        }
-    },
-    "status_task2": {
-        selbriRefName: "tcini",
-        cmene: "Status for Task 2", // Renamed from name
-        sumti: {
-            x1: "done",
-            x2: "@task2_feed_cat"
-        }
-    }
-};
-
-// Define LoroJsonValue locally
+// Helper type for json data
 type LoroJsonValue = string | number | boolean | null | LoroJsonObject | LoroJsonArray;
 interface LoroJsonObject { [key: string]: LoroJsonValue }
 type LoroJsonArray = LoroJsonValue[];
+
+async function hashSnapshot(snapshot: Uint8Array): Promise<string> {
+    const hashBytes = blake3(snapshot);
+    return b4a.toString(hashBytes, 'hex');
+}
 
 async function generateDeterministicPubKey(seed: string): Promise<string> {
     const hashBytes = blake3(b4a.from(seed, 'utf8'));
@@ -201,50 +69,26 @@ async function generateDeterministicPubKey(seed: string): Promise<string> {
     return `0x${hexString}`;
 }
 
-async function hashSnapshot(snapshot: Uint8Array): Promise<string> {
-    const hashBytes = blake3(snapshot);
-    return b4a.toString(hashBytes, 'hex');
-}
-
-async function seedDocument(
+async function seedSumtiDocument(
     db: ReturnType<typeof drizzle>,
-    docKey: string,
-    docDefinition: SelbriDefinition | BridiDefinition,
-    gismuType: 'selbri' | 'bridi',
+    sumtiRecord: SumtiRecord,
     generatedKeys: Map<string, string>
 ) {
-    let pubKey: string;
-    let selbriRef: string | null = null;
-    const isRootGismuSelbri = docKey === 'gismu' && gismuType === 'selbri';
+    const originalPubKey = sumtiRecord.pubkey;
 
-    if (isRootGismuSelbri) {
-        pubKey = GENESIS_PUBKEY;
-    } else if (docDefinition.pubkey) {
-        pubKey = docDefinition.pubkey;
-    } else {
-        pubKey = await generateDeterministicPubKey(docKey);
-    }
-    if (!generatedKeys.has(docKey)) {
-        generatedKeys.set(docKey, pubKey);
-    }
+    // Skip Facki records - keep their original pubkeys
+    const isFackiRecord = originalPubKey.startsWith('@facki_');
 
-    let referencedSelbriName: string | null = null;
-    if (gismuType === 'bridi') {
-        const bridiDef = docDefinition as BridiDefinition;
-        referencedSelbriName = bridiDef.selbriRefName;
-        if (!referencedSelbriName) {
-            console.error(`❌ CRITICAL: Bridi "${docKey}" is missing the required 'selbriRefName' field.`);
-            return;
-        }
-        const selbriPubKey = generatedKeys.get(referencedSelbriName);
-        if (!selbriPubKey) {
-            console.error(`❌ CRITICAL: Selbri PubKey for referenced selbri "${referencedSelbriName}" not found in generatedKeys map when seeding bridi "${docKey}". Ensure selbri are seeded first.`);
-            return;
-        }
-        selbriRef = `@${selbriPubKey}`;
+    // Generate deterministic pubkey if not already in the map and not a Facki record
+    let pubKey = originalPubKey;
+    if (!generatedKeys.has(originalPubKey) && !isFackiRecord) {
+        pubKey = await generateDeterministicPubKey(originalPubKey);
+        generatedKeys.set(originalPubKey, pubKey);
+    } else if (generatedKeys.has(originalPubKey)) {
+        pubKey = generatedKeys.get(originalPubKey)!;
     }
 
-    console.log(`Processing ${gismuType}: ${docKey} -> PubKey: ${pubKey}${gismuType === 'bridi' ? `, Refers to Selbri: ${referencedSelbriName} (${selbriRef})` : ''}`);
+    console.log(`Processing Sumti: ${originalPubKey} -> ${pubKey}`);
 
     const existingDoc = await db.select({ pubKey: schema.docs.pubKey })
         .from(schema.docs)
@@ -252,214 +96,59 @@ async function seedDocument(
         .limit(1);
     if (existingDoc.length > 0) {
         console.log(`  - Document already exists. Skipping.`);
-        return;
+        return pubKey;
     }
 
     const loroDoc = new LoroDoc();
     loroDoc.setPeerId(1);
 
-    // Prepare meta first
-    const metaForValidation: Record<string, unknown> = {
-        gismu: gismuType,
-        cmene: docDefinition.cmene,
-        owner: GENESIS_HOMINIO
-    };
-    // Special case: Add meta.selbri ONLY for the root gismu selbri BEFORE validation
-    if (isRootGismuSelbri) {
-        metaForValidation.selbri = `@${GENESIS_PUBKEY}`;
-    }
-
-    // Prepare data based on type
-    const dataForValidation: Record<string, unknown> = {};
-    if (gismuType === 'bridi') {
-        // Resolve bridi sumti references
-        const bridiDef = docDefinition as BridiDefinition;
-        const resolvedBridiSumti = { ...bridiDef.sumti };
-        for (const sumtiKey in resolvedBridiSumti) {
-            const sumtiValue = resolvedBridiSumti[sumtiKey];
-            if (typeof sumtiValue === 'string' && sumtiValue.startsWith('@')) {
-                const referencedKeyName = sumtiValue.substring(1);
-                const referencedPubKey = generatedKeys.get(referencedKeyName);
-                if (!referencedPubKey) {
-                    console.error(`  - ❌ ERROR: Could not resolve reference "${sumtiValue}" for sumti "${sumtiKey}" in bridi "${docKey}". Referenced key "${referencedKeyName}" not found.`);
-                    return; // Stop seeding this document
-                }
-                resolvedBridiSumti[sumtiKey] = `@${referencedPubKey}`;
-            }
-        }
-        dataForValidation.sumti = resolvedBridiSumti;
-        dataForValidation.selbri = selbriRef; // Set selbri reference (@pubkey)
-        if (bridiDef.skicu) { // Optional: add skicu if present for bridi
-            dataForValidation.skicu = bridiDef.skicu;
-        }
-    } else { // gismuType === 'selbri'
-        const selbriDef = docDefinition as SelbriDefinition;
-        // Separate sumti descriptions, validation rules, and skicu
-        const sumtiDescriptions: Record<string, unknown> = {};
-        for (const key in selbriDef.sumti) {
-            sumtiDescriptions[key] = { description: selbriDef.sumti[key].description };
-        }
-        dataForValidation.sumti = sumtiDescriptions;
-        dataForValidation.javni = selbriDef.validation; // Assign to javni, not validation
-        if (selbriDef.skicu) {
-            dataForValidation.skicu = selbriDef.skicu; // Access skicu only for SelbriDefinition
-        }
-    }
-
-    const docJsonForValidation: LoroDocJson = {
-        pubKey: pubKey,
-        meta: metaForValidation,
-        data: dataForValidation
-    };
-
-    // --- Populate LoroDoc ---
+    // Set meta data
     const metaMap = loroDoc.getMap('meta');
-    for (const key in metaForValidation) {
-        if (Object.prototype.hasOwnProperty.call(metaForValidation, key)) {
-            metaMap.set(key, metaForValidation[key]);
-        }
+    metaMap.set('gismu', 'sumti');
+    metaMap.set('owner', GENESIS_HOMINIO);
+    if (sumtiRecord.ckaji.cmene) {
+        metaMap.set('cmene', sumtiRecord.ckaji.cmene);
     }
-    metaMap.set('gismu', gismuType);
 
+    // Set data structure
     const dataMap = loroDoc.getMap('data');
-    let selbriJavniRules: Record<string, ValidationRule> | undefined = undefined;
 
-    if (gismuType === 'bridi' && referencedSelbriName) {
-        const selbriDef = selbriToSeed[referencedSelbriName];
-        if (selbriDef) {
-            selbriJavniRules = selbriDef.validation;
-        }
-        dataMap.set('selbri', dataForValidation.selbri);
-    }
+    // Set ckaji
+    dataMap.set('ckaji', {
+        klesi: sumtiRecord.ckaji.klesi,
+        cmene: sumtiRecord.ckaji.cmene,
+    });
 
-    // Always set sumti (descriptions for selbri, values or containers for bridi)
-    if (dataForValidation.sumti && typeof dataForValidation.sumti === 'object') {
-        const sumtiMap = dataMap.setContainer('sumti', new LoroMap());
-        const sumtiData = dataForValidation.sumti as Record<string, LoroJsonValue>;
+    // Set datni with appropriate CRDT container
+    if (sumtiRecord.datni) {
+        const datniMap = dataMap.setContainer('datni', new LoroMap());
 
-        for (const key in sumtiData) {
-            if (Object.prototype.hasOwnProperty.call(sumtiData, key)) {
-                const value = sumtiData[key];
-                const rule = selbriJavniRules?.[key];
-                const ruleType = rule?.type; // Use simplified type field
-
-                try {
-                    if (gismuType === 'bridi' && ruleType) {
-                        if (ruleType.startsWith('@')) {
-                            // It's a reference, set the primitive string value
-                            if (typeof value === 'string' && value.startsWith('@')) {
-                                sumtiMap.set(key, value);
-                            } else {
-                                console.warn(`[Seed] Expected reference string for sumti "${key}" but got:`, value);
-                                sumtiMap.set(key, null); // Set null on mismatch
-                            }
-                        } else if (ruleType === 'text') {
-                            if (typeof value === 'string') {
-                                const textContainer = sumtiMap.setContainer(key, new LoroText());
-                                textContainer.insert(0, value);
-                            } else {
-                                console.warn(`[Seed] Expected string value for LoroText sumti "${key}" but got:`, value);
-                                // Create empty container on mismatch?
-                                sumtiMap.setContainer(key, new LoroText());
-                            }
-                        } else if (ruleType === 'list') {
-                            if (Array.isArray(value)) {
-                                const listContainer = sumtiMap.setContainer(key, new LoroList());
-                                value.forEach((item, index) => listContainer.insert(index, item));
-                            } else {
-                                console.warn(`[Seed] Expected array value for LoroList sumti "${key}" but got:`, value);
-                                sumtiMap.setContainer(key, new LoroList());
-                            }
-                        } else if (ruleType === 'map') {
-                            if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-                                const nestedMapContainer = sumtiMap.setContainer(key, new LoroMap());
-                                for (const nestedKey in value as Record<string, unknown>) {
-                                    nestedMapContainer.set(nestedKey, (value as Record<string, unknown>)[nestedKey]);
-                                }
-                            } else {
-                                console.warn(`[Seed] Expected object value for LoroMap sumti "${key}" but got:`, value);
-                                sumtiMap.setContainer(key, new LoroMap());
-                            }
-                        } else {
-                            console.warn(`[Seed] Unsupported validation type "${ruleType}" for sumti "${key}". Setting value as is.`);
-                            sumtiMap.set(key, value);
-                        }
-                    } else {
-                        // For selbri sumti (descriptions) or bridi sumti without specific ruleType
-                        sumtiMap.set(key, value);
-                    }
-                } catch (containerError) {
-                    console.error(`[Seed] Error setting container for sumti "${key}" with type "${ruleType}":`, containerError);
-                    // Fallback to setting primitive value on error
-                    sumtiMap.set(key, value);
-                }
+        if (sumtiRecord.datni.klesi === 'LoroMap') {
+            const vasruMap = datniMap.setContainer('vasru', new LoroMap());
+            const vasruData = sumtiRecord.datni.vasru as Record<string, unknown>;
+            for (const key in vasruData) {
+                vasruMap.set(key, vasruData[key]);
             }
-        }
-    }
-    // Set validation rules only for selbri
-    if (gismuType === 'selbri' && dataForValidation.javni) {
-        dataMap.set('javni', dataForValidation.javni);
-    }
-    // Set skicu (translations) if they exist
-    // Check if dataForValidation.skicu exists before setting
-    if (dataForValidation.skicu && typeof dataForValidation.skicu === 'object') {
-        dataMap.set('skicu', dataForValidation.skicu);
-    }
-
-    let isValid = true;
-    let validationErrors: string[] = [];
-
-    if (gismuType === 'selbri') {
-        console.log(`  - Validating structure for selbri: ${docKey}...`);
-        const result = validateSelbriDocStructure(docJsonForValidation);
-        isValid = result.isValid;
-        validationErrors = result.errors;
-    } else if (gismuType === 'bridi' && referencedSelbriName) {
-        const selbriPubKey = generatedKeys.get(referencedSelbriName);
-        if (selbriPubKey) {
-            console.log(`  - Validating bridi "${docKey}" against selbri "${referencedSelbriName}" (${selbriPubKey})...`);
-            const selbriDocMeta = await db.select({ snapshotCid: schema.docs.snapshotCid })
-                .from(schema.docs)
-                .where(eq(schema.docs.pubKey, selbriPubKey)).limit(1);
-
-            if (selbriDocMeta.length > 0 && selbriDocMeta[0].snapshotCid) {
-                const contentResult = await db.select({ raw: schema.content.raw })
-                    .from(schema.content)
-                    .where(eq(schema.content.cid, selbriDocMeta[0].snapshotCid))
-                    .limit(1);
-
-                if (contentResult.length > 0 && contentResult[0].raw) {
-                    const snapshotData = contentResult[0].raw;
-                    const selbriLoroDoc = new LoroDoc();
-                    selbriLoroDoc.import(snapshotData);
-                    // Use the defined LoroDocJson type here
-                    const selbriJson = selbriLoroDoc.toJSON() as LoroDocJson;
-                    selbriJson.pubKey = selbriPubKey;
-                    const result = validateBridiDocAgainstSelbri(docJsonForValidation, selbriJson);
-                    isValid = result.isValid;
-                    validationErrors = result.errors;
-                } else {
-                    isValid = false;
-                    validationErrors.push(`Could not load snapshot content for selbri ${selbriPubKey} (CID: ${selbriDocMeta[0].snapshotCid}) from database content table.`);
-                }
-            } else {
-                isValid = false;
-                validationErrors.push(`Could not find selbri document ${selbriPubKey} in database docs table.`);
-            }
-        } else {
-            isValid = false;
-            validationErrors.push(`Could not find PubKey for referenced selbri name "${referencedSelbriName}"`);
+            datniMap.set('klesi', 'LoroMap');
+        } else if (sumtiRecord.datni.klesi === 'LoroText') {
+            const textValue = sumtiRecord.datni.vasru as string;
+            const textContainer = datniMap.setContainer('vasru', new LoroText());
+            textContainer.insert(0, textValue);
+            datniMap.set('klesi', 'LoroText');
+        } else if (sumtiRecord.datni.klesi === 'LoroList' || sumtiRecord.datni.klesi === 'LoroMovableList') {
+            const listContainer = datniMap.setContainer('vasru', new LoroList());
+            const listData = sumtiRecord.datni.vasru as unknown[];
+            listData.forEach((item, index) => {
+                listContainer.insert(index, item);
+            });
+            datniMap.set('klesi', sumtiRecord.datni.klesi);
+        } else if (sumtiRecord.datni.klesi === 'concept') {
+            // For concept, no vasru property
+            datniMap.set('klesi', 'concept');
         }
     }
 
-    if (!isValid) {
-        console.error(`  - ❌ Validation Failed for ${gismuType} ${docKey}:`);
-        validationErrors.forEach((err: string) => console.error(`    - ${err}`));
-        console.warn(`  - Skipping database insertion for invalid ${gismuType}: ${docKey}`);
-        return;
-    }
-    console.log(`  - ✅ Structure validation passed for ${gismuType}: ${docKey}`);
-
+    // Export snapshot and save to database
     const snapshot = loroDoc.exportSnapshot();
     const cid = await hashSnapshot(snapshot);
     const now = new Date();
@@ -470,29 +159,354 @@ async function seedDocument(
             type: 'snapshot',
             raw: Buffer.from(snapshot),
             metadata: {
-                cmene: docDefinition.cmene,
-                gismu: gismuType,
-                selbri: gismuType === 'bridi' ? selbriRef : undefined
+                klesi: sumtiRecord.ckaji.klesi,
+                cmene: sumtiRecord.ckaji.cmene,
             },
             createdAt: now
         })
         .onConflictDoNothing({ target: schema.content.cid });
     console.log(`  - Ensured content entry exists: ${cid}`);
 
-    // Check if meta exists before accessing owner
-    const owner = docJsonForValidation.meta?.owner as string ?? GENESIS_HOMINIO;
     const docEntry: schema.InsertDoc = {
         pubKey: pubKey,
         snapshotCid: cid,
         updateCids: [],
-        owner: owner,
+        owner: GENESIS_HOMINIO,
         updatedAt: now,
         createdAt: now
     };
     await db.insert(schema.docs).values(docEntry);
     console.log(`  - Created document entry: ${pubKey}`);
 
-    console.log(`✅ Successfully seeded ${gismuType}: ${docKey}`);
+    console.log(`✅ Successfully seeded Sumti: ${originalPubKey} -> ${pubKey}`);
+    return pubKey;
+}
+
+async function seedSelbriDocument(
+    db: ReturnType<typeof drizzle>,
+    selbriRecord: SelbriRecord,
+    generatedKeys: Map<string, string>
+) {
+    const originalPubKey = selbriRecord.pubkey;
+
+    // Generate deterministic pubkey if not already in the map
+    let pubKey = originalPubKey;
+    if (!generatedKeys.has(originalPubKey)) {
+        pubKey = await generateDeterministicPubKey(originalPubKey);
+        generatedKeys.set(originalPubKey, pubKey);
+    } else {
+        pubKey = generatedKeys.get(originalPubKey)!;
+    }
+
+    console.log(`Processing Selbri: ${originalPubKey} -> ${pubKey}`);
+
+    const existingDoc = await db.select({ pubKey: schema.docs.pubKey })
+        .from(schema.docs)
+        .where(eq(schema.docs.pubKey, pubKey))
+        .limit(1);
+    if (existingDoc.length > 0) {
+        console.log(`  - Document already exists. Skipping.`);
+        return pubKey;
+    }
+
+    const loroDoc = new LoroDoc();
+    loroDoc.setPeerId(1);
+
+    // Set meta data
+    const metaMap = loroDoc.getMap('meta');
+    metaMap.set('gismu', 'selbri');
+    metaMap.set('owner', GENESIS_HOMINIO);
+
+    // Set data structure
+    const dataMap = loroDoc.getMap('data');
+
+    // Set ckaji
+    dataMap.set('ckaji', {
+        klesi: selbriRecord.ckaji.klesi
+    });
+
+    // Set datni with selbri reference remapped to the generated pubkey
+    const datniMap = dataMap.setContainer('datni', new LoroMap());
+
+    // Translate selbri reference if it exists in our map
+    let selbriRef = selbriRecord.datni.selbri;
+    if (generatedKeys.has(selbriRef)) {
+        selbriRef = generatedKeys.get(selbriRef)!;
+    }
+
+    datniMap.set('selbri', selbriRef);
+    datniMap.set('cneme', selbriRecord.datni.cneme);
+
+    // Set sumti with place structure
+    const sumtiMap = datniMap.setContainer('sumti', new LoroMap());
+    // Using type-safe approach for sumti place properties
+    if (selbriRecord.datni.sumti.x1) sumtiMap.set('x1', selbriRecord.datni.sumti.x1);
+    if (selbriRecord.datni.sumti.x2) sumtiMap.set('x2', selbriRecord.datni.sumti.x2);
+    if (selbriRecord.datni.sumti.x3) sumtiMap.set('x3', selbriRecord.datni.sumti.x3);
+    if (selbriRecord.datni.sumti.x4) sumtiMap.set('x4', selbriRecord.datni.sumti.x4);
+    if (selbriRecord.datni.sumti.x5) sumtiMap.set('x5', selbriRecord.datni.sumti.x5);
+
+    // Set fanva (translations) if they exist
+    if (selbriRecord.datni.fanva) {
+        datniMap.set('fanva', selbriRecord.datni.fanva);
+    }
+
+    // Set stidi (usage guidance) if they exist
+    if (selbriRecord.datni.stidi) {
+        datniMap.set('stidi', selbriRecord.datni.stidi);
+    }
+
+    // Export snapshot and save to database
+    const snapshot = loroDoc.exportSnapshot();
+    const cid = await hashSnapshot(snapshot);
+    const now = new Date();
+
+    await db.insert(schema.content)
+        .values({
+            cid: cid,
+            type: 'snapshot',
+            raw: Buffer.from(snapshot),
+            metadata: {
+                klesi: 'Selbri',
+                cneme: selbriRecord.datni.cneme,
+            },
+            createdAt: now
+        })
+        .onConflictDoNothing({ target: schema.content.cid });
+    console.log(`  - Ensured content entry exists: ${cid}`);
+
+    const docEntry: schema.InsertDoc = {
+        pubKey: pubKey,
+        snapshotCid: cid,
+        updateCids: [],
+        owner: GENESIS_HOMINIO,
+        updatedAt: now,
+        createdAt: now
+    };
+    await db.insert(schema.docs).values(docEntry);
+    console.log(`  - Created document entry: ${pubKey}`);
+
+    console.log(`✅ Successfully seeded Selbri: ${originalPubKey} -> ${pubKey}`);
+    return pubKey;
+}
+
+async function seedBridiDocument(
+    db: ReturnType<typeof drizzle>,
+    bridiRecord: BridiRecord,
+    generatedKeys: Map<string, string>
+) {
+    const originalPubKey = bridiRecord.pubkey;
+
+    // Generate deterministic pubkey if not already in the map
+    let pubKey = originalPubKey;
+    if (!generatedKeys.has(originalPubKey)) {
+        pubKey = await generateDeterministicPubKey(originalPubKey);
+        generatedKeys.set(originalPubKey, pubKey);
+    } else {
+        pubKey = generatedKeys.get(originalPubKey)!;
+    }
+
+    console.log(`Processing Bridi: ${originalPubKey} -> ${pubKey}`);
+
+    const existingDoc = await db.select({ pubKey: schema.docs.pubKey })
+        .from(schema.docs)
+        .where(eq(schema.docs.pubKey, pubKey))
+        .limit(1);
+    if (existingDoc.length > 0) {
+        console.log(`  - Document already exists. Skipping.`);
+        return pubKey;
+    }
+
+    // Make sure the referenced selbri exists and get its mapped pubkey
+    const originalSelbriRef = bridiRecord.datni.selbri;
+    if (!generatedKeys.has(originalSelbriRef)) {
+        console.error(`❌ ERROR: Bridi ${originalPubKey} references non-existent selbri ${originalSelbriRef}`);
+        return null;
+    }
+    const selbriRef = generatedKeys.get(originalSelbriRef)!;
+
+    const loroDoc = new LoroDoc();
+    loroDoc.setPeerId(1);
+
+    // Set meta data
+    const metaMap = loroDoc.getMap('meta');
+    metaMap.set('gismu', 'bridi');
+    metaMap.set('owner', GENESIS_HOMINIO);
+
+    // Set data structure
+    const dataMap = loroDoc.getMap('data');
+
+    // Set ckaji
+    dataMap.set('ckaji', {
+        klesi: bridiRecord.ckaji.klesi
+    });
+
+    // Set datni
+    const datniMap = dataMap.setContainer('datni', new LoroMap());
+    datniMap.set('selbri', selbriRef);
+
+    // Set sumti with place structure, remapping any references
+    const sumtiMap = datniMap.setContainer('sumti', new LoroMap());
+    // Using type-safe approach for sumti place properties
+    for (const place of ['x1', 'x2', 'x3', 'x4', 'x5'] as const) {
+        const originalValue = bridiRecord.datni.sumti[place];
+        if (originalValue) {
+            // If this is a reference (starts with @), replace with its mapped pubkey
+            if (typeof originalValue === 'string' && originalValue.startsWith('@') && generatedKeys.has(originalValue)) {
+                sumtiMap.set(place, generatedKeys.get(originalValue)!);
+            } else {
+                sumtiMap.set(place, originalValue);
+            }
+        }
+    }
+
+    // Export snapshot and save to database
+    const snapshot = loroDoc.exportSnapshot();
+    const cid = await hashSnapshot(snapshot);
+    const now = new Date();
+
+    await db.insert(schema.content)
+        .values({
+            cid: cid,
+            type: 'snapshot',
+            raw: Buffer.from(snapshot),
+            metadata: {
+                klesi: 'Bridi',
+                selbri: selbriRef,
+            },
+            createdAt: now
+        })
+        .onConflictDoNothing({ target: schema.content.cid });
+    console.log(`  - Ensured content entry exists: ${cid}`);
+
+    const docEntry: schema.InsertDoc = {
+        pubKey: pubKey,
+        snapshotCid: cid,
+        updateCids: [],
+        owner: GENESIS_HOMINIO,
+        updatedAt: now,
+        createdAt: now
+    };
+    await db.insert(schema.docs).values(docEntry);
+    console.log(`  - Created document entry: ${pubKey}`);
+
+    console.log(`✅ Successfully seeded Bridi: ${originalPubKey} -> ${pubKey}`);
+    return pubKey;
+}
+
+async function populateBridiIndex(
+    db: ReturnType<typeof drizzle>,
+    originalBridiPubkey: string,
+    bridiData: {
+        selbri: string;
+        sumti: Record<string, string>;
+    },
+    generatedKeys: Map<string, string>
+) {
+    // Get the generated pubkeys for the bridi and selbri
+    const bridiPubkey = generatedKeys.get(originalBridiPubkey)!;
+    const selbriId = generatedKeys.get(bridiData.selbri)!;
+
+    // Load the Facki bridi index document
+    const indexDoc = await db.select({ snapshotCid: schema.docs.snapshotCid })
+        .from(schema.docs)
+        .where(eq(schema.docs.pubKey, FACKI_BRIDI_PUBKEY))
+        .limit(1);
+
+    if (indexDoc.length === 0 || !indexDoc[0].snapshotCid) {
+        console.error(`❌ ERROR: Facki bridi index document ${FACKI_BRIDI_PUBKEY} not found or has no snapshot`);
+        return;
+    }
+
+    // Load the snapshot
+    const contentResult = await db.select({ raw: schema.content.raw })
+        .from(schema.content)
+        .where(eq(schema.content.cid, indexDoc[0].snapshotCid))
+        .limit(1);
+
+    if (contentResult.length === 0 || !contentResult[0].raw) {
+        console.error(`❌ ERROR: Content for ${FACKI_BRIDI_PUBKEY} not found`);
+        return;
+    }
+
+    // Create in-memory LoroDoc and import the snapshot
+    const loroDoc = new LoroDoc();
+    loroDoc.import(contentResult[0].raw);
+
+    // Get the data.datni.vasru map
+    const dataMap = loroDoc.getMap('data');
+    const datniMap = dataMap.get('datni') as LoroMap;
+    const vasruMap = datniMap.get('vasru') as LoroMap;
+
+    // Update the index with the bridi data
+    // First check if there's an entry for this selbri
+    if (vasruMap.get(selbriId) === undefined) {
+        // Create a new map for this selbri
+        vasruMap.set(selbriId, {});
+    }
+
+    const selbriMap = vasruMap.get(selbriId) as Record<string, unknown>;
+
+    // For each place in the sumti, add the bridi to the index
+    for (const place in bridiData.sumti) {
+        const originalSumtiId = bridiData.sumti[place];
+        if (!originalSumtiId) continue;
+
+        const sumtiId = generatedKeys.get(originalSumtiId)!;
+
+        // Ensure there's an entry for this place
+        if (!selbriMap[place]) {
+            selbriMap[place] = {};
+        }
+
+        const placeMap = selbriMap[place] as Record<string, unknown>;
+
+        // Ensure there's an entry for this sumti
+        if (!placeMap[sumtiId]) {
+            placeMap[sumtiId] = [];
+        }
+
+        // Add this bridi to the list for this sumti at this place
+        const bridiList = placeMap[sumtiId] as string[];
+        if (!bridiList.includes(bridiPubkey)) {
+            bridiList.push(bridiPubkey);
+        }
+
+        // Update the place map with the updated bridi list
+        placeMap[sumtiId] = bridiList;
+        selbriMap[place] = placeMap;
+    }
+
+    // Update the vasru map with the updated selbri map
+    vasruMap.set(selbriId, selbriMap);
+
+    // Export snapshot and save to database
+    const snapshot = loroDoc.exportSnapshot();
+    const cid = await hashSnapshot(snapshot);
+    const now = new Date();
+
+    await db.insert(schema.content)
+        .values({
+            cid: cid,
+            type: 'snapshot',
+            raw: Buffer.from(snapshot),
+            metadata: {
+                klesi: 'Facki',
+                gismu: 'bridi_index',
+            },
+            createdAt: now
+        })
+        .onConflictDoNothing({ target: schema.content.cid });
+
+    // Update the facki_bridi document to point to the new snapshot
+    await db.update(schema.docs)
+        .set({
+            snapshotCid: cid,
+            updatedAt: now
+        })
+        .where(eq(schema.docs.pubKey, FACKI_BRIDI_PUBKEY));
+
+    console.log(`✅ Updated Bridi index with ${bridiPubkey} (was ${originalBridiPubkey})`);
 }
 
 async function main() {
@@ -503,34 +517,62 @@ async function main() {
         process.exit(1);
     }
 
-    console.log('🌱 Seeding database with core selbri & bridi...');
+    console.log('🌱 Seeding database with Lojban structure data...');
 
     try {
         const sql = neon(dbUrl);
         const db = drizzle(sql, { schema });
 
+        // Keep track of generated keys (original pubkey -> generated pubkey)
         const generatedKeys = new Map<string, string>();
 
-        console.log("\n--- Seeding Selbri ---");
-        if (selbriToSeed['gismu']) {
-            await seedDocument(db, 'gismu', selbriToSeed['gismu'], 'selbri', generatedKeys);
-        }
-        for (const selbriKey in selbriToSeed) {
-            if (selbriKey !== 'gismu') {
-                await seedDocument(db, selbriKey, selbriToSeed[selbriKey], 'selbri', generatedKeys);
-            }
-        }
-        console.log("\n✅ Selbri seeding completed.");
+        // Preserve Facki pubkeys (don't hash them)
+        generatedKeys.set(FACKI_META_PUBKEY, FACKI_META_PUBKEY);
+        generatedKeys.set(FACKI_SUMTI_PUBKEY, FACKI_SUMTI_PUBKEY);
+        generatedKeys.set(FACKI_SELBRI_PUBKEY, FACKI_SELBRI_PUBKEY);
+        generatedKeys.set(FACKI_BRIDI_PUBKEY, FACKI_BRIDI_PUBKEY);
 
-        console.log("\n--- Seeding Bridi ---");
-        for (const bridiKey in bridiToSeed) {
-            await seedDocument(db, bridiKey, bridiToSeed[bridiKey], 'bridi', generatedKeys);
+        // 1. Seed Facki records
+        console.log("\n--- Seeding Facki Records ---");
+        for (const facki of initialFacki) {
+            await seedSumtiDocument(db, facki, generatedKeys);
         }
-        console.log("\n✅ Bridi seeding completed.");
+
+        // 2. Seed Sumti records
+        console.log("\n--- Seeding Sumti Records ---");
+        for (const sumti of initialSumti) {
+            await seedSumtiDocument(db, sumti, generatedKeys);
+        }
+
+        // 3. Seed Selbri records
+        console.log("\n--- Seeding Selbri Records ---");
+        for (const selbri of initialSelbri) {
+            await seedSelbriDocument(db, selbri, generatedKeys);
+        }
+
+        // 4. Seed Bridi records
+        console.log("\n--- Seeding Bridi Records ---");
+        for (const bridi of initialBridi) {
+            await seedBridiDocument(db, bridi, generatedKeys);
+        }
+
+        // 5. Temporary static indexing step
+        console.log("\n--- Building Facki indexes ---");
+        for (const bridi of initialBridi) {
+            await populateBridiIndex(db, bridi.pubkey, {
+                selbri: bridi.datni.selbri,
+                sumti: bridi.datni.sumti as Record<string, string>
+            }, generatedKeys);
+        }
 
         console.log('\n✅ Database seeding completed successfully.');
-        console.log('\nGenerated Keys Map: (Name -> PubKey)');
-        console.log(generatedKeys);
+        console.log('\nGenerated Keys Map: (Original -> Generated)');
+        console.log('----------------------------------------');
+        for (const [original, generated] of generatedKeys.entries()) {
+            if (original !== generated) {
+                console.log(`${original} -> ${generated}`);
+            }
+        }
 
     } catch (error) {
         console.error('\n❌ Error during database seeding:', error);
