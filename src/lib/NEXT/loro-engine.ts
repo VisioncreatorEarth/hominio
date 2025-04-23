@@ -3,10 +3,10 @@ import { initialSumti, initialBridi, initialSelbri } from './db';
 import { LoroDoc, LoroMap, LoroList } from 'loro-crdt';
 // No longer importing populateBridiIndex as simulation is internal
 
-// Define index pubkeys for easy reference
-const LISTE_SUMTI_PUBKEY = '@liste_sumti';
-const LISTE_SELBRI_PUBKEY = '@liste_selbri';
-const LISTE_BRIDI_PUBKEY = '@liste_bridi';
+// Define index pubkeys for easy reference using Facki
+const FACKI_SUMTI_PUBKEY = '@facki_sumti';   // RENAMED
+const FACKI_SELBRI_PUBKEY = '@facki_selbri'; // RENAMED
+const FACKI_BRIDI_PUBKEY = '@facki_bridi';   // RENAMED
 
 // --- LoroDoc Stores (In-Memory Maps) ---
 const sumtiDocs = new Map<Pubkey, LoroDoc>();
@@ -78,21 +78,20 @@ function initializeDocs() {
     // --- Populate Indexes from Initial Data (Simulation) ---
     console.log('[Loro Engine] Populating indexes from initial data (simulation)...');
 
-    // Get index documents (they should exist in sumtiDocs now)
-    const listeSumtiDoc = getSumtiDoc(LISTE_SUMTI_PUBKEY);
-    const listeSelbriDoc = getSumtiDoc(LISTE_SELBRI_PUBKEY);
-    const listeBridiDoc = getSumtiDoc(LISTE_BRIDI_PUBKEY);
+    // Get index documents using new pubkeys
+    const fackiSumtiDoc = getSumtiDoc(FACKI_SUMTI_PUBKEY);
+    const fackiSelbriDoc = getSumtiDoc(FACKI_SELBRI_PUBKEY);
+    const fackiBridiDoc = getSumtiDoc(FACKI_BRIDI_PUBKEY);
 
-    if (!listeSumtiDoc || !listeSelbriDoc || !listeBridiDoc) {
-        console.error("[Loro Engine] CRITICAL: Index documents not found after initialization!");
+    if (!fackiSumtiDoc || !fackiSelbriDoc || !fackiBridiDoc) { // Updated check
+        console.error("[Loro Engine] CRITICAL: Facki index documents not found after initialization!");
         return; // Cannot proceed with indexing
     }
 
     // Access the root 'datni' map within each index doc
-    // We stored the LoroMap container itself under 'datni' for map-klesi Sumti
-    const sumtiIndexMap = listeSumtiDoc.getMap('datni'); // Assumes datni is the root map
-    const selbriIndexMap = listeSelbriDoc.getMap('datni');
-    const bridiIndexMap = listeBridiDoc.getMap('datni');
+    const sumtiIndexMap = fackiSumtiDoc.getMap('datni');
+    const selbriIndexMap = fackiSelbriDoc.getMap('datni');
+    const bridiIndexMap = fackiBridiDoc.getMap('datni');
 
     // Populate Sumti Existence Index
     let sumtiIndexedCount = 0;
@@ -225,14 +224,14 @@ initializeDocs();
  * Returns undefined if the index list doesn't exist or isn't a list.
  */
 export function getBridiIndexList(compositeKey: string): LoroList<string> | undefined {
-    const listeBridiDoc = getSumtiDoc(LISTE_BRIDI_PUBKEY);
-    if (!listeBridiDoc) {
-        console.warn(`[Loro Engine] Bridi Index document (${LISTE_BRIDI_PUBKEY}) not found.`);
+    const fackiBridiDoc = getSumtiDoc(FACKI_BRIDI_PUBKEY); // Use new constant
+    if (!fackiBridiDoc) {
+        console.warn(`[Loro Engine] Facki Bridi Index document (${FACKI_BRIDI_PUBKEY}) not found.`); // Updated log
         return undefined;
     }
 
     try {
-        const bridiIndexMap = listeBridiDoc.getMap('datni'); // Access the root 'datni' map
+        const bridiIndexMap = fackiBridiDoc.getMap('datni'); // Access the root 'datni' map
         const container = bridiIndexMap.get(compositeKey);
 
         if (container instanceof LoroList) {

@@ -158,6 +158,7 @@ async function processMap(currentDoc: LoroDoc, mapDefinition: LoroHqlMap): Promi
 
 /**
  * Selects a field value from a LoroDoc based on a path string starting with "self."
+ * IMPORTANT: Access to 'self.ckaji.cmene' is discouraged for primary entity names.
  */
 function selectFieldValue(doc: LoroDoc, fieldPath: string): unknown {
     if (!fieldPath || !fieldPath.startsWith('self.')) {
@@ -166,6 +167,15 @@ function selectFieldValue(doc: LoroDoc, fieldPath: string): unknown {
     }
 
     const path = fieldPath.substring(5); // Remove "self."
+
+    // Explicitly disallow using cmene as the primary name - enforce traversal
+    if (path === 'ckaji.cmene') {
+        console.warn(`Accessing 'self.ckaji.cmene' directly is deprecated for entity names. Use traversal to the linked name Sumti and access 'self.datni.vasru'.`);
+        // Return undefined or potentially the metadata cmene if it exists?
+        // Let's return undefined to enforce the pattern.
+        return undefined;
+    }
+
     let baseObject: unknown;
     let relativePath: string;
 
@@ -181,6 +191,11 @@ function selectFieldValue(doc: LoroDoc, fieldPath: string): unknown {
         return getDatniFromDoc(doc);
     } else {
         // Allow accessing top-level ckaji fields directly e.g. "self.pubkey"
+        // but NOT "self.cmene"
+        if (path === 'cmene') {
+            console.warn(`Accessing 'self.cmene' directly is deprecated. Use traversal for names.`);
+            return undefined;
+        }
         baseObject = getCkajiFromDoc(doc);
         relativePath = path;
     }

@@ -6,7 +6,7 @@ export type SelbriId = string; // Unique ID for a selbri definition
 export type BridiId = string; // Unique ID for a relationship instance
 
 // Define the core meta types
-export type MetaType = 'Sumti' | 'Bridi' | 'Selbri';
+export type MetaType = 'Sumti' | 'Bridi' | 'Selbri' | 'Facki';
 
 // Define Loro CRDT types aligned with their actual implementation
 export type LoroDocType =
@@ -36,7 +36,7 @@ export type SumtiValue = SumtiValueMap | SumtiValueText | SumtiValueList | Sumti
 export interface SumtiRecord {
     pubkey: Pubkey;
     ckaji: {
-        klesi: 'Sumti';
+        klesi: 'Sumti' | 'Facki';
         cmene?: string;
     };
     datni: SumtiValue;
@@ -65,7 +65,6 @@ export interface BridiRecord {
     pubkey: BridiId;
     ckaji: {
         klesi: 'Bridi';
-        cmene?: string;
     }
     datni: {
         selbri: SelbriId;
@@ -85,7 +84,6 @@ export interface SelbriRecord {
     pubkey: SelbriId;
     ckaji: {
         klesi: 'Selbri';
-        cmene?: string;
     };
     datni: {
         selbri: SelbriId
@@ -105,207 +103,228 @@ export const initialSumti: SumtiRecord[] = [
     // Entities (conceptual entities use LoroMap as container)
     {
         pubkey: '@project1',
-        ckaji: { klesi: 'Sumti', cmene: 'Project: Website' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'concept' }
     },
     {
         pubkey: '@task1',
-        ckaji: { klesi: 'Sumti', cmene: 'Task 1' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'concept' }
     },
     {
         pubkey: '@task2',
-        ckaji: { klesi: 'Sumti', cmene: 'Task 2' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'concept' }
     },
     {
         pubkey: '@task3',
-        ckaji: { klesi: 'Sumti', cmene: 'Task 3' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'concept' }
     },
     {
         pubkey: '@person1',
-        ckaji: { klesi: 'Sumti', cmene: 'Person 1' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'concept' }
     },
     {
         pubkey: '@person2',
-        ckaji: { klesi: 'Sumti', cmene: 'Person 2' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'concept' }
     },
     {
         pubkey: '@person3',
-        ckaji: { klesi: 'Sumti', cmene: 'Person 3' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'concept' }
     },
 
-    // Property Type Concepts (as concepts with LoroMap)
+    // Property Type Concepts (Remove cmene)
     {
         pubkey: '@prop_status',
-        ckaji: { klesi: 'Sumti', cmene: 'Property Type: Status' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'concept' }
     },
     {
         pubkey: '@prop_skill',
-        ckaji: { klesi: 'Sumti', cmene: 'Property Type: Skill' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'concept' }
     },
     {
         pubkey: '@prop_priority',
-        ckaji: { klesi: 'Sumti', cmene: 'Property Type: Priority' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'concept' }
     },
     {
         pubkey: '@prop_tag',
-        ckaji: { klesi: 'Sumti', cmene: 'Property Type: Tag' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'concept' }
     },
     {
         pubkey: '@prop_purpose',
-        ckaji: { klesi: 'Sumti', cmene: 'Property Type: Purpose' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'concept' }
     },
     {
         pubkey: '@prop_leader',
-        ckaji: { klesi: 'Sumti', cmene: 'Property Type: Leader' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'concept' }
     },
     {
         pubkey: '@prop_deadline',
-        ckaji: { klesi: 'Sumti', cmene: 'Property Type: Deadline' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'concept' }
     },
 
-    // Property Value Concepts (using LoroText for values)
+    // Property Value Concepts (cmene already removed)
     {
         pubkey: '@status_inprogress',
-        ckaji: { klesi: 'Sumti', cmene: 'in-progress' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'LoroText', vasru: 'in-progress' }
     },
     {
         pubkey: '@status_notstarted',
-        ckaji: { klesi: 'Sumti', cmene: 'not-started' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'LoroText', vasru: 'not-started' }
     },
     {
         pubkey: '@status_completed',
-        ckaji: { klesi: 'Sumti', cmene: 'completed' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'LoroText', vasru: 'completed' }
     },
     {
         pubkey: '@skill_design',
-        ckaji: { klesi: 'Sumti', cmene: 'design' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'LoroText', vasru: 'design' }
     },
     {
         pubkey: '@skill_dev',
-        ckaji: { klesi: 'Sumti', cmene: 'development' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'LoroText', vasru: 'development' }
     },
     {
         pubkey: '@skill_test',
-        ckaji: { klesi: 'Sumti', cmene: 'testing' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'LoroText', vasru: 'testing' }
     },
     {
         pubkey: '@priority_high',
-        ckaji: { klesi: 'Sumti', cmene: 'high' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'LoroText', vasru: 'high' }
     },
     {
         pubkey: '@priority_medium',
-        ckaji: { klesi: 'Sumti', cmene: 'medium' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'LoroText', vasru: 'medium' }
     },
     {
         pubkey: '@priority_none',
-        ckaji: { klesi: 'Sumti', cmene: 'none' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'LoroText', vasru: 'none' }
     },
     {
         pubkey: '@tag_frontend',
-        ckaji: { klesi: 'Sumti', cmene: 'frontend' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'LoroText', vasru: 'frontend' }
     },
     {
         pubkey: '@tag_qa',
-        ckaji: { klesi: 'Sumti', cmene: 'qa' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'LoroText', vasru: 'qa' }
     },
     {
         pubkey: '@purpose_build_website',
-        ckaji: { klesi: 'Sumti', cmene: 'Build website' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'LoroText', vasru: 'Build website' }
     },
     {
         pubkey: '@deadline_2024_12_31',
-        ckaji: { klesi: 'Sumti', cmene: '2024-12-31' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'LoroText', vasru: '2024-12-31' }
     },
 
-    // Method concepts for zukte relations (x2 in zukte) - using LoroText
+    // Method concepts (cmene already removed)
     {
         pubkey: '@method_agile',
-        ckaji: { klesi: 'Sumti', cmene: 'Agile methodology' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'LoroText', vasru: 'Agile methodology' }
     },
     {
         pubkey: '@method_waterfall',
-        ckaji: { klesi: 'Sumti', cmene: 'Waterfall methodology' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'LoroText', vasru: 'Waterfall methodology' }
     },
     {
         pubkey: '@method_kanban',
-        ckaji: { klesi: 'Sumti', cmene: 'Kanban system' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'LoroText', vasru: 'Kanban system' }
     },
     {
         pubkey: '@method_scrum',
-        ckaji: { klesi: 'Sumti', cmene: 'Scrum framework' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'LoroText', vasru: 'Scrum framework' }
     },
-    // Generic means for milestones and tasks - treat as concepts
+    // Generic means (Remove cmene)
     {
         pubkey: '@means_tasks',
-        ckaji: { klesi: 'Sumti', cmene: 'Collection of tasks' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'concept' }
     },
     {
         pubkey: '@means_work',
-        ckaji: { klesi: 'Sumti', cmene: 'Work effort' },
+        ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'concept' }
     },
 
-    // --- System Index Sumti Definitions (as specified in LORO_HQL.md) ---
+    // --- System Index Sumti Definitions (Change klesi and pubkeys) ---
     {
-        pubkey: '@liste_meta',
-        ckaji: { klesi: 'Sumti', cmene: 'Meta Index Registry' },
-        datni: { // Pre-populated map linking to other indexes
+        pubkey: '@facki_meta',
+        ckaji: { klesi: 'Facki', cmene: 'Meta Index Registry' },
+        datni: {
             klesi: 'LoroMap',
             vasru: {
-                sumti: '@liste_sumti',
-                selbri: '@liste_selbri',
-                bridi: '@liste_bridi'
+                sumti: '@facki_sumti',
+                selbri: '@facki_selbri',
+                bridi: '@facki_bridi'
             }
         }
     },
     {
-        pubkey: '@liste_sumti',
-        ckaji: { klesi: 'Sumti', cmene: 'Sumti Existence Index' },
-        datni: { klesi: 'LoroMap', vasru: {} } // Initially empty map
+        pubkey: '@facki_sumti',
+        ckaji: { klesi: 'Facki' },
+        datni: { klesi: 'LoroMap', vasru: {} }
     },
     {
-        pubkey: '@liste_selbri',
-        ckaji: { klesi: 'Sumti', cmene: 'Selbri Existence Index' },
-        datni: { klesi: 'LoroMap', vasru: {} } // Initially empty map
+        pubkey: '@facki_selbri',
+        ckaji: { klesi: 'Facki' },
+        datni: { klesi: 'LoroMap', vasru: {} }
     },
     {
-        pubkey: '@liste_bridi',
-        ckaji: { klesi: 'Sumti', cmene: 'Bridi Relationship Index' },
-        datni: { klesi: 'LoroMap', vasru: {} } // Initially empty map
+        pubkey: '@facki_bridi',
+        ckaji: { klesi: 'Facki' },
+        datni: { klesi: 'LoroMap', vasru: {} }
     },
     // ------------------------------------
 
+    // --- Name Sumti for Entities (Remain klesi: 'Sumti') ---
+    {
+        pubkey: '@project1_name',
+        ckaji: { klesi: 'Sumti', cmene: 'Project 1 Name' },
+        datni: { klesi: 'LoroText', vasru: 'Project: Website' }
+    },
+    {
+        pubkey: '@task1_name',
+        ckaji: { klesi: 'Sumti', cmene: 'Task 1 Name' },
+        datni: { klesi: 'LoroText', vasru: 'Task 1' }
+    },
+    {
+        pubkey: '@task2_name',
+        ckaji: { klesi: 'Sumti', cmene: 'Task 2 Name' },
+        datni: { klesi: 'LoroText', vasru: 'Task 2' }
+    },
+    {
+        pubkey: '@task3_name',
+        ckaji: { klesi: 'Sumti', cmene: 'Task 3 Name' },
+        datni: { klesi: 'LoroText', vasru: 'Task 3' }
+    },
     {
         pubkey: '@person1_name',
         ckaji: { klesi: 'Sumti', cmene: 'Person 1 Name' },
@@ -327,8 +346,7 @@ export const initialSelbri: SelbriRecord[] = [
     {
         pubkey: '@selbri_zukte',
         ckaji: {
-            klesi: 'Selbri',
-            cmene: 'zukte'
+            klesi: 'Selbri'
         },
         datni: {
             selbri: '@selbri_zukte',
@@ -342,8 +360,7 @@ export const initialSelbri: SelbriRecord[] = [
     {
         pubkey: '@selbri_gunka',
         ckaji: {
-            klesi: 'Selbri',
-            cmene: 'gunka'
+            klesi: 'Selbri'
         },
         datni: {
             selbri: '@selbri_gunka',
@@ -357,8 +374,7 @@ export const initialSelbri: SelbriRecord[] = [
     {
         pubkey: '@selbri_ckaji',
         ckaji: {
-            klesi: 'Selbri',
-            cmene: 'ckaji'
+            klesi: 'Selbri'
         },
         datni: {
             selbri: '@selbri_ckaji',
@@ -371,8 +387,7 @@ export const initialSelbri: SelbriRecord[] = [
     {
         pubkey: '@selbri_prenu',
         ckaji: {
-            klesi: 'Selbri',
-            cmene: 'prenu'
+            klesi: 'Selbri'
         },
         datni: {
             selbri: '@selbri_prenu',
@@ -388,8 +403,7 @@ export const initialBridi: BridiRecord[] = [
     {
         pubkey: '@bridi_zukte_person1_agile',
         ckaji: {
-            klesi: 'Bridi',
-            cmene: 'Person1 uses Agile methodology to build website'
+            klesi: 'Bridi'
         },
         datni: {
             selbri: '@selbri_zukte',
@@ -404,7 +418,7 @@ export const initialBridi: BridiRecord[] = [
     // Project 1 Info (using ckaji for properties)
     {
         pubkey: '@bridi_proj1_ckaji_purpose',
-        ckaji: { klesi: 'Bridi', cmene: 'Project 1 Purpose' },
+        ckaji: { klesi: 'Bridi' },
         datni: {
             selbri: '@selbri_ckaji',
             sumti: { x1: '@project1', x2: '@purpose_build_website' }
@@ -412,7 +426,7 @@ export const initialBridi: BridiRecord[] = [
     },
     {
         pubkey: '@bridi_proj1_ckaji_leader',
-        ckaji: { klesi: 'Bridi', cmene: 'Project 1 Leader' },
+        ckaji: { klesi: 'Bridi' },
         datni: {
             selbri: '@selbri_ckaji',
             sumti: { x1: '@project1', x2: '@person1' }
@@ -420,7 +434,7 @@ export const initialBridi: BridiRecord[] = [
     },
     {
         pubkey: '@bridi_proj1_ckaji_deadline',
-        ckaji: { klesi: 'Bridi', cmene: 'Project 1 Deadline' },
+        ckaji: { klesi: 'Bridi' },
         datni: {
             selbri: '@selbri_ckaji',
             sumti: { x1: '@project1', x2: '@deadline_2024_12_31' }
@@ -430,7 +444,7 @@ export const initialBridi: BridiRecord[] = [
     // Task Assignments (gunka)
     {
         pubkey: '@bridi_gunka_task1',
-        ckaji: { klesi: 'Bridi', cmene: 'Task 1 Assignment' },
+        ckaji: { klesi: 'Bridi' },
         datni: {
             selbri: '@selbri_gunka',
             sumti: { x1: '@person2', x2: '@task1', x3: '@project1' }
@@ -438,7 +452,7 @@ export const initialBridi: BridiRecord[] = [
     },
     {
         pubkey: '@bridi_gunka_task2',
-        ckaji: { klesi: 'Bridi', cmene: 'Task 2 Assignment' },
+        ckaji: { klesi: 'Bridi' },
         datni: {
             selbri: '@selbri_gunka',
             sumti: { x1: '@person1', x2: '@task2', x3: '@project1' }
@@ -446,7 +460,7 @@ export const initialBridi: BridiRecord[] = [
     },
     {
         pubkey: '@bridi_gunka_task3',
-        ckaji: { klesi: 'Bridi', cmene: 'Task 3 Assignment' },
+        ckaji: { klesi: 'Bridi' },
         datni: {
             selbri: '@selbri_gunka',
             sumti: { x1: '@person3', x2: '@task3', x3: '@project1' }
@@ -456,7 +470,7 @@ export const initialBridi: BridiRecord[] = [
     // Task Properties (ckaji: x1=Task, x2=Property Value Concept)
     {
         pubkey: '@bridi_task1_ckaji_skill',
-        ckaji: { klesi: 'Bridi', cmene: 'Task 1 Skill' },
+        ckaji: { klesi: 'Bridi' },
         datni: {
             selbri: '@selbri_ckaji',
             sumti: { x1: '@task1', x2: '@skill_design' }
@@ -464,7 +478,7 @@ export const initialBridi: BridiRecord[] = [
     },
     {
         pubkey: '@bridi_task1_ckaji_status',
-        ckaji: { klesi: 'Bridi', cmene: 'Task 1 Status' },
+        ckaji: { klesi: 'Bridi' },
         datni: {
             selbri: '@selbri_ckaji',
             sumti: { x1: '@task1', x2: '@status_inprogress' }
@@ -472,7 +486,7 @@ export const initialBridi: BridiRecord[] = [
     },
     {
         pubkey: '@bridi_task1_ckaji_priority',
-        ckaji: { klesi: 'Bridi', cmene: 'Task 1 Priority' },
+        ckaji: { klesi: 'Bridi' },
         datni: {
             selbri: '@selbri_ckaji',
             sumti: { x1: '@task1', x2: '@priority_high' }
@@ -480,7 +494,7 @@ export const initialBridi: BridiRecord[] = [
     },
     {
         pubkey: '@bridi_task1_ckaji_tag',
-        ckaji: { klesi: 'Bridi', cmene: 'Task 1 Tag' },
+        ckaji: { klesi: 'Bridi' },
         datni: {
             selbri: '@selbri_ckaji',
             sumti: { x1: '@task1', x2: '@tag_frontend' }
@@ -489,7 +503,7 @@ export const initialBridi: BridiRecord[] = [
 
     {
         pubkey: '@bridi_task2_ckaji_skill',
-        ckaji: { klesi: 'Bridi', cmene: 'Task 2 Skill' },
+        ckaji: { klesi: 'Bridi' },
         datni: {
             selbri: '@selbri_ckaji',
             sumti: { x1: '@task2', x2: '@skill_dev' }
@@ -497,7 +511,7 @@ export const initialBridi: BridiRecord[] = [
     },
     {
         pubkey: '@bridi_task2_ckaji_status',
-        ckaji: { klesi: 'Bridi', cmene: 'Task 2 Status' },
+        ckaji: { klesi: 'Bridi' },
         datni: {
             selbri: '@selbri_ckaji',
             sumti: { x1: '@task2', x2: '@status_notstarted' }
@@ -505,7 +519,7 @@ export const initialBridi: BridiRecord[] = [
     },
     {
         pubkey: '@bridi_task2_ckaji_priority',
-        ckaji: { klesi: 'Bridi', cmene: 'Task 2 Priority' },
+        ckaji: { klesi: 'Bridi' },
         datni: {
             selbri: '@selbri_ckaji',
             sumti: { x1: '@task2', x2: '@priority_medium' }
@@ -514,7 +528,7 @@ export const initialBridi: BridiRecord[] = [
 
     {
         pubkey: '@bridi_task3_ckaji_skill',
-        ckaji: { klesi: 'Bridi', cmene: 'Task 3 Skill' },
+        ckaji: { klesi: 'Bridi' },
         datni: {
             selbri: '@selbri_ckaji',
             sumti: { x1: '@task3', x2: '@skill_test' }
@@ -522,7 +536,7 @@ export const initialBridi: BridiRecord[] = [
     },
     {
         pubkey: '@bridi_task3_ckaji_status',
-        ckaji: { klesi: 'Bridi', cmene: 'Task 3 Status' },
+        ckaji: { klesi: 'Bridi' },
         datni: {
             selbri: '@selbri_ckaji',
             sumti: { x1: '@task3', x2: '@status_notstarted' }
@@ -530,7 +544,7 @@ export const initialBridi: BridiRecord[] = [
     },
     {
         pubkey: '@bridi_task3_ckaji_tag',
-        ckaji: { klesi: 'Bridi', cmene: 'Task 3 Tag' },
+        ckaji: { klesi: 'Bridi' },
         datni: {
             selbri: '@selbri_ckaji',
             sumti: { x1: '@task3', x2: '@tag_qa' }
@@ -540,7 +554,7 @@ export const initialBridi: BridiRecord[] = [
     // Person Name links (ckaji: x1=Person, x2=Name Value Sumti)
     {
         pubkey: '@bridi_person1_ckaji_name',
-        ckaji: { klesi: 'Bridi', cmene: 'Person 1 has name' },
+        ckaji: { klesi: 'Bridi' },
         datni: {
             selbri: '@selbri_ckaji',
             sumti: { x1: '@person1', x2: '@person1_name' }
@@ -548,7 +562,7 @@ export const initialBridi: BridiRecord[] = [
     },
     {
         pubkey: '@bridi_person2_ckaji_name',
-        ckaji: { klesi: 'Bridi', cmene: 'Person 2 has name' },
+        ckaji: { klesi: 'Bridi' },
         datni: {
             selbri: '@selbri_ckaji',
             sumti: { x1: '@person2', x2: '@person2_name' }
@@ -556,10 +570,44 @@ export const initialBridi: BridiRecord[] = [
     },
     {
         pubkey: '@bridi_person3_ckaji_name',
-        ckaji: { klesi: 'Bridi', cmene: 'Person 3 has name' },
+        ckaji: { klesi: 'Bridi' },
         datni: {
             selbri: '@selbri_ckaji',
             sumti: { x1: '@person3', x2: '@person3_name' }
         }
-    }
+    },
+
+    // --- ADD Name Bridi for Entities ---
+    {
+        pubkey: '@bridi_proj1_ckaji_name',
+        ckaji: { klesi: 'Bridi' },
+        datni: {
+            selbri: '@selbri_ckaji',
+            sumti: { x1: '@project1', x2: '@project1_name' }
+        }
+    },
+    {
+        pubkey: '@bridi_task1_ckaji_name',
+        ckaji: { klesi: 'Bridi' },
+        datni: {
+            selbri: '@selbri_ckaji',
+            sumti: { x1: '@task1', x2: '@task1_name' }
+        }
+    },
+    {
+        pubkey: '@bridi_task2_ckaji_name',
+        ckaji: { klesi: 'Bridi' },
+        datni: {
+            selbri: '@selbri_ckaji',
+            sumti: { x1: '@task2', x2: '@task2_name' }
+        }
+    },
+    {
+        pubkey: '@bridi_task3_ckaji_name',
+        ckaji: { klesi: 'Bridi' },
+        datni: {
+            selbri: '@selbri_ckaji',
+            sumti: { x1: '@task3', x2: '@task3_name' }
+        }
+    },
 ];
