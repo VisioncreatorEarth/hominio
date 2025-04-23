@@ -1,3 +1,11 @@
+import { readFileSync, readdirSync } from 'node:fs';
+import { resolve, dirname, parse } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Helper to get __dirname in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 export type SumtiId = string;
 export type Pubkey = string;
 export type SumtiValueKlesi = 'concept' | 'LoroMap' | 'LoroText' | 'LoroList' | 'LoroMovableList' | 'LoroTree';
@@ -19,7 +27,8 @@ export interface SumtiRecord {
     datni: SumtiValue;
 }
 
-export const initialSumti: SumtiRecord[] = [
+// Define static Sumti first
+const staticSumti: SumtiRecord[] = [
     // Entities (conceptual entities use LoroMap as container)
     {
         pubkey: '@project1',
@@ -54,10 +63,10 @@ export const initialSumti: SumtiRecord[] = [
     {
         pubkey: '@person3',
         ckaji: { klesi: 'Sumti' },
-        datni: { klesi: 'LoroText', vasru: 'Charlie' }
+        datni: { klesi: 'LoroText', vasru: 'Charlie' } // Kept person3 example as LoroText
     },
 
-    // Property Type Concepts (Remove cmene)
+    // Property Type Concepts
     {
         pubkey: '@prop_status',
         ckaji: { klesi: 'Sumti' },
@@ -94,7 +103,7 @@ export const initialSumti: SumtiRecord[] = [
         datni: { klesi: 'concept' }
     },
 
-    // Property Value Concepts (cmene already removed)
+    // Property Value Concepts
     {
         pubkey: '@status_inprogress',
         ckaji: { klesi: 'Sumti' },
@@ -161,7 +170,7 @@ export const initialSumti: SumtiRecord[] = [
         datni: { klesi: 'LoroText', vasru: '2024-12-31' }
     },
 
-    // Method concepts (cmene already removed)
+    // Method concepts
     {
         pubkey: '@method_agile',
         ckaji: { klesi: 'Sumti' },
@@ -182,7 +191,7 @@ export const initialSumti: SumtiRecord[] = [
         ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'LoroText', vasru: 'Scrum framework' }
     },
-    // Generic means (Remove cmene)
+    // Generic means
     {
         pubkey: '@means_tasks',
         ckaji: { klesi: 'Sumti' },
@@ -194,7 +203,7 @@ export const initialSumti: SumtiRecord[] = [
         datni: { klesi: 'concept' }
     },
 
-    // --- Name Sumti for Entities (Remain klesi: 'Sumti') ---
+    // --- Name Sumti for Entities ---
     {
         pubkey: '@project1_name',
         ckaji: {
@@ -232,46 +241,59 @@ export const initialSumti: SumtiRecord[] = [
         ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'LoroText', vasru: 'Charlie' }
     },
+    // --- REMOVED AI Prompt Sumti from here ---
+];
 
-    // --- ADD AI Prompt Sumti ---
-    {
-        pubkey: '@prompt_loro_hql_syntax',
-        ckaji: { klesi: 'Sumti' }, // Treat prompts like named Sumti for now
+// --- Dynamically Load Prompt Sumti from Markdown Files ---
+
+const documentationPath = resolve(__dirname, '../documentation');
+const promptSumtiRecords: SumtiRecord[] = [];
+
+try {
+    const files = readdirSync(documentationPath);
+    const markdownFiles = files.filter(file => file.endsWith('.md'));
+
+    for (const fileName of markdownFiles) {
+        const filePath = resolve(documentationPath, fileName);
+        const fileBaseName = parse(fileName).name; // Get filename without extension
+        const pubkey = `@prompt_${fileBaseName.replace(/\s+/g, '_').toLowerCase()}`; // Create pubkey like @prompt_filename
+
+        try {
+            const content = readFileSync(filePath, 'utf-8');
+            promptSumtiRecords.push({
+                pubkey: pubkey,
+                ckaji: { klesi: 'Sumti' }, // Treat prompts like named Sumti
+                datni: {
+                    klesi: 'LoroText',
+                    vasru: content
+                }
+            });
+            console.log(`Loaded prompt Sumti: ${pubkey}`);
+        } catch (readError) {
+            console.error(`Error reading prompt file at ${filePath}:`, readError);
+            // Optionally create an error Sumti or skip
+            promptSumtiRecords.push({
+                pubkey: pubkey,
+                ckaji: { klesi: 'Sumti' },
+                datni: {
+                    klesi: 'LoroText',
+                    vasru: `# Error: Could not load content for ${fileName}.`
+                }
+            });
+        }
+    }
+} catch (dirError) {
+    console.error(`Error reading documentation directory at ${documentationPath}:`, dirError);
+    // Handle the error appropriately, e.g., by adding a single error Sumti
+    promptSumtiRecords.push({
+        pubkey: '@prompt_load_error',
+        ckaji: { klesi: 'Sumti' },
         datni: {
             klesi: 'LoroText',
-            vasru: `# LORO_HQL Query Language Guide for AI
-
-This guide explains how to construct LORO_HQL queries based on user requests. The query is always a JSON object with 'from' and 'map' keys.
-
-## 1. \`from\` Clause (Starting Points)
-
-*   **Purpose:** Specifies the initial set of nodes (Sumti or Selbri) from which the query begins.
-*   **Keys:**
-    *   \`sumti_pubkeys: string[]\`: An array of Pubkeys for the initial Sumti nodes.
-    *   \`selbri_pubkeys: string[]\`: An array of Pubkeys for the initial Selbri definition nodes.
-*   **Example:** \`from: { sumti_pubkeys: ['@project1', '/p/task5'] }\`
-
-## 2. \`map\` Clause (Output Structure)
-
-*   **Purpose:** Defines the structure of the JSON object(s) returned for *each* node specified in the \`from\` clause.
-*   **Structure:** A JSON object where keys are the desired output field names, and values define how to get the data.
-*   **Value Types:**
-    *   \`{ field: 'doc.pubkey' }\`: Extracts the **external pubkey** of the current document (the one passed from the outside, not necessarily stored inside).
-    *   \`{ field: 'self.<path>' }\`: Directly extracts a value from the current node's internal data (\`self\`). Paths navigate the node's Loro structure (e.g., \`self.datni.vasru\`, \`self.datni.cneme\`, \`self.datni.sumti.x1\`). Note: \`self.ckaji.pubkey\` is deprecated; use \`doc.pubkey\` instead.
-    *   \`{ traverse: { ... } }\`: Follows relationships (Bridi) to related nodes. See Section 3.
-    *   \`{ /* Nested Map Object */ }\`: Allows creating nested JSON objects in the output.
-
-## 3. \`traverse\` Directive (Following Relationships)
-
-*   **Purpose:** Navigates from the current node to related nodes via Bridi relationships. Used as the value in a \`map\` entry.
-*   **Core Keys:**
-    *   \`bridi_where: { selbri: string, place: string }\`: Identifies the relationship type (\`selbri\` Pubkey) and the place *this current node* occupies in that relationship (e.g., 'x1', 'x2').
-    *   \`return: 'first' | 'array'\`: Specifies whether to return only the first related node found or all related nodes as an array.
-    *   \`map: { ... }\`: Defines the output structure for *each related node found* by the traversal. Uses the same structure as the top-level \`map\`, including \`field\` and nested \`traverse\`. **Crucially, within this nested \`map\`, the \`place\` specified in \`field\` or \`bridi_where\` refers to the place of the *target related node* within the *connecting Bridi*.**
-*   **Optional Keys:**
-    *   \`where_related: [{ place: string, field: string, condition: { ... } }]\`: Filters the related nodes based on their properties *before* they are processed by the nested \`map\`. \`place\` refers to the related node's position in the Bridi. \`condition\` examples: \`{ in: [...] }\`, \`{ eq: 'value' }\`. Use \`doc.pubkey\` here instead of \`self.ckaji.pubkey\`.
-
-## 4. Special Map Keys (within \`map\` or nested \`map\`)\n\n*   \`_value\`: If used as a key, the engine extracts the single value defined by its corresponding directive (e.g., \`{ field: 'self.datni.vasru' }\`) and uses *that value directly* instead of creating a key-value pair. Useful for returning primitive values directly.\n*   \`_tag\`: Similar to \`_value\`, but used when \`return: 'array'\`. Extracts the single value for each related item and adds it directly to the output array, rather than creating an array of objects.\n\n## Example Inference\n\n*   User: "What is the status of Task 1?"\n    *   Infer: Start \`from\` \`@task1\`. Need a property -> \`ckaji\`. Status is a specific type of property.\n    *   Query Thought: Traverse from \`@task1\` via \`ckaji\` where \`@task1\` is \`x1\`. Find the related node (\`x2\`) that represents status (e.g., \`@status_inprogress\`). Extract its value (\`vasru\`).\n*   User: "Who works on Project Website?"\n    *   Infer: Start \`from\` \`@project_website\`. Need workers -> \`gunka\`. Project is \`x3\` in \`gunka\`. Workers are \`x1\`. Get worker ID.\n    *   Query Thought: Traverse from \`@project_website\` via \`gunka\` where project is \`x3\`. For each result, map the node at place \`x1\` (the worker) using \`doc.pubkey\` to get the worker's ID. Potentially traverse again from the worker node to get their name via \`ckaji\`.\n\nUse the Selbri definitions provided to understand the place structures (\`x1\`, \`x2\`, etc.) for specific relationships (\`zukte\`, \`gunka\`, \`ckaji\`). Remember to use \`doc.pubkey\` for IDs.`
+            vasru: `# Error: Could not read documentation directory at ${documentationPath}.`
         }
-    },
-];
+    });
+}
+
+// Combine static and dynamic Sumti
+export const initialSumti: SumtiRecord[] = [...staticSumti, ...promptSumtiRecords]; // Combine both arrays

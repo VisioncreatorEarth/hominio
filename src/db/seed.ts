@@ -509,6 +509,96 @@ async function populateBridiIndex(
     console.log(`✅ Updated Bridi index with ${bridiPubkey} (was ${originalBridiPubkey})`);
 }
 
+// --- NEW FUNCTION ---
+async function populateSelbriIndex(
+    db: ReturnType<typeof drizzle>,
+    generatedKeys: Map<string, string>
+) {
+    console.log("--- Populating Selbri Index ---");
+
+    // Load the Facki selbri index document
+    const indexDocMeta = await db.select({ snapshotCid: schema.docs.snapshotCid })
+        .from(schema.docs)
+        .where(eq(schema.docs.pubKey, FACKI_SELBRI_PUBKEY))
+        .limit(1);
+
+    if (indexDocMeta.length === 0 || !indexDocMeta[0].snapshotCid) {
+        console.error(`❌ ERROR: Facki selbri index document ${FACKI_SELBRI_PUBKEY} not found or has no snapshot`);
+        return;
+    }
+
+    // Load the snapshot content
+    const contentResult = await db.select({ raw: schema.content.raw })
+        .from(schema.content)
+        .where(eq(schema.content.cid, indexDocMeta[0].snapshotCid))
+        .limit(1);
+
+    if (contentResult.length === 0 || !contentResult[0].raw) {
+        console.error(`❌ ERROR: Content for ${FACKI_SELBRI_PUBKEY} not found`);
+        return;
+    }
+
+    // Create in-memory LoroDoc and import the snapshot
+    const loroDoc = new LoroDoc();
+    loroDoc.import(contentResult[0].raw);
+
+    // Get the data.datni.vasru map (the index map)
+    const dataMap = loroDoc.getMap('data');
+    const datniMap = dataMap.get('datni') as LoroMap;
+    const indexMap = datniMap.get('vasru') as LoroMap; // This is where we store selbri pubkeys
+
+    // Iterate over all selbri records and add their generated pubkeys to the index
+    let addedCount = 0;
+    for (const selbri of initialSelbri) {
+        const originalPubKey = selbri.pubkey;
+        if (generatedKeys.has(originalPubKey)) {
+            const generatedPubKey = generatedKeys.get(originalPubKey)!;
+            if (indexMap.get(generatedPubKey) === undefined) {
+                indexMap.set(generatedPubKey, true); // Store the pubkey as a key
+                console.log(`  - Added Selbri ${generatedPubKey} (from ${originalPubKey}) to index.`);
+                addedCount++;
+            }
+        } else {
+            console.warn(`  - Could not find generated key for original Selbri: ${originalPubKey}`);
+        }
+    }
+
+    if (addedCount === 0) {
+        console.log("  - No new Selbri added to the index (already populated?).");
+        return; // No need to save if nothing changed
+    }
+
+
+    // Export snapshot and save to database
+    const snapshot = loroDoc.exportSnapshot();
+    const cid = await hashSnapshot(snapshot);
+    const now = new Date();
+
+    await db.insert(schema.content)
+        .values({
+            cid: cid,
+            type: 'snapshot',
+            raw: Buffer.from(snapshot),
+            metadata: {
+                klesi: 'Facki',
+                gismu: 'selbri_index', // Indicate this is the selbri index content
+            },
+            createdAt: now
+        })
+        .onConflictDoNothing({ target: schema.content.cid });
+
+    // Update the facki_selbri document to point to the new snapshot
+    await db.update(schema.docs)
+        .set({
+            snapshotCid: cid,
+            updatedAt: now
+        })
+        .where(eq(schema.docs.pubKey, FACKI_SELBRI_PUBKEY));
+
+    console.log(`✅ Successfully updated Selbri index (${addedCount} added). New snapshot CID: ${cid}`);
+}
+// --- END NEW FUNCTION ---
+
 async function main() {
     const dbUrl = process.env.SECRET_DATABASE_URL_HOMINIO;
 
@@ -558,6 +648,7 @@ async function main() {
 
         // 5. Temporary static indexing step
         console.log("\n--- Building Facki indexes ---");
+        await populateSelbriIndex(db, generatedKeys);
         for (const bridi of initialBridi) {
             await populateBridiIndex(db, bridi.pubkey, {
                 selbri: bridi.datni.selbri,
