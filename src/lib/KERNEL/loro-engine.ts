@@ -58,7 +58,17 @@ export function getDatniFromDoc(doc: LoroDoc | null): Record<string, unknown> | 
     if (!doc) return undefined;
     try {
         const jsonData = doc.toJSON();
-        return jsonData?.['datni'] as Record<string, unknown> | SumtiValue | undefined;
+        const datni = jsonData?.['datni'];
+
+        // Return the complete datni object with its structure intact
+        if (typeof datni === 'object' && datni !== null) {
+            return datni as Record<string, unknown> | SumtiValue;
+        } else if (typeof datni === 'string') {
+            // For LoroText datni, create a proper structure
+            return { klesi: 'LoroText', vasru: datni } as SumtiValue;
+        } else {
+            return datni as Record<string, unknown> | SumtiValue | undefined;
+        }
     } catch (e) {
         console.error(`[Loro Engine] Error calling toJSON() on doc:`, e);
         return undefined;
@@ -88,22 +98,25 @@ export async function getDatniForPubkey(pubkey: Pubkey): Promise<Record<string, 
  * @param pubKey The public key of the Sumti document.
  * @returns True if the Sumti exists in the index, false otherwise.
  */
-export async function checkSumtiExists(pubKey: string): Promise<boolean> {
-    const fackiIndexKey = await getFackiIndexPubKey('sumti'); // Await the key
-
-
-    if (!fackiIndexKey) {
-        console.warn('[Loro Engine] Facki Sumti Index Key not available for existence check.');
+export async function checkSumtiExists(pubkey: string): Promise<boolean> {
+    const fackiPubKey = await getFackiIndexPubKey('sumti');
+    if (!fackiPubKey) {
+        console.error('[Loro Engine] Facki Sumti index pubkey not available for existence check.');
+        return false; // Cannot check without index
+    }
+    try {
+        const fackiDoc = await getSumtiDoc(fackiPubKey); // Index is stored like a Sumti doc
+        if (!fackiDoc) {
+            console.warn('[Loro Engine] Facki Sumti index document not found for existence check.');
+            return false;
+        }
+        const datniMap = fackiDoc.getMap('datni');
+        const exists = datniMap.get(pubkey);
+        return exists === true; // Check if the key exists and value is true (or just exists)
+    } catch (error) {
+        console.error(`[Loro Engine] Error checking Sumti existence for ${pubkey}:`, error);
         return false;
     }
-    const fackiDoc = await getSumtiDoc(fackiIndexKey); // Use the resolved string key
-    if (!fackiDoc) {
-        console.warn(`[Loro Engine] Facki Sumti Index document (${fackiIndexKey}) not found for existence check.`);
-        return false;
-    }
-    const indexMap = fackiDoc.getMap('datni');
-    // Use .get() and check for undefined instead of .has()
-    return indexMap.get(pubKey) !== undefined;
 }
 
 /**
@@ -111,22 +124,25 @@ export async function checkSumtiExists(pubKey: string): Promise<boolean> {
  * @param pubKey The public key of the Selbri document.
  * @returns True if the Selbri exists in the index, false otherwise.
  */
-export async function checkSelbriExists(pubKey: string): Promise<boolean> { // Use correct parameter name pubKey
-    const fackiIndexKey = await getFackiIndexPubKey('selbri'); // Await the key
-
-
-    if (!fackiIndexKey) {
-        console.warn('[Loro Engine] Facki Selbri Index Key not available for existence check.');
+export async function checkSelbriExists(pubkey: string): Promise<boolean> {
+    const fackiPubKey = await getFackiIndexPubKey('selbri');
+    if (!fackiPubKey) {
+        console.error('[Loro Engine] Facki Selbri index pubkey not available for existence check.');
+        return false; // Cannot check without index
+    }
+    try {
+        const fackiDoc = await getSelbriDoc(fackiPubKey); // Selbri index uses getSelbriDoc
+        if (!fackiDoc) {
+            console.warn('[Loro Engine] Facki Selbri index document not found for existence check.');
+            return false;
+        }
+        const datniMap = fackiDoc.getMap('datni');
+        const exists = datniMap.get(pubkey);
+        return exists === true; // Check if the key exists and value is true
+    } catch (error) {
+        console.error(`[Loro Engine] Error checking Selbri existence for ${pubkey}:`, error);
         return false;
     }
-    const fackiDoc = await getSelbriDoc(fackiIndexKey); // Use the resolved string key
-    if (!fackiDoc) {
-        console.warn(`[Loro Engine] Facki Selbri Index document (${fackiIndexKey}) not found for existence check.`);
-        return false;
-    }
-    const indexMap = fackiDoc.getMap('datni');
-    // Use .get() and check for undefined instead of .has()
-    return indexMap.get(pubKey) !== undefined; // Use correct parameter name pubKey
 }
 
 // --- Composite Index Access Function ---

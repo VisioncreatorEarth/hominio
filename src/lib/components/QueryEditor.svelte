@@ -1,0 +1,115 @@
+<script lang="ts">
+	import {
+		processReactiveQuery,
+		type LoroHqlQuery,
+		type QueryResult
+	} from '$lib/KERNEL/hominio-query';
+	import { readable, type Readable, derived, writable } from 'svelte/store';
+	import { getContext } from 'svelte';
+	import { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
+
+	// --- Get Effective User Function from Context ---
+	type GetCurrentUserFn = typeof getMeType;
+	const getMe = getContext<GetCurrentUserFn>('getMe');
+
+	// Define a more specific type for our query results
+	interface BridiQueryResult extends QueryResult {
+		id: string;
+		selbri?: string;
+		x1?: { value: unknown; pubkey: string } | null;
+		x2?: { value: unknown; pubkey: string } | null;
+		x3?: { value: unknown; pubkey: string } | null;
+		x4?: { value: unknown; pubkey: string } | null;
+		x5?: { value: unknown; pubkey: string } | null;
+	}
+
+	// Current query and editor state
+	let queryText = writable(
+		'{\n  "from": {\n    "bridi_pubkeys": []\n  },\n  "map": {\n    "id": { "field": "doc.pubkey" },\n    "selbri": { "field": "self.datni.selbri" }\n  }\n}'
+	);
+	let queryError = writable<string | null>(null);
+
+	// Current query store
+	const queryStore = writable<LoroHqlQuery | null>(null);
+
+	// Results store
+	const resultsStore = processReactiveQuery(getMe, queryStore);
+
+	// Function to run the query from the editor
+	function runCustomQuery() {
+		try {
+			const query = JSON.parse($queryText);
+			queryError.set(null);
+			queryStore.set(query);
+		} catch (e) {
+			queryError.set(e instanceof Error ? e.message : String(e));
+		}
+	}
+
+	// Helper function to truncate long strings
+	function truncate(str: unknown, length = 16): string {
+		if (!str) return '';
+		if (typeof str !== 'string') return String(str).substring(0, length) + '...';
+		return str.length > length ? str.substring(0, length) + '...' : str;
+	}
+</script>
+
+<div class="p-4">
+	<h2 class="mb-4 text-xl font-semibold text-black">Query Editor</h2>
+
+	<div class="mb-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+		<div>
+			<h3 class="mb-2 text-lg font-medium text-black">Edit Query</h3>
+			<div class="relative">
+				<textarea
+					bind:value={$queryText}
+					class="h-[400px] w-full resize-none rounded border border-gray-300 bg-white p-3 font-mono text-sm text-black"
+				></textarea>
+				{#if $queryError}
+					<div class="mt-2 rounded border border-red-300 bg-red-50 p-2 text-sm text-red-700">
+						{$queryError}
+					</div>
+				{/if}
+				<button
+					class="mt-2 rounded bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700"
+					on:click={runCustomQuery}
+				>
+					Run Query
+				</button>
+			</div>
+		</div>
+
+		<div>
+			<h3 class="mb-2 text-lg font-medium text-black">Results</h3>
+			<div class="h-[400px] overflow-auto rounded border border-gray-300 bg-white p-3">
+				{#if $resultsStore === undefined}
+					<div class="flex h-full items-center justify-center text-gray-500">
+						<p>Loading results...</p>
+					</div>
+				{:else if $resultsStore === null}
+					<div class="flex h-full items-center justify-center text-red-500">
+						<p>Error executing query</p>
+					</div>
+				{:else if $resultsStore.length === 0}
+					<div class="flex h-full items-center justify-center text-gray-500">
+						<p>No results found</p>
+					</div>
+				{:else}
+					<div class="space-y-4">
+						{#each $resultsStore as result (result.id)}
+							<div class="rounded border border-gray-200 bg-white p-3">
+								<h4 class="mb-2 font-medium text-black">{truncate(result.id, 24)}</h4>
+								<pre
+									class="max-h-48 overflow-auto rounded bg-gray-50 p-2 text-xs text-black">{JSON.stringify(
+										result,
+										null,
+										2
+									)}</pre>
+							</div>
+						{/each}
+					</div>
+				{/if}
+			</div>
+		</div>
+	</div>
+</div>

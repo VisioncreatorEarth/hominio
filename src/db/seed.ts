@@ -98,6 +98,8 @@ async function createLoroDocForSumti(
             });
         } else if (datniKlesi === 'concept') {
             // Handle 'concept' type if necessary
+            const datniContainer = loroDoc.getMap('datni');
+            datniContainer.set('klesi', 'concept');
         } else {
             const datniContainer = loroDoc.getMap('datni');
             datniContainer.set('raw', sumtiRecord.datni);

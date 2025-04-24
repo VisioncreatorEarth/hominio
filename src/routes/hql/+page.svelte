@@ -8,7 +8,9 @@
 	import { getContext } from 'svelte';
 	import { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
 	import SyncStatusUI from '$lib/components/SyncStatusUI.svelte';
-	import { hominioIndexing } from '$lib/KERNEL/hominio-indexing';
+	import SelbriQueries from '$lib/components/SelbriQueries.svelte';
+	import SumtiQueries from '$lib/components/SumtiQueries.svelte';
+	import QueryEditor from '$lib/components/QueryEditor.svelte';
 
 	// --- Get Effective User Function from Context ---
 	type GetCurrentUserFn = typeof getMeType;
@@ -194,229 +196,71 @@
 		if (!str) return '';
 		return str.length > length ? str.substring(0, length) + '...' : str;
 	}
+
+	// Tab state
+	let activeTab = $state('selbri'); // Default tab: 'selbri', 'sumti', 'query-editor'
+
+	// Function to change active tab
+	function setActiveTab(tab: string) {
+		activeTab = tab;
+	}
 </script>
 
-<div class="grid h-screen grid-cols-1 bg-gray-100 md:grid-cols-[250px_3fr_2fr]">
-	<!-- Sidebar (Left Column) -->
-	<aside class="col-span-1 overflow-y-auto border-r border-gray-300 bg-white p-4">
-		<SyncStatusUI />
-		<button
-			class="mt-4 mb-6 w-full rounded bg-orange-500 px-8 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-orange-600"
-			on:click={() => hominioIndexing.startIndexingCycle()}
-		>
-			Index Now
-		</button>
-
-		<h2 class="mb-4 text-lg font-semibold text-gray-700">Schemas</h2>
-		{#if $selbriReadable === undefined}
-			<p class="text-sm text-gray-500">Loading schemas...</p>
-		{:else if $selbriReadable === null}
-			<p class="text-sm text-red-600">Error loading schemas.</p>
-		{:else if $selbriReadable.length === 0}
-			<p class="text-sm text-yellow-700">No schemas found.</p>
-		{:else}
-			<ul class="space-y-2">
-				{#each $selbriReadable as selbri (selbri.id)}
-					<li>
-						<button
-							class="w-full rounded px-3 py-2 text-left text-sm transition-colors duration-150 ease-in-out hover:bg-gray-200 {selectedSelbriId ===
-							selbri.id
-								? 'bg-indigo-100 font-medium text-indigo-700'
-								: 'text-gray-600'}"
-							on:click={() => selectSelbri(selbri.id)}
-						>
-							{selbri.name}
-						</button>
-					</li>
-				{/each}
-			</ul>
-		{/if}
-	</aside>
-
-	<!-- Main Content Area (Middle Column) -->
-	<main class="col-span-1 flex flex-col overflow-y-auto border-r border-gray-300 p-6">
-		{#if currentSelectedSelbri}
-			{@const selectedSelbri = currentSelectedSelbri}
-
-			<div class="flex-shrink-0 pb-6">
-				<div class="flex items-center justify-between">
-					<h1 class="text-2xl font-bold text-gray-800">
-						{selectedSelbri.name}
-					</h1>
-				</div>
-				<p class="mb-3 text-sm text-gray-500">
-					<code class="rounded bg-gray-200 px-1 text-xs">{selectedSelbri.id}</code>
-				</p>
-
-				<h2 class="mb-3 text-xl font-semibold text-gray-700">Arguments</h2>
-				<div class="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-					{#if selectedSelbri.translations?.glico}
-						{#if selectedSelbri.x1 && selectedSelbri.translations.glico.x1}
-							<div class="rounded border border-gray-300 bg-white p-4 shadow-sm">
-								<div class="mb-2">
-									<h3 class="font-mono text-lg font-bold text-indigo-600">x1</h3>
-								</div>
-								<p class="mb-3 text-sm text-gray-600">{selectedSelbri.translations.glico.x1}</p>
-							</div>
-						{/if}
-
-						{#if selectedSelbri.x2 && selectedSelbri.translations.glico.x2}
-							<div class="rounded border border-gray-300 bg-white p-4 shadow-sm">
-								<div class="mb-2">
-									<h3 class="font-mono text-lg font-bold text-indigo-600">x2</h3>
-								</div>
-								<p class="mb-3 text-sm text-gray-600">{selectedSelbri.translations.glico.x2}</p>
-							</div>
-						{/if}
-
-						{#if selectedSelbri.x3 && selectedSelbri.translations.glico.x3}
-							<div class="rounded border border-gray-300 bg-white p-4 shadow-sm">
-								<div class="mb-2">
-									<h3 class="font-mono text-lg font-bold text-indigo-600">x3</h3>
-								</div>
-								<p class="mb-3 text-sm text-gray-600">{selectedSelbri.translations.glico.x3}</p>
-							</div>
-						{/if}
-
-						{#if selectedSelbri.x4 && selectedSelbri.translations.glico.x4}
-							<div class="rounded border border-gray-300 bg-white p-4 shadow-sm">
-								<div class="mb-2">
-									<h3 class="font-mono text-lg font-bold text-indigo-600">x4</h3>
-								</div>
-								<p class="mb-3 text-sm text-gray-600">{selectedSelbri.translations.glico.x4}</p>
-							</div>
-						{/if}
-
-						{#if selectedSelbri.x5 && selectedSelbri.translations.glico.x5}
-							<div class="rounded border border-gray-300 bg-white p-4 shadow-sm">
-								<div class="mb-2">
-									<h3 class="font-mono text-lg font-bold text-indigo-600">x5</h3>
-								</div>
-								<p class="mb-3 text-sm text-gray-600">{selectedSelbri.translations.glico.x5}</p>
-							</div>
-						{/if}
-					{/if}
-				</div>
-
-				{#if selectedSelbri.prompts && selectedSelbri.prompts.glico}
-					<h2 class="mt-6 mb-3 text-xl font-semibold text-gray-700">Prompts</h2>
-					<div class="mb-6 rounded border border-gray-300 bg-white p-4 shadow-sm">
-						<p class="text-sm whitespace-pre-wrap text-gray-600">{selectedSelbri.prompts.glico}</p>
-					</div>
-				{/if}
+<div class="flex h-screen flex-col bg-gray-100">
+	<!-- Header with status and tabs -->
+	<header class="flex flex-col border-b border-gray-300 bg-white">
+		<div class="flex items-center justify-between px-4 py-2">
+			<div class="flex-1">
+				<h1 class="text-lg font-bold text-gray-800">HQL Query Explorer</h1>
 			</div>
-
-			<!-- Debug Display -->
-			<div class="mt-6 border-t border-gray-300 pt-6">
-				<details class="rounded border border-gray-300 bg-white">
-					<summary class="cursor-pointer list-none p-3 font-medium text-gray-700 hover:bg-gray-50"
-						>Schema Debug Data</summary
-					>
-					<div class="border-t border-gray-300 p-3">
-						<pre
-							class="overflow-x-auto rounded bg-gray-50 p-3 font-mono text-xs whitespace-pre-wrap text-gray-700">{JSON.stringify(
-								selectedSelbri,
-								null,
-								2
-							)}</pre>
-					</div>
-				</details>
+			<div class="flex-grow">
+				<SyncStatusUI />
 			</div>
-		{:else}
-			<div class="flex h-full items-center justify-center">
-				<p class="text-lg text-gray-500">
-					Select a schema from the list to view details. {selectedSelbriId
-						? `(Selected ID: ${selectedSelbriId})`
-						: ''}
-				</p>
+		</div>
+
+		<!-- Navigation Tabs -->
+		<nav class="flex px-4">
+			<button
+				class="border-b-2 px-4 py-2 font-medium transition-colors {activeTab === 'selbri'
+					? 'border-indigo-500 text-indigo-600'
+					: 'border-transparent text-gray-500 hover:text-gray-700'}"
+				on:click={() => setActiveTab('selbri')}
+			>
+				Selbri
+			</button>
+			<button
+				class="border-b-2 px-4 py-2 font-medium transition-colors {activeTab === 'sumti'
+					? 'border-indigo-500 text-indigo-600'
+					: 'border-transparent text-gray-500 hover:text-gray-700'}"
+				on:click={() => setActiveTab('sumti')}
+			>
+				Sumti
+			</button>
+			<button
+				class="border-b-2 px-4 py-2 font-medium transition-colors {activeTab === 'query-editor'
+					? 'border-indigo-500 text-indigo-600'
+					: 'border-transparent text-gray-500 hover:text-gray-700'}"
+				on:click={() => setActiveTab('query-editor')}
+			>
+				Query Editor
+			</button>
+		</nav>
+	</header>
+
+	<!-- Main Content -->
+	<main class="flex-1 overflow-hidden">
+		{#if activeTab === 'selbri'}
+			<div class="h-full">
+				<SelbriQueries />
+			</div>
+		{:else if activeTab === 'sumti'}
+			<div class="h-full">
+				<SumtiQueries />
+			</div>
+		{:else if activeTab === 'query-editor'}
+			<div class="h-full">
+				<QueryEditor />
 			</div>
 		{/if}
 	</main>
-
-	<!-- Right Sidebar (Relationships list) -->
-	<aside class="col-span-1 flex flex-col overflow-y-auto bg-white p-6">
-		<h2 class="mb-4 flex-shrink-0 text-xl font-semibold text-gray-700">
-			Relationships using this Schema
-		</h2>
-
-		{#if !currentSelectedSelbri}
-			<div class="flex h-full items-center justify-center">
-				<p class="text-lg text-gray-500">Select a schema to view its relationships</p>
-			</div>
-		{:else if $bridiReadable === undefined}
-			<div class="flex items-center justify-center py-6">
-				<p class="text-sm text-gray-500">Loading relationships...</p>
-			</div>
-		{:else if $bridiReadable === null}
-			<div class="rounded border border-red-200 bg-red-50 p-4 text-red-700">
-				<p class="text-sm">Error loading relationships</p>
-			</div>
-		{:else if $bridiReadable.length === 0}
-			<div class="rounded border border-yellow-200 bg-yellow-50 p-4">
-				<p class="text-sm text-yellow-700">No relationships found for this schema</p>
-			</div>
-		{:else}
-			<div class="space-y-4">
-				{#each $bridiReadable as bridi (bridi.id)}
-					<div class="rounded border border-blue-100 bg-blue-50 p-4 shadow-sm">
-						<div class="mb-2 flex items-center justify-between">
-							<h3 class="font-medium text-blue-800">{truncate(bridi.id, 16)}</h3>
-						</div>
-						<div class="space-y-2">
-							{#if bridi.x1}
-								<div class="flex">
-									<span class="mr-2 font-mono text-sm font-bold text-indigo-600">x1:</span>
-									<span class="text-sm text-gray-700">
-										{typeof bridi.x1.value === 'string'
-											? bridi.x1.value
-											: truncate(bridi.x1.pubkey, 10)}
-									</span>
-								</div>
-							{/if}
-							{#if bridi.x2}
-								<div class="flex">
-									<span class="mr-2 font-mono text-sm font-bold text-indigo-600">x2:</span>
-									<span class="text-sm text-gray-700">
-										{typeof bridi.x2.value === 'string'
-											? bridi.x2.value
-											: truncate(bridi.x2.pubkey, 10)}
-									</span>
-								</div>
-							{/if}
-							{#if bridi.x3}
-								<div class="flex">
-									<span class="mr-2 font-mono text-sm font-bold text-indigo-600">x3:</span>
-									<span class="text-sm text-gray-700">
-										{typeof bridi.x3.value === 'string'
-											? bridi.x3.value
-											: truncate(bridi.x3.pubkey, 10)}
-									</span>
-								</div>
-							{/if}
-							{#if bridi.x4}
-								<div class="flex">
-									<span class="mr-2 font-mono text-sm font-bold text-indigo-600">x4:</span>
-									<span class="text-sm text-gray-700">
-										{typeof bridi.x4.value === 'string'
-											? bridi.x4.value
-											: truncate(bridi.x4.pubkey, 10)}
-									</span>
-								</div>
-							{/if}
-							{#if bridi.x5}
-								<div class="flex">
-									<span class="mr-2 font-mono text-sm font-bold text-indigo-600">x5:</span>
-									<span class="text-sm text-gray-700">
-										{typeof bridi.x5.value === 'string'
-											? bridi.x5.value
-											: truncate(bridi.x5.pubkey, 10)}
-									</span>
-								</div>
-							{/if}
-						</div>
-					</div>
-				{/each}
-			</div>
-		{/if}
-	</aside>
 </div>

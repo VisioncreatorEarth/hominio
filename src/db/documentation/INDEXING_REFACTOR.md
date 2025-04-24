@@ -1,32 +1,4 @@
-# Dynamic Client-Side Indexing Architecture
 
-This document outlines a proposed architecture for shifting indexing from a static seeding process to a dynamic, client-side mechanism within Hominio.
-
-## Current Situation & Drawbacks (Static Seeding)
-
-The current approach relies on a `src/db/seed.ts` script executed typically once during deployment or database reset. This script:
-
-1.  Parses static data definitions (`initialSumti`, `initialSelbri`, `initialBridi`).
-2.  Creates LoroDoc snapshots for each data item.
-3.  Populates predefined index documents (e.g., `@facki_bridi_by_component`) by iterating through the initial data and adding entries to LoroMaps/LoroLists within these index documents.
-4.  Saves the final snapshots of these populated index documents to the database.
-
-**Drawbacks of this approach:**
-
-*   **Static:** Indices only reflect the data present at the time the seed script is run. New documents or changes made after seeding are not automatically indexed.
-*   **Centralized Bottleneck:** Seeding is a single, potentially time-consuming process. Any changes to indexing logic require re-running the entire seed.
-*   **No Real-time Updates:** Queries rely on potentially stale indices, missing recently added or modified data relationships.
-*   **Offline Indexing Impossible:** Clients cannot build or update indices while offline.
-*   **Complexity in Seed Script:** The `seed.ts` script becomes complex, managing document creation, key generation, and multiple index population routines.
-*   **Brittle Dependencies:** Errors during seeding (e.g., missing dependencies between Bridi and Sumti/Selbri) can lead to incomplete or incorrect indices.
-
-## Goals of New Architecture
-
-*   Eliminate the need for a separate `seed.ts` process to build indices.
-*   Enable indices to update in near real-time as underlying data changes.
-*   Maintain query capability even when offline (using locally built indices).
-*   Leverage the existing `hominio-db.ts` infrastructure for storage and reactivity.
-*   Centralize indexing logic into a dedicated service.
 
 ## Core Concepts
 
@@ -34,7 +6,7 @@ The current approach relies on a `src/db/seed.ts` script executed typically once
 2.  **Indexing State Metadata:** Document metadata (`Docs` interface in `hominio-db.ts`) will be extended to track the indexing status *of that specific document* locally.
 3.  **Dedicated Indexing Service:** A new `src/lib/KERNEL/hominio-indexing.ts` service will orchestrate the indexing process.
 4.  **Reactive Updates:** The system leverages the `docChangeNotifier` from `hominio-db.ts` to trigger indexing cycles when relevant data changes (including during initial sync).
-5.  **Shared Index Documents:** Dedicated Loro documents (e.g., `@facki_bridi_by_component`, `@facki_sumti`), identified by their stable Facki pubkeys, will continue to store the actual index data. These index documents *are* synced between peers like any other LoroDoc, sharing the *results* of indexing.
+5.  **Shared Index Documents:** Dedicated Loro documents (e.g., `@facki_bridi_by_component`, `@facki_sumti`), will continue to store the actual index data. These index documents *are* synced between peers like any other LoroDoc, sharing the *results* of indexing.
 
 ## Proposed `Docs` Metadata Extension
 

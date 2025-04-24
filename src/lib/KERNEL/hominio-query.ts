@@ -6,6 +6,7 @@ import {
     getCkajiFromDoc,
     getDatniFromDoc,
     checkSumtiExists,
+    checkSelbriExists,
     getBridiDoc
 } from './loro-engine';
 import { canRead, type CapabilityUser } from '$lib/KERNEL/hominio-caps';
@@ -62,8 +63,8 @@ interface LoroHqlWhereRelatedClause {
 // Defines a traversal step
 interface LoroHqlTraverse {
     bridi_where: {
-        selbri: string; // Replaced SelbriId with string
-        place: SumtiPlaceKey; // Place the *current* node occupies in this Bridi
+        selbri: string | '*'; // Allow wildcard string
+        place: SumtiPlaceKey | '*'; // Allow wildcard string
     };
     return?: 'array' | 'first'; // Default: 'array'
     where_related?: LoroHqlWhereRelatedClause[]; // Filter related nodes (can be multiple conditions)
@@ -73,6 +74,7 @@ interface LoroHqlTraverse {
 // <<< Add LoroHqlResolve interface >>>
 interface LoroHqlResolve {
     fromField: string; // Path in the current node containing the pubkey(s) to resolve
+    targetType?: 'sumti' | 'selbri'; // <<< Add optional target type (default: 'sumti')
     // e.g., "self.datni.sumti.x1"
     // Optional: onError?: 'null' | 'skip_key' (default 'null') - TODO: Implement error handling
     map: LoroHqlMap;   // The map definition to apply to the RESOLVED document(s)
@@ -123,6 +125,66 @@ export async function executeQuery(
     let startSelbriPubkeys = query.from.selbri_pubkeys;
     let startBridiPubkeys = query.from.bridi_pubkeys;
 
+    // --- Special Handling for All Sumti ---
+    if (startSumtiPubkeys.length === 0 && query.from.sumti_pubkeys !== undefined) {
+        try {
+            const fackiSumtiPubKey = await getFackiIndexPubKey('sumti');
+            if (!fackiSumtiPubKey) {
+                console.error('[Query Engine] Cannot fetch all Sumti: Facki Sumti index pubkey not available.');
+                return []; // Return empty results if no sumti index available
+            }
+
+            const fackiSumtiDoc = await getSumtiDoc(fackiSumtiPubKey);
+            if (!fackiSumtiDoc) {
+                console.warn(`[Query Engine] Facki Sumti index document could not be loaded.`);
+                return []; // Return empty results if no sumti index document
+            }
+
+            const indexMap = fackiSumtiDoc.getMap('datni');
+            if (!(indexMap instanceof LoroMap)) {
+                console.warn('[Query Engine] Facki Sumti index map not found or not a LoroMap.');
+                return []; // Return empty results if index is invalid
+            }
+
+            const allSumtiPubkeys = Array.from(indexMap.keys());
+            console.log(`[Query Engine] Found ${allSumtiPubkeys.length} sumti in Facki Sumti index.`);
+
+            // Process each sumti document
+            for (const pubkey of allSumtiPubkeys) {
+                try {
+                    // Skip additional existence check since this came from the index
+                    const docMeta = await import('$lib/KERNEL/hominio-db').then(
+                        module => module.hominioDB.getDocument(pubkey)
+                    );
+                    if (docMeta && user && !canRead(user, docMeta)) {
+                        continue; // Skip if user can't read
+                    }
+
+                    const startDoc = await getSumtiDoc(pubkey);
+                    if (!startDoc) {
+                        continue;
+                    }
+
+                    if (query.where && !evaluateWhereClauses(startDoc, query.where, pubkey)) {
+                        continue;
+                    }
+
+                    const nodeResult = await processMap(startDoc, query.map, pubkey, user);
+                    results.push(nodeResult);
+                } catch (error) {
+                    console.error(`[Query Engine] Error processing sumti ${pubkey}:`, error);
+                    // Continue with next sumti
+                }
+            }
+
+            return results; // Return the results after processing all sumti
+        } catch (error) {
+            console.error('[Query Engine] Error fetching all Sumti from index:', error);
+            return []; // Return empty results on error
+        }
+    }
+    // --- End Special Handling for All Sumti ---
+
     // --- Special Handling for All Selbri --- 
     let fetchAllSelbri = false;
     if (startSelbriPubkeys && Array.isArray(startSelbriPubkeys) && startSelbriPubkeys.length === 0) {
@@ -154,7 +216,7 @@ export async function executeQuery(
     } else if (startSelbriPubkeys === undefined) {
         startSelbriPubkeys = []; // Ensure it's an array if not provided
     }
-    // --- End Special Handling ---
+    // --- End Special Handling for All Selbri ---
 
     // --- Special Handling for All Bridi ---
     let fetchAllBridi = false;
@@ -431,16 +493,90 @@ async function processTraversal(
         return traverseDefinition.return === 'first' ? null : [];
     }
 
-    // 1. Find connecting Bridi documents
-    const bridiMatches = await findBridiDocsBySelbriAndPlace(
-        traverseDefinition.bridi_where.selbri,
-        traverseDefinition.bridi_where.place,
-        sourcePubKey
-    );
+    // <<< DEBUG LOG >>>
+    console.log(`[Query Traversal] Starting traversal from source: ${sourcePubKey}, selbri: ${traverseDefinition.bridi_where.selbri}, place: ${traverseDefinition.bridi_where.place}`);
+
+    let bridiMatches: { pubkey: string; doc: LoroDoc }[] = [];
+    const selbriWildcard = traverseDefinition.bridi_where.selbri === '*';
+    const placeWildcard = traverseDefinition.bridi_where.place === '*';
+    const targetPlace = traverseDefinition.bridi_where.place;
+
+    if (selbriWildcard) {
+        // --- WILDCARD HANDLING (SELBRI) --- 
+        console.warn(`[Query Engine] Traversing with selbri wildcard (place: ${targetPlace}) from ${sourcePubKey}. This may be slow.`);
+        try {
+            const fackiBridiPubKey = await getFackiIndexPubKey('bridi');
+            if (fackiBridiPubKey) {
+                const fackiBridiDoc = await getSumtiDoc(fackiBridiPubKey); // Bridi existence index is like a Sumti doc
+                if (fackiBridiDoc) {
+                    const indexMap = fackiBridiDoc.getMap('datni');
+                    const allBridiPubkeys = Array.from(indexMap.keys());
+                    console.log(`[Query Engine Wildcard] Checking ${allBridiPubkeys.length} total Bridi documents...`);
+
+                    for (const bridiPubKey of allBridiPubkeys) {
+                        const bridiDoc = await getBridiDoc(bridiPubKey);
+                        if (bridiDoc) {
+                            const datni = getDatniFromDoc(bridiDoc) as { selbri: string; sumti: Record<string, string> } | undefined;
+                            if (datni?.sumti) {
+                                if (placeWildcard) {
+                                    // --- WILDCARD HANDLING (PLACE) ---
+                                    const placesToCheck: SumtiPlaceKey[] = ['x1', 'x2', 'x3', 'x4', 'x5'];
+                                    for (const place of placesToCheck) {
+                                        if (datni.sumti[place] === sourcePubKey) {
+                                            bridiMatches.push({ pubkey: bridiPubKey, doc: bridiDoc });
+                                            break; // Found a match for this Bridi, no need to check other places
+                                        }
+                                    }
+                                    // --- END WILDCARD HANDLING (PLACE) ---
+                                } else {
+                                    // Selbri wildcard, but specific place
+                                    if (datni.sumti[targetPlace] === sourcePubKey) {
+                                        bridiMatches.push({ pubkey: bridiPubKey, doc: bridiDoc });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    console.error('[Query Engine Wildcard] Could not load Facki Bridi index document.');
+                }
+            } else {
+                console.error('[Query Engine Wildcard] Facki Bridi index pubkey not found.');
+            }
+        } catch (error) {
+            console.error('[Query Engine Wildcard] Error fetching all Bridi:', error);
+        }
+        // --- END WILDCARD HANDLING (SELBRI) ---
+    } else {
+        // --- SPECIFIC SELBRI HANDLING --- 
+        // If place is wildcard but selbri is specific, we might need another index or logic here.
+        if (placeWildcard) {
+            console.error(`[Query Engine] Wildcard for 'place' is only supported when 'selbri' is also a wildcard ('*').`);
+            // Potentially fetch all Bridi for the specific selbri and filter by place here if needed.
+            // Ensure bridiMatches remains empty as this case is unsupported for now
+            bridiMatches = [];
+
+            // <<< DEBUG LOG >>>
+            console.log(`[Query Traversal] Found ${bridiMatches.length} specific bridi matches for source ${sourcePubKey}. Pubkeys: ${bridiMatches.map(m => m.pubkey).slice(0, 5).join(', ')}...`);
+
+        } else {
+            bridiMatches = await findBridiDocsBySelbriAndPlace(
+                traverseDefinition.bridi_where.selbri, // Specific Selbri ID
+                targetPlace as SumtiPlaceKey, // Cast: Guaranteed not to be '*' here
+                sourcePubKey
+            );
+        }
+        // --- END SPECIFIC SELBRI HANDLING ---
+    }
 
     const results: QueryResult[] = [];
 
-    // 2. Process each potential related node via the Bridi
+    // <<< DEBUG LOG >>>
+    if (bridiMatches.length === 0) {
+        console.log(`[Query Traversal] No bridi matches found for source ${sourcePubKey}. Returning empty results.`);
+    }
+
+    // 2. Process each potential related node via the Bridi (Common logic for both cases)
     for (const { /* pubkey: bridiPubKey, */ doc: bridiDoc } of bridiMatches) {
         const bridiDatni = getDatniFromDoc(bridiDoc) as { selbri: string; sumti: Record<string, string> } | undefined;
         if (!bridiDatni) continue;
@@ -470,33 +606,61 @@ async function processTraversal(
         const mapEntries = Object.entries(traverseDefinition.map);
 
         for (const [outputKey, valueDefinition] of mapEntries) {
-            if (!valueDefinition.place) {
-                console.warn(`Missing 'place' for key "${outputKey}" in traverse.map.`);
-                continue;
-            }
 
-            const targetNodePubkey = bridiDatni.sumti[valueDefinition.place];
-            if (!targetNodePubkey) {
-                relatedNodeResult[outputKey] = null;
-                continue;
-            }
-
-            const targetNodeDoc = await getSumtiDoc(targetNodePubkey);
-            if (!targetNodeDoc) {
-                relatedNodeResult[outputKey] = null;
-                continue;
-            }
-
-            // Determine the value based on the definition type for the target node
+            // --- Check if field is meant for the Bridi doc itself ---
+            let isBridiField = false;
             if (valueDefinition.field) {
-                relatedNodeResult[outputKey] = selectFieldValue(targetNodeDoc, valueDefinition.field, targetNodePubkey);
-            } else if (valueDefinition.map) {
-                relatedNodeResult[outputKey] = await processMap(targetNodeDoc, valueDefinition.map, targetNodePubkey, user);
-            } else if (valueDefinition.traverse) {
-                relatedNodeResult[outputKey] = await processTraversal(targetNodeDoc, valueDefinition.traverse, targetNodePubkey, user);
+                if (valueDefinition.field === 'doc.pubkey' || valueDefinition.field.startsWith('self.')) {
+                    // These fields can apply to the Bridi doc directly
+                    isBridiField = true;
+                }
+            }
+
+            if (isBridiField && valueDefinition.field) {
+                // Handle fields requested directly from the Bridi doc
+                // We need the actual pubkey of the bridiDoc here.
+                // Find the matching bridiPubKey from bridiMatches array based on bridiDoc instance.
+                const match = bridiMatches.find(m => m.doc === bridiDoc);
+                const currentBridiPubKey = match ? match.pubkey : ''; // Get the pubkey for the current bridiDoc
+                if (!currentBridiPubKey && valueDefinition.field === 'doc.pubkey') {
+                    console.error("[Query Traversal] Could not find pubkey for bridiDoc when mapping 'doc.pubkey'");
+                }
+                relatedNodeResult[outputKey] = selectFieldValue(bridiDoc, valueDefinition.field, currentBridiPubKey); // Use bridiDoc and its pubkey
+
             } else if (valueDefinition.resolve) {
-                // <<< Handle nested resolve during traversal >>>
-                relatedNodeResult[outputKey] = await processResolve(targetNodeDoc, valueDefinition.resolve, user);
+                // Resolve operates based on the Bridi doc context
+                relatedNodeResult[outputKey] = await processResolve(bridiDoc, valueDefinition.resolve, user);
+
+            } else {
+                // --- Handle fields requiring a specific PLACE (targeting a Sumti node) ---
+                if (!valueDefinition.place) {
+                    console.warn(`Missing 'place' for key "${outputKey}" in traverse.map (and field is not a direct Bridi field).`);
+                    continue;
+                }
+
+                const targetNodePubkey = bridiDatni.sumti[valueDefinition.place];
+                if (!targetNodePubkey) {
+                    relatedNodeResult[outputKey] = null;
+                    continue;
+                }
+
+                const targetNodeDoc = await getSumtiDoc(targetNodePubkey);
+                if (!targetNodeDoc) {
+                    relatedNodeResult[outputKey] = null;
+                    continue;
+                }
+
+                // Determine the value based on the definition type for the target Sumti node
+                if (valueDefinition.field) {
+                    relatedNodeResult[outputKey] = selectFieldValue(targetNodeDoc, valueDefinition.field, targetNodePubkey);
+                } else if (valueDefinition.map) {
+                    relatedNodeResult[outputKey] = await processMap(targetNodeDoc, valueDefinition.map, targetNodePubkey, user);
+                } else if (valueDefinition.traverse) {
+                    relatedNodeResult[outputKey] = await processTraversal(targetNodeDoc, valueDefinition.traverse, targetNodePubkey, user);
+                }
+                // Note: Nested resolve inside this block would need careful context handling
+                // Currently handled above, assuming resolve always uses Bridi context here.
+                // --- End PLACE-specific handling ---
             }
         }
 
@@ -562,28 +726,53 @@ async function processResolve(
     user: CapabilityUser | null
 ): Promise<QueryResult | null> {
     // 1. Get the pubkey from the source document field
+    console.log(`[Query Resolve] Attempting resolve using field: ${resolveDefinition.fromField}`); // Log entry and source
     const targetPubKey = selectFieldValue(sourceDoc, resolveDefinition.fromField, "") as string | undefined;
+    console.log(`[Query Resolve] Extracted targetPubKey: ${targetPubKey}`); // Log extracted pubkey
 
     if (!targetPubKey) {
         console.warn(`[Query Resolve] Pubkey not found or invalid in field: ${resolveDefinition.fromField}`);
         return null; // Or handle based on onError policy
     }
 
+    // Determine target type (default to 'sumti')
+    const targetType = resolveDefinition.targetType ?? 'sumti';
+    console.log(`[Query Resolve] Resolving target type: ${targetType}`);
+
     // 2. Fetch the target document
     let targetDoc: LoroDoc | null = null;
     let docMeta: Awaited<ReturnType<typeof import('$lib/KERNEL/hominio-db')['hominioDB']['getDocument']>> | null = null;
 
     try {
-        const exists = await checkSumtiExists(targetPubKey);
+        console.log(`[Query Resolve] Checking existence for target: ${targetPubKey}`); // Log before check
+
+        // --- Use correct existence check based on type ---
+        let exists = false;
+        if (targetType === 'selbri') {
+            exists = await checkSelbriExists(targetPubKey);
+        } else { // Default to sumti
+            exists = await checkSumtiExists(targetPubKey);
+        }
         if (!exists) {
-            console.warn(`[Query Resolve] Target document ${targetPubKey} not found in Sumti index.`);
+            console.warn(`[Query Resolve] Target ${targetType} document ${targetPubKey} not found in index.`);
             return null;
         }
 
-        targetDoc = await getSumtiDoc(targetPubKey);
+        console.log(`[Query Resolve] Fetching target document: ${targetPubKey}`); // Log before fetch
+
+        // --- Use correct fetch function based on type ---
+        if (targetType === 'selbri') {
+            targetDoc = await getSelbriDoc(targetPubKey);
+        } else { // Default to sumti
+            targetDoc = await getSumtiDoc(targetPubKey);
+        }
+
         if (!targetDoc) {
+            console.warn(`[Query Resolve] get${targetType === 'selbri' ? 'Selbri' : 'Sumti'}Doc returned null for ${targetPubKey}`); // Log fetch failure
             return null;
         }
+        console.log(`[Query Resolve] Fetched target document successfully: ${targetPubKey}`); // Log fetch success
+
         docMeta = await import('$lib/KERNEL/hominio-db').then(
             module => module.hominioDB.getDocument(targetPubKey)
         );
@@ -605,7 +794,9 @@ async function processResolve(
 
     // 4. Process the map for the resolved document
     try {
+        console.log(`[Query Resolve] Processing map for resolved document: ${targetPubKey}`); // Log before map processing
         const resolvedResult = await processMap(targetDoc, resolveDefinition.map, targetPubKey, user);
+        console.log(`[Query Resolve] Map processing complete for ${targetPubKey}, result:`, resolvedResult); // Log map result
         return resolvedResult;
     } catch (error) {
         console.error(`[Query Resolve] Error processing map for resolved document ${targetPubKey}:`, error);
@@ -685,6 +876,10 @@ export function processReactiveQuery(
             debounceTimer = setTimeout(async () => {
                 const currentUser = getCurrentUserFn();
                 const latestQueryDefinition = get(queryDefinitionStore);
+
+                // <<< DEBUG LOG >>>
+                console.log("[LoroHQL Reactive] Executing with Query Definition:", JSON.stringify(latestQueryDefinition, null, 2));
+
                 const latestQueryDefString = JSON.stringify(latestQueryDefinition);
 
                 if (!latestQueryDefinition || latestQueryDefString !== lastQueryDefinitionString) {
