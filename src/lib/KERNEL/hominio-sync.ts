@@ -5,6 +5,7 @@ import { browser } from '$app/environment';
 import { canWrite, canDelete, type CapabilityUser } from './hominio-caps'; // Import capabilities
 import { getContentStorage } from '$lib/KERNEL/hominio-storage';
 import { getMe } from '$lib/KERNEL/hominio-auth'; // Import renamed function
+import { GENESIS_PUBKEY } from '$db/constants'; // <<< Import GENESIS_PUBKEY
 
 // Helper type for API response structure
 type ApiResponse<T> = {
@@ -308,7 +309,8 @@ export class HominioSync {
                     } else if (docPushError) {
                         console.warn(`[Push] Skipping local state update for ${doc.pubKey} due to sync error: ${docPushError}`); // LOG: Skipping local update due to error
                     } else {
-                        console.warn(`[Push] No local state update needed for ${doc.pubKey} (no sync operations performed or needed).`); // LOG: No local update needed
+                        // It's normal to reach here if only the existence check failed initially, but no creation/update was applicable
+                        // console.warn(`[Push] No local state update needed for ${doc.pubKey} (no sync operations performed or needed).`); // LOG: No local update needed - Commented out as it can be noisy
                     }
                     // --- End Local State Update ---
 
@@ -368,8 +370,10 @@ export class HominioSync {
      */
     private async syncContentBatchFromServer(
         contentItems: Array<{ cid: string, type: 'snapshot' | 'update', docPubKey: string }>
-    ): Promise<void> {
-        if (!contentItems || contentItems.length === 0) return;
+    ): Promise<Set<string>> { // Return the set of CIDs successfully saved locally
+        const successfullySavedCids = new Set<string>();
+        if (!contentItems || contentItems.length === 0) return successfullySavedCids;
+
         try {
             const allCids = contentItems.map(item => item.cid);
 
@@ -380,8 +384,11 @@ export class HominioSync {
             const cidsToFetch = contentItems.filter(item => !existingLocalCids.has(item.cid))
                 .map(item => item.cid);
 
+            // Add already existing local CIDs to the success set
+            existingLocalCids.forEach(cid => successfullySavedCids.add(cid));
+
             if (cidsToFetch.length === 0) {
-                return;
+                return successfullySavedCids; // All content already exists locally
             }
 
             // 3. Check server existence (robustly)
@@ -392,18 +399,23 @@ export class HominioSync {
                 const response = checkResult as ApiResponse<{ results: Array<{ cid: string, exists: boolean }> }>; // Cast for checking error
 
                 if (response.error) {
-                    throw new Error(`Server Error: ${response.error.value?.message ?? `Status ${response.error.status}`}`);
+                    throw new Error(`Server Error checking content existence: ${response.error.value?.message ?? `Status ${response.error.status}`}`);
                 }
                 for (const result of response.data.results) {
                     if (result.exists) {
                         existingServerCids.add(result.cid);
+                    } else {
+                        // If server says content doesn't exist, we can't fetch it. Log it.
+                        console.warn(`[Pull Content] Server reported content CID ${result.cid} does not exist.`);
                     }
                 }
             } catch (err) {
-                console.error('Failed to check content existence on server:', err);
-                // Decide how to proceed - maybe stop content sync for this batch?
-                // Re-throwing for now to signal a problem
-                throw new Error(`Content check failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+                console.error('[Pull Content] Failed to check content existence on server:', err);
+                // Don't re-throw here, proceed with CIDs that *might* exist or were confirmed
+                // The fetch step below will handle individual failures.
+                // But we should probably report this as a sync error if it happens.
+                this.setSyncError(`Content check failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+                // Continue, but the batch might be incomplete.
             }
 
             // 4. Fetch binary content for each existing CID (robustly)
@@ -415,19 +427,24 @@ export class HominioSync {
                     const binaryResponse = binaryResponseResult as ApiResponse<{ binaryData: number[] }>; // Cast for checking error
 
                     if (binaryResponse.error) {
-                        throw new Error(`Server Error: ${binaryResponse.error.value?.message ?? `Status ${binaryResponse.error.status}`}`);
+                        // Handle 404 specifically - maybe content disappeared between check and fetch
+                        if (binaryResponse.error.status === 404) {
+                            console.warn(`[Pull Content] Content ${cid} not found during fetch (404).`);
+                            return null;
+                        }
+                        throw new Error(`Server Error fetching content ${cid}: ${binaryResponse.error.value?.message ?? `Status ${binaryResponse.error.status}`}`);
                     }
                     if (binaryResponse.data?.binaryData) {
                         const binaryData = new Uint8Array(binaryResponse.data.binaryData);
                         return { cid, binaryData, meta: { type: contentItemMeta.type, documentPubKey: contentItemMeta.docPubKey } };
                     } else {
-                        console.warn(`No binary data returned for CID ${cid}`); // KEEP Warning
+                        console.warn(`[Pull Content] No binary data returned for CID ${cid}`); // KEEP Warning
                         return null;
                     }
                 } catch (err) {
                     // Log specific fetch error but don't fail the whole batch
-                    console.error(`Error fetching content ${cid}:`, err);
-                    return null;
+                    console.error(`[Pull Content] Error fetching content ${cid}:`, err);
+                    return null; // Indicate failure for this specific CID
                 }
             });
 
@@ -438,47 +455,27 @@ export class HominioSync {
             if (contentToSave.length > 0) {
                 const savePromises = contentToSave.map(item =>
                     hominioDB.saveRawContent(item.cid, item.binaryData, item.meta)
+                        .then(() => {
+                            successfullySavedCids.add(item.cid); // Add CID to success set on successful save
+                        })
                         .catch(saveErr => {
-                            console.error(`Failed to save content ${item.cid} locally:`, saveErr); // Log specific save error
-                            // Don't fail the whole batch
+                            console.error(`[Pull Content] Failed to save content ${item.cid} locally:`, saveErr); // Log specific save error
+                            // Don't fail the whole batch, don't add to success set
                         })
                 );
                 await Promise.all(savePromises);
             }
 
         } catch (err) {
-            // Catch errors from steps 1, 3
-            console.error(`Error syncing content batch:`, err); // KEEP Error Log
-            // Propagate the error to the main pull function
-            throw err;
+            // Catch errors from steps 1 (should be rare)
+            console.error(`[Pull Content] Error syncing content batch:`, err); // KEEP Error Log
+            // Propagate the error? Maybe just log and return potentially incomplete success set.
+            // Setting sync error here might be too broad if some content was saved.
+            if (!get(status).syncError) { // Avoid overwriting a more specific error
+                this.setSyncError(`Content batch sync failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+            }
         }
-    }
-
-    /**
-     * Sync a single document metadata from server to local state (using hominioDB)
-     * Returns true if the document was processed, false otherwise.
-     */
-    private async syncDocMetadataFromServer(serverDoc: Docs, localDocs: Docs[]): Promise<boolean> {
-        const localDoc = localDocs.find(doc => doc.pubKey === serverDoc.pubKey);
-
-        // Determine if an update is needed (comparison logic remains the same)
-        const needsUpdate = !localDoc ||
-            serverDoc.snapshotCid !== localDoc.snapshotCid ||
-            JSON.stringify(serverDoc.updateCids?.sort()) !== JSON.stringify(localDoc.updateCids?.sort()) ||
-            serverDoc.owner !== localDoc.owner;
-
-        if (!needsUpdate) {
-            return false; // No changes needed
-        }
-
-        // Save merged doc using hominioDB method (handles storage, stores, and notification)
-        try {
-            await hominioDB.saveSyncedDocument(serverDoc); // Pass server data directly
-            return true; // Document was processed
-        } catch (saveErr) {
-            console.error(`Failed to save synced doc metadata ${serverDoc.pubKey} via hominioDB:`, saveErr); // KEEP Error Log
-            return false; // Saving failed
-        }
+        return successfullySavedCids;
     }
 
     /**
@@ -491,139 +488,332 @@ export class HominioSync {
             return;
         }
         this.setSyncStatus(true);
-        this.setSyncError(null);
+        this.setSyncError(null); // Clear previous errors at the start
+
+        // <<< Define sets for prioritization >>>
+        const fackiIndexPubKeys = new Set<string>();
+
         try {
-            let serverDocs: Docs[] = [];
+            // --- 0. Ensure Genesis Facki Meta is synced first --- 
+            let fackiMetaDoc: Docs | null = null;
+            let fackiMetaSynced = false;
+            try {
+                console.log('[Pull] Prioritizing fetch for Facki Meta (@genesis)... ');
+                // @ts-expect-error Eden Treaty issue - Keep: needed for dynamic route
+                const metaResult = await hominio.api.docs({ pubKey: GENESIS_PUBKEY }).get();
+                const metaResponse = metaResult as ApiResponse<ServerDocData | null>; // Expect single doc or null/error
+
+                if (metaResponse.error && metaResponse.error.status !== 404) {
+                    throw new Error(`Server Error fetching Facki Meta: ${metaResponse.error.value?.message ?? `Status ${metaResponse.error.status}`}`);
+                } else if (metaResponse.data) {
+                    // <<< Add Log: Inspect raw data >>>
+                    console.log('[Pull Debug] Raw Facki Meta data received from server:', JSON.stringify(metaResponse.data));
+                    // <<< End Log >>>
+
+                    // Basic validation and map to Docs type
+                    if (typeof metaResponse.data !== 'object' || metaResponse.data === null || typeof metaResponse.data.pubKey !== 'string' || typeof metaResponse.data.owner !== 'string') {
+                        throw new Error(`Invalid Facki Meta data format received from server`);
+                    }
+                    let updatedAtString: string;
+                    if (metaResponse.data.updatedAt instanceof Date) updatedAtString = metaResponse.data.updatedAt.toISOString();
+                    else if (typeof metaResponse.data.updatedAt === 'string') updatedAtString = metaResponse.data.updatedAt;
+                    else updatedAtString = new Date().toISOString(); // Fallback
+
+                    fackiMetaDoc = {
+                        pubKey: metaResponse.data.pubKey,
+                        owner: metaResponse.data.owner,
+                        updatedAt: updatedAtString,
+                        snapshotCid: metaResponse.data.snapshotCid ?? undefined,
+                        updateCids: Array.isArray(metaResponse.data.updateCids) ? metaResponse.data.updateCids : [],
+                    };
+
+                    console.log(`[Pull] Facki Meta doc found on server. Snapshot CID: ${fackiMetaDoc.snapshotCid}`);
+
+                    if (fackiMetaDoc.snapshotCid) {
+                        const contentItems = [{ cid: fackiMetaDoc.snapshotCid, type: 'snapshot' as const, docPubKey: GENESIS_PUBKEY }];
+                        const savedCids = await this.syncContentBatchFromServer(contentItems);
+                        if (savedCids.has(fackiMetaDoc.snapshotCid)) {
+                            await hominioDB.saveSyncedDocument(fackiMetaDoc); // Save metadata after content
+                            console.log('[Pull] Facki Meta content synced and metadata saved.');
+                            fackiMetaSynced = true;
+                        } else {
+                            throw new Error(`Failed to sync Facki Meta snapshot content: ${fackiMetaDoc.snapshotCid}`);
+                        }
+                    }
+                    // TODO: Handle fackiMetaDoc updates if necessary?
+                } else {
+                    console.warn('[Pull] Facki Meta document (${GENESIS_PUBKEY}) not found on server. Indexing may fail.');
+                }
+
+            } catch (err) {
+                console.error('[Pull] Failed to sync Facki Meta document:', err);
+                this.setSyncError(`Facki Meta sync failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+                this.setSyncStatus(false); // Ensure sync status is reset on early exit
+                return; // Cannot proceed without Facki Meta (or if fetch failed)
+            }
+
+            // --- Parse Facki Meta to find other index pubkeys --- 
+            if (fackiMetaSynced && fackiMetaDoc?.snapshotCid) {
+                try {
+                    const fackiLoro = await hominioDB.getLoroDoc(GENESIS_PUBKEY);
+                    if (fackiLoro) {
+                        const datniMap = fackiLoro.getMap('datni');
+                        const indexMap = datniMap.get('vasru') as { sumti?: string, selbri?: string, bridi?: string, bridi_by_component?: string } | undefined;
+                        if (indexMap?.sumti) fackiIndexPubKeys.add(indexMap.sumti);
+                        if (indexMap?.selbri) fackiIndexPubKeys.add(indexMap.selbri);
+                        if (indexMap?.bridi) fackiIndexPubKeys.add(indexMap.bridi);
+                        if (indexMap?.bridi_by_component) fackiIndexPubKeys.add(indexMap.bridi_by_component);
+                        console.log('[Pull] Identified Facki Index PubKeys:', Array.from(fackiIndexPubKeys));
+                    } else {
+                        console.warn('[Pull] Could not load Facki Meta LoroDoc locally after sync to parse index keys.');
+                    }
+                } catch (parseErr) {
+                    console.error('[Pull] Error parsing Facki Meta document locally:', parseErr);
+                    // Proceed with sync, but indexing might be incomplete
+                }
+            }
+
+            // --- 1. Fetch ALL Server Document Metadata (excluding Facki Meta) --- 
+            let allOtherServerDocs: Docs[] = [];
             try {
                 const serverResult = await hominio.api.docs.list.get();
                 const response = serverResult as ApiResponse<unknown>; // Cast for checking error
 
                 if (response.error) {
-                    throw new Error(`Server Error: ${response.error.value?.message ?? `Status ${response.error.status}`}`);
+                    throw new Error(`Server Error fetching doc list: ${response.error.value?.message ?? `Status ${response.error.status}`}`);
                 }
-
                 if (!Array.isArray(response.data)) {
-                    throw new Error(`Invalid data format received (expected array)`);
+                    throw new Error(`Invalid data format received for doc list (expected array)`);
                 }
 
-                const mappedData: (Docs | null)[] = response.data.map((element: unknown): Docs | null => {
-                    const dbDoc = element as ServerDocData;
-                    if (typeof dbDoc !== 'object' || dbDoc === null || typeof dbDoc.pubKey !== 'string' || typeof dbDoc.owner !== 'string') {
-                        console.warn('Skipping invalid document data from server:', element); // KEEP Warning
-                        return null;
-                    }
-                    let updatedAtString: string;
-                    if (dbDoc.updatedAt instanceof Date) {
-                        updatedAtString = dbDoc.updatedAt.toISOString();
-                    } else if (typeof dbDoc.updatedAt === 'string') {
-                        updatedAtString = dbDoc.updatedAt;
-                    } else {
-                        console.warn(`Unexpected updatedAt type for doc ${dbDoc.pubKey}:`, typeof dbDoc.updatedAt);
-                        updatedAtString = new Date().toISOString();
-                    }
-                    const docResult: Docs = {
-                        pubKey: dbDoc.pubKey,
-                        owner: dbDoc.owner,
-                        updatedAt: updatedAtString,
-                        snapshotCid: dbDoc.snapshotCid ?? undefined,
-                        updateCids: Array.isArray(dbDoc.updateCids) ? dbDoc.updateCids : [],
-                    };
-                    return docResult;
-                });
-                serverDocs = mappedData.filter((doc): doc is Docs => doc !== null);
+                // Map raw server data to Docs type, handling potential issues
+                const mappedData: (Docs | null)[] = response.data
+                    .filter((element: unknown) => (element as ServerDocData)?.pubKey !== GENESIS_PUBKEY) // <<< Exclude Facki Meta
+                    .map((element: unknown): Docs | null => {
+                        const dbDoc = element as ServerDocData; // Assuming ServerDocData structure
+                        if (typeof dbDoc !== 'object' || dbDoc === null || typeof dbDoc.pubKey !== 'string' || typeof dbDoc.owner !== 'string') {
+                            console.warn('[Pull] Skipping invalid document data from server:', element); // KEEP Warning
+                            return null;
+                        }
+                        let updatedAtString: string;
+                        if (dbDoc.updatedAt instanceof Date) {
+                            updatedAtString = dbDoc.updatedAt.toISOString();
+                        } else if (typeof dbDoc.updatedAt === 'string') {
+                            updatedAtString = dbDoc.updatedAt;
+                        } else {
+                            console.warn(`[Pull] Unexpected updatedAt type for doc ${dbDoc.pubKey}:`, typeof dbDoc.updatedAt, '. Using current time.');
+                            updatedAtString = new Date().toISOString(); // Fallback
+                        }
+                        const docResult: Docs = {
+                            pubKey: dbDoc.pubKey,
+                            owner: dbDoc.owner,
+                            updatedAt: updatedAtString,
+                            snapshotCid: dbDoc.snapshotCid ?? undefined,
+                            updateCids: Array.isArray(dbDoc.updateCids) ? dbDoc.updateCids : [],
+                            // localState should NOT be present in server data
+                        };
+                        return docResult;
+                    });
+                allOtherServerDocs = mappedData.filter((doc): doc is Docs => doc !== null);
+
             } catch (err) {
-                // Catch network or server errors during doc list fetch
-                console.error('Failed to fetch document list from server:', err);
+                console.error('[Pull] Failed to fetch document list from server:', err);
                 this.setSyncError(`Doc list fetch failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
-                // Don't proceed if we can't get the list
-                return;
+                this.setSyncStatus(false); // Ensure sync status is reset on early exit
+                return; // Cannot proceed without the document list
             }
 
-
-            // --- Fetch local docs using loadAllDocsReturn --- 
+            // --- 2. Fetch Local Document Metadata ---
             const localDocs = await hominioDB.loadAllDocsReturn();
-            // -------------------------------------------------
-            const allRequiredContentCids = new Map<string, { type: 'snapshot' | 'update', docPubKey: string }>();
-            const oldUpdateCids = new Set<string>();
-            localDocs.forEach((doc: Docs) => { // Added explicit type for doc
-                doc.updateCids?.forEach(cid => oldUpdateCids.add(cid));
-                doc.localState?.updateCids?.forEach(cid => oldUpdateCids.add(cid));
-            });
+            const localDocsMap = new Map(localDocs.map(doc => [doc.pubKey, doc]));
 
-            // 1. Process metadata for all server documents FIRST
-            for (const serverDoc of serverDocs) {
-                // Pass the correctly fetched localDocs array
-                await this.syncDocMetadataFromServer(serverDoc, localDocs);
+            // --- 3. Identify Metadata Changes and Required Content ---
+            const allRequiredContentItems: Array<{ cid: string, type: 'snapshot' | 'update', docPubKey: string }> = [];
+            const requiredContentCids = new Set<string>(); // Use a Set to avoid duplicates
 
-                // Collect required CIDs from server data for batch content sync later
-                if (serverDoc.snapshotCid) {
-                    allRequiredContentCids.set(serverDoc.snapshotCid, { type: 'snapshot', docPubKey: serverDoc.pubKey });
+            // --- Separate Facki Indices from other docs --- 
+            const fackiServerDocsToUpdate: Docs[] = [];
+            const otherServerDocsToUpdate: Docs[] = [];
+
+            // Function to add required content items safely
+            const addRequiredContent = (doc: Docs) => {
+                if (doc.snapshotCid && !requiredContentCids.has(doc.snapshotCid)) {
+                    requiredContentCids.add(doc.snapshotCid);
+                    allRequiredContentItems.push({ cid: doc.snapshotCid, type: 'snapshot', docPubKey: doc.pubKey });
                 }
-                serverDoc.updateCids?.forEach(cid => {
-                    allRequiredContentCids.set(cid, { type: 'update', docPubKey: serverDoc.pubKey });
+                doc.updateCids?.forEach(cid => {
+                    if (!requiredContentCids.has(cid)) {
+                        requiredContentCids.add(cid);
+                        allRequiredContentItems.push({ cid, type: 'update', docPubKey: doc.pubKey });
+                    }
                 });
+            };
+
+            // Process Facki indices identified earlier
+            for (const fackiPubKey of fackiIndexPubKeys) {
+                const serverDoc = allOtherServerDocs.find(d => d.pubKey === fackiPubKey);
+                if (!serverDoc) {
+                    console.warn(`[Pull] Facki index doc ${fackiPubKey} (from meta) not found in server list.`);
+                    continue;
+                }
+
+                const localDoc = localDocsMap.get(serverDoc.pubKey);
+
+                // Determine if metadata update is needed
+                const needsUpdate = !localDoc ||
+                    new Date(serverDoc.updatedAt).getTime() > new Date(localDoc.updatedAt).getTime() || // Simple timestamp check
+                    serverDoc.snapshotCid !== localDoc.snapshotCid ||
+                    JSON.stringify(serverDoc.updateCids?.sort()) !== JSON.stringify(localDoc.updateCids?.sort()) ||
+                    serverDoc.owner !== localDoc.owner;
+
+                // If an update is needed based on metadata comparison, mark for update and collect content CIDs
+                if (needsUpdate) {
+                    fackiServerDocsToUpdate.push(serverDoc);
+                }
+
+                // Always collect required CIDs from server doc
+                addRequiredContent(serverDoc);
             }
 
-            // 2. Sync all required content in one batch AFTER processing metadata
-            if (allRequiredContentCids.size > 0) {
+            // Process remaining (non-Facki) documents
+            for (const serverDoc of allOtherServerDocs) {
+                // Skip if it was already processed as a Facki index
+                if (fackiIndexPubKeys.has(serverDoc.pubKey)) continue;
+
+                const localDoc = localDocsMap.get(serverDoc.pubKey);
+
+                // Determine if metadata update is needed
+                const needsUpdate = !localDoc ||
+                    new Date(serverDoc.updatedAt).getTime() > new Date(localDoc.updatedAt).getTime() || // Simple timestamp check
+                    serverDoc.snapshotCid !== localDoc.snapshotCid ||
+                    JSON.stringify(serverDoc.updateCids?.sort()) !== JSON.stringify(localDoc.updateCids?.sort()) ||
+                    serverDoc.owner !== localDoc.owner;
+
+                // If an update is needed based on metadata comparison, mark for update and collect content CIDs
+                if (needsUpdate) {
+                    otherServerDocsToUpdate.push(serverDoc);
+                }
+
+                // Always collect required CIDs from server doc
+                addRequiredContent(serverDoc);
+            }
+
+            // --- 4. Fetch All Required Content FIRST ---
+            let successfullyFetchedCids = new Set<string>();
+            if (allRequiredContentItems.length > 0) {
                 try {
-                    await this.syncContentBatchFromServer(Array.from(allRequiredContentCids.entries()).map(([cid, meta]) => ({ cid, ...meta })));
+                    // syncContentBatchFromServer now returns the set of CIDs it successfully saved/found locally
+                    successfullyFetchedCids = await this.syncContentBatchFromServer(allRequiredContentItems);
                 } catch (contentSyncErr) {
-                    console.error("Error during content batch sync:", contentSyncErr);
-                    this.setSyncError(`Content sync failed: ${contentSyncErr instanceof Error ? contentSyncErr.message : 'Unknown error'}`);
-                    // Allow metadata updates to persist, but report content sync error
+                    // Errors during the batch sync are logged within the function.
+                    // We might have partial success, so we continue to metadata saving.
+                    console.error("[Pull] Error occurred during content batch sync:", contentSyncErr);
+                    // The function might have already set a syncError, or we can set a generic one here if not set
+                    if (!get(status).syncError) {
+                        this.setSyncError(`Content sync potentially incomplete: ${contentSyncErr instanceof Error ? contentSyncErr.message : 'Unknown error'}`);
+                    }
                 }
             }
 
-            // --- Cleanup Logic Start --- (Should be safe even if content sync failed)
+            // --- 5. Save Updated Metadata Locally (Facki indices first, then others) ---
+            const processMetadataSave = async (docsToSave: Docs[]) => {
+                for (const serverDocToSave of docsToSave) {
+                    try {
+                        // Optional: Add a check here if saving metadata depends critically on the snapshot being present
+                        if (serverDocToSave.snapshotCid && !successfullyFetchedCids.has(serverDocToSave.snapshotCid)) {
+                            console.warn(`[Pull] Skipping metadata save for ${serverDocToSave.pubKey} because required snapshot ${serverDocToSave.snapshotCid} was not successfully fetched/saved.`);
+                            // Optionally set an error or flag this doc for retry later
+                            if (!get(status).syncError) { // Avoid overwriting more critical errors
+                                this.setSyncError(`Pull incomplete: Missing snapshot content for ${serverDocToSave.pubKey}`);
+                            }
+                            continue; // Skip saving this metadata for now
+                        }
+
+                        // Save the metadata using the server version
+                        await hominioDB.saveSyncedDocument(serverDocToSave);
+                        // This call within hominioDB should ideally handle the docChangeNotifier trigger
+                    } catch (saveErr) {
+                        console.error(`[Pull] Failed to save synced doc metadata ${serverDocToSave.pubKey} locally:`, saveErr); // KEEP Error Log
+                        // Set a generic error if none exists yet
+                        if (!get(status).syncError) {
+                            this.setSyncError(`Metadata save failed for ${serverDocToSave.pubKey}: ${saveErr instanceof Error ? saveErr.message : 'Unknown error'}`);
+                        }
+                    }
+                }
+            };
+
+            console.log(`[Pull] Saving metadata for ${fackiServerDocsToUpdate.length} Facki index docs...`);
+            await processMetadataSave(fackiServerDocsToUpdate);
+
+            console.log(`[Pull] Saving metadata for ${otherServerDocsToUpdate.length} other docs...`);
+            await processMetadataSave(otherServerDocsToUpdate);
+
+            // --- 6. Cleanup Logic --- (Should run even if some errors occurred)
             try {
-                const refreshedLocalDocs = await hominioDB.loadAllDocsReturn(); // Fetch latest state directly
+                // Fetch the latest local state *after* metadata updates
+                const refreshedLocalDocs = await hominioDB.loadAllDocsReturn();
                 const stillReferencedCids = new Set<string>();
                 refreshedLocalDocs.forEach(doc => {
-                    doc.updateCids?.forEach(cid => stillReferencedCids.add(cid));
-                    doc.localState?.updateCids?.forEach(cid => stillReferencedCids.add(cid));
-                    // Add snapshot CIDs too, don't delete needed snapshots
+                    // Include CIDs from both synced state and potential local pending state
                     if (doc.snapshotCid) stillReferencedCids.add(doc.snapshotCid);
+                    doc.updateCids?.forEach(cid => stillReferencedCids.add(cid));
                     if (doc.localState?.snapshotCid) stillReferencedCids.add(doc.localState.snapshotCid);
+                    doc.localState?.updateCids?.forEach(cid => stillReferencedCids.add(cid));
                 });
 
-                // Determine which old CIDs are no longer referenced
-                const cidsInContentStore = (await getContentStorage().getAll()).map(item => item.key);
+                // Get all CIDs currently in the content store
+                const cidsInContentStore = (await getContentStorage().getAll()).map(item => item.key); // Revert to original method
+
+                // Determine which stored CIDs are no longer referenced anywhere
                 const unreferencedCids = cidsInContentStore.filter(
-                    cid => !stillReferencedCids.has(cid)
+                    (cid: string) => !stillReferencedCids.has(cid) // Explicitly type cid
                 );
 
                 // Delete unreferenced CIDs from local content storage
                 if (unreferencedCids.length > 0) {
+                    console.warn(`[Pull Cleanup] Deleting ${unreferencedCids.length} unreferenced content items...`); // Keep warn
                     const contentStorage = getContentStorage();
+                    let deleteFailures = 0;
                     for (const cidToDelete of unreferencedCids) {
                         try {
-                            await contentStorage.delete(cidToDelete); // Delete any unreferenced content
+                            await contentStorage.delete(cidToDelete);
                         } catch (deleteErr) {
+                            deleteFailures++;
                             console.warn(`  - Failed to delete unreferenced content ${cidToDelete}:`, deleteErr); // KEEP Warning
                         }
                     }
+                    if (deleteFailures > 0) console.warn(`[Pull Cleanup] Failed to delete ${deleteFailures} items.`);
+                    else console.warn(`[Pull Cleanup] Finished deleting unreferenced content.`);
                 }
             } catch (cleanupErr) {
-                console.error("Error during local content cleanup:", cleanupErr);
-                // Don't setSyncError here, as the main pull might have succeeded
+                console.error("[Pull] Error during local content cleanup:", cleanupErr);
+                // Don't setSyncError here, as the main pull might have partially succeeded
             }
             // --- Cleanup Logic End ---
 
-            // Set success status (if no major errors occurred)
-            if (!get(status).syncError) { // Only update lastSynced if no error was set
+            // --- 7. Final Status Update & Notification ---
+            // Set success status only if no errors were previously set during the process
+            if (!get(status).syncError) {
                 this.status.update(s => ({ ...s, lastSynced: new Date() }));
+                console.warn("[Pull] Pull from server completed successfully."); // Keep warn
+            } else {
+                console.error("[Pull] Pull from server completed with errors:", get(status).syncError);
             }
-            // Trigger reactivity AFTER metadata and content sync is complete
+
+            // Explicitly trigger notification *after* all processing steps
+            // This ensures listeners get the state *after* content and metadata sync attempts
             triggerDocChangeNotification();
 
         } catch (err: unknown) {
-            // Catch errors from the main pull process steps (e.g., initial list fetch failure)
+            // Catch errors from the main pull process steps (e.g., initial list fetch failure handled above, or local DB load failure)
             console.error('Error during pull from server:', err); // KEEP Error Log
-            this.setSyncError(err instanceof Error ? err.message : 'Pull from server failed');
+            // Set error only if not already set by a more specific step
+            if (!get(status).syncError) {
+                this.setSyncError(err instanceof Error ? err.message : 'Pull from server failed');
+            }
         } finally {
-            this.setSyncStatus(false);
-            this.updatePendingChangesCount();
+            this.setSyncStatus(false); // Always reset syncing status
+            this.updatePendingChangesCount(); // Update pending count based on final state
         }
     }
 
@@ -697,6 +887,7 @@ export class HominioSync {
     async deleteDocumentOnServer(pubKey: string): Promise<boolean> {
         if (!browser || !get(status).isOnline) throw new Error('Offline: Cannot delete document on server.');
         try {
+            // @ts-expect-error Eden Treaty type inference issue - Keep: needed for dynamic route
             const result = await hominio.api.docs({ pubKey }).delete();
             const response = result as ApiResponse<{ success: boolean; message?: string }>;
 
@@ -727,9 +918,16 @@ export class HominioSync {
     // --- Online/Offline Handlers ---
     private handleOnline = () => {
         status.update(s => ({ ...s, isOnline: true }));
-        // Attempt to push changes immediately when coming online
-        const user = getMe(); // Call renamed function
-        this.pushToServer(user); // Pass user
+        console.warn("HominioSync: Connection restored. Attempting sync..."); // Keep warn
+        // Attempt to PULL first when coming online to get latest server state
+        this.pullFromServer().finally(() => {
+            // Then attempt to push any pending local changes
+            const user = getMe();
+            if (get(status).pendingLocalChanges > 0) {
+                console.warn("[Sync Online] Pending changes detected, attempting push..."); // Keep warn
+                this.pushToServer(user);
+            }
+        });
     };
 
     private handleOffline = () => {
@@ -748,7 +946,20 @@ export class HominioSync {
             window.removeEventListener('online', this.handleOnline);
             window.removeEventListener('offline', this.handleOffline);
         }
+        if (this._syncDebounceTimer) {
+            clearTimeout(this._syncDebounceTimer);
+            this._syncDebounceTimer = null;
+        }
     }
 }
 
 export const hominioSync = new HominioSync();
+
+// Helper function to get all keys from content storage (adjust if needed)
+// This assumes getContentStorage returns an object with a method like getAllKeys()
+// or you might need to adapt it based on the actual storage implementation.
+declare module '$lib/KERNEL/hominio-storage' {
+    interface ContentStorage {
+        getAllKeys(): Promise<string[]>;
+    }
+}

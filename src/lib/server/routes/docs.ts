@@ -40,13 +40,17 @@ interface ContentResponse {
     binaryData?: number[]; // Optional binary data
 }
 
-interface DocGetResponse {
+// Type for content info without metadata
+type ContentInfo = Omit<ContentResponse, 'metadata'>;
+
+// Type for the nested response when binary is requested
+interface DocGetResponseWithBinary {
     document: schema.Doc;
-    content?: ContentResponse | null;
+    content: ContentInfo & { binaryData: number[] };
 }
 
 // Content-related helper functions
-async function getContentByCid(cid: string): Promise<ContentResponse | null> { // Use defined type
+async function getContentByCid(cid: string): Promise<ContentInfo | null> { // Return type without metadata
     try {
         // Get content by CID
         const contentItem = await db.select().from(content).where(eq(content.cid, cid));
@@ -59,7 +63,7 @@ async function getContentByCid(cid: string): Promise<ContentResponse | null> { /
 
         // Get binary data and metadata
         const binaryData = item.raw as Buffer;
-        const metadata = item.metadata as Record<string, unknown> || {};
+        // const metadata = item.metadata as Record<string, unknown> || {}; // REMOVED: metadata column doesn't exist
 
         // Verify content integrity
         let verified = false;
@@ -77,7 +81,7 @@ async function getContentByCid(cid: string): Promise<ContentResponse | null> { /
         return {
             cid: item.cid,
             type: item.type,
-            metadata,
+            // metadata, // REMOVED
             hasBinaryData: binaryData.length > 0,
             contentLength: binaryData.length,
             verified,
@@ -131,7 +135,7 @@ export const docsHandlers = new Elysia()
                 description?: string;
             };
 
-            let snapshot, cid, pubKey, jsonState;
+            let snapshot, cid, pubKey;
 
             // If a snapshot is provided, use it; otherwise create a default one
             if (createDocBody.binarySnapshot && Array.isArray(createDocBody.binarySnapshot)) {
@@ -149,7 +153,6 @@ export const docsHandlers = new Elysia()
                     cid = await hashService.hashSnapshot(snapshotData);
                     // Use client's pubKey if provided, otherwise generate one
                     pubKey = createDocBody.pubKey || loroService.generatePublicKey();
-                    jsonState = loroDoc.toJSON();
                 } catch (error) {
                     if (set) set.status = 400;
                     return {
@@ -160,7 +163,7 @@ export const docsHandlers = new Elysia()
                 }
             } else {
                 // Create a default document if no snapshot provided
-                ({ snapshot, cid, jsonState } = await loroService.createDemoDoc());
+                ({ snapshot, cid } = await loroService.createDemoDoc());
                 // Use client's pubKey if provided, otherwise use the one from createDemoDoc
                 pubKey = createDocBody.pubKey || loroService.generatePublicKey();
             }
@@ -175,7 +178,7 @@ export const docsHandlers = new Elysia()
                     cid,
                     type: 'snapshot',
                     raw: Buffer.from(snapshot), // Store binary data directly
-                    metadata: { docState: jsonState } // Store metadata separately
+                    createdAt: new Date() // Added createdAt
                 };
                 contentResult = await db.insert(schema.content)
                     .values(contentEntry)
@@ -226,7 +229,7 @@ export const docsHandlers = new Elysia()
         }
     })
     // Get a specific document by pubKey
-    .get('/:pubKey', async ({ params, query, session, set }: AuthContext): Promise<DocGetResponse | { error: string; details?: string }> => {
+    .get('/:pubKey', async ({ params, query, session, set }: AuthContext): Promise<schema.Doc | DocGetResponseWithBinary | { error: string; details?: string }> => {
         try {
             const pubKey = params?.pubKey;
             if (!pubKey) {
@@ -249,32 +252,29 @@ export const docsHandlers = new Elysia()
                 return { error: 'Not authorized to access this document' };
             }
 
-            // Create the response using the defined interface
-            const response: DocGetResponse = {
-                document
-            };
+            // Check if binary data was requested using includeBinary query param
+            const includeBinary = query?.includeBinary === "true";
 
-            // If document has a snapshot CID, fetch and include the content
-            if (document.snapshotCid) {
+            if (includeBinary && document.snapshotCid) {
+                // Attempt to fetch content info and binary data only if requested
                 const contentData = await getContentByCid(document.snapshotCid);
-                if (contentData) {
-                    response.content = contentData;
+                const binaryData = await getBinaryContentByCid(document.snapshotCid);
 
-                    // Check if binary data was requested using includeBinary query param
-                    const includeBinary = query?.includeBinary === "true";
-                    if (includeBinary) {
-                        // Get the binary data directly
-                        const binaryData = await getBinaryContentByCid(document.snapshotCid);
-                        if (binaryData && response.content) {
-                            // Add binary data to the response
-                            response.content.binaryData = Array.from(binaryData);
-                        }
-                    }
+                if (contentData && binaryData) {
+                    // Construct the nested response ONLY if binary requested AND content/binary fetched successfully
+                    const responseWithBinary: DocGetResponseWithBinary = {
+                        document,
+                        content: { ...contentData, binaryData: Array.from(binaryData) }
+                    };
+                    return responseWithBinary;
+                } else {
+                    // Binary requested but content/binary fetch failed, log warning and fall through
+                    console.warn(`[GET /docs/${pubKey}] Binary data requested but failed to fetch content/binary for snapshot ${document.snapshotCid}. Returning document only.`);
                 }
             }
 
-            // Return the combined document and content data
-            return response;
+            // Default: Return the flat document object if binary not requested OR if binary fetch failed
+            return document;
         } catch (error) {
             console.error('Error retrieving document:', error);
             if (set?.status) set.status = 500;
@@ -504,10 +504,7 @@ docsHandlers.group('/:pubKey/update', app => app
                 type: 'update',
                 // Store binary data directly without any modification
                 raw: Buffer.from(binaryUpdateArray),
-                // Only store minimal metadata
-                metadata: {
-                    documentPubKey: pubKey
-                }
+                createdAt: new Date() // Added createdAt
             };
 
             // Check if this update already exists before inserting
@@ -697,7 +694,6 @@ async function createConsolidatedSnapshotInternal(pubKey: string): Promise<{
                 cid: newSnapshotCid,
                 type: 'snapshot',
                 raw: Buffer.from(newSnapshotData),
-                metadata: { documentPubKey: pubKey },
                 createdAt: new Date()
             }).onConflictDoNothing();
             console.log(`Created new consolidated snapshot content with CID: ${newSnapshotCid} for ${pubKey}`);
@@ -798,39 +794,12 @@ async function cleanupConsolidatedUpdates(pubKey: string, appliedUpdateCids: str
             if (updateCidsToDelete.length > 0) {
                 console.log(`${updateCidsToDelete.length} update CIDs can be safely deleted for ${pubKey}`);
 
-                // Double-check content metadata for any other references before deleting
-                const safeCidsToDelete: string[] = [];
-                for (const cid of updateCidsToDelete) {
-                    // Check if any other content refers to this CID in metadata
-                    const refCount = await db
-                        .select({ count: count() })
-                        .from(content)
-                        .where(
-                            and(
-                                ne(content.cid, cid),
-                                sql`${content.metadata}::text LIKE ${'%' + cid + '%'}`
-                            )
-                        );
+                // Delete the update CIDs that are not referenced by any other document
+                const deleteResult = await db.delete(content)
+                    .where(inArray(content.cid, updateCidsToDelete));
 
-                    // If no references found, safe to delete
-                    if (refCount[0].count === 0) {
-                        safeCidsToDelete.push(cid);
-                    } else {
-                        console.log(`Update ${cid} for ${pubKey} is referenced in content metadata, skipping deletion`);
-                    }
-                }
-
-                if (safeCidsToDelete.length > 0) {
-                    // Delete the update CIDs that are not referenced by any other document or content
-                    const deleteResult = await db.delete(content)
-                        .where(inArray(content.cid, safeCidsToDelete));
-
-                    console.log(`Deleted ${deleteResult.rowCount} consolidated updates for ${pubKey}`);
-                    deletedUpdates = deleteResult.rowCount ?? 0;
-                } else {
-                    console.log(`All consolidated updates for ${pubKey} are still referenced by other documents, none deleted`);
-                    deletedUpdates = 0;
-                }
+                console.log(`Deleted ${deleteResult.rowCount} consolidated updates for ${pubKey}`);
+                deletedUpdates = deleteResult.rowCount ?? 0;
             } else {
                 console.log(`All consolidated updates for ${pubKey} are still referenced by other documents, none deleted`);
                 deletedUpdates = 0;
