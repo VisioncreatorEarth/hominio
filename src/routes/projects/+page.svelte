@@ -1,5 +1,9 @@
 <script lang="ts">
-	import { processReactiveQuery, type LoroHqlQuery, type QueryResult } from '$lib/NEXT/query';
+	import {
+		processReactiveQuery,
+		type LoroHqlQuery,
+		type QueryResult
+	} from '$lib/KERNEL/hominio-query';
 	import { getMe } from '$lib/KERNEL/hominio-auth';
 	import { writable, type Readable } from 'svelte/store';
 

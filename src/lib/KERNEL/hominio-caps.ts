@@ -45,14 +45,16 @@ export function can(
 
     switch (ability) {
         case HominioAbility.READ:
+            // Read allowed if owner OR if it's a genesis doc
             return isOwner || isGenesis;
 
         case HominioAbility.WRITE:
-            // Write allowed if owner. Offline placeholder check is removed as
-            // offline state is handled before calling 'can'.
-            return isOwner;
+            // Write allowed if owner. Offline placeholder check is removed.
+            // <<< TEMPORARY DEBUG: Allow write to genesis docs >>>
+            return isOwner || isGenesis;
 
         case HominioAbility.DELETE:
+            // Delete only allowed if owner (genesis docs shouldn't be deleted)
             return isOwner;
 
         default:

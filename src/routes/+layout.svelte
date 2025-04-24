@@ -10,8 +10,7 @@
 	import type { LayoutData } from './$types';
 	import { type Snippet } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { hominioDB } from '$lib/KERNEL/hominio-db';
-	import { initializeLoroEngine } from '$lib/NEXT/loro-engine';
+	import { hominioIndexing } from '$lib/KERNEL/hominio-indexing';
 
 	// Get the session store from the auth client
 	const sessionStore = authClient.useSession();
@@ -126,15 +125,17 @@
 	onMount(async () => {
 		await initDocs();
 		await initVibe();
-		// Initialize NEXT loro-engine with the hominioDB instance
-		initializeLoroEngine(hominioDB);
-		console.log('[Layout] Initialized NEXT loro-engine with hominioDB');
+		console.log(
+			'[Layout] Mounted. HominioDB and HominioIndexing singletons initialized via import.'
+		);
 	});
 
 	onDestroy(async () => {
 		if (isCallActive) {
 			await handleEndCall();
 		}
+		// Optionally destroy indexing service if needed?
+		// hominioIndexing.destroy();
 	});
 
 	// --- Props ---

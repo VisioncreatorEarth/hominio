@@ -1,11 +1,11 @@
-import { hominioDB, type Docs, docChangeNotifier, triggerDocChangeNotification } from './hominio-db';
-import { canRead, canDelete } from './hominio-caps';
+import { hominioDB, type Docs, docChangeNotifier, triggerDocChangeNotification } from '../KERNEL/hominio-db';
+import { canRead, canDelete } from '../KERNEL/hominio-caps';
 import { readable, get, type Readable } from 'svelte/store';
 import { LoroMap, LoroList, LoroText } from 'loro-crdt';
 import { browser } from '$app/environment';
 import { authClient, getMe as getMeType } from '$lib/KERNEL/hominio-auth';
-import type { CapabilityUser } from './hominio-caps';
-import { validateBridiDocAgainstSelbri, type ValidationRuleStructure } from './hominio-validate';
+import type { CapabilityUser } from '../KERNEL/hominio-caps';
+import { validateBridiDocAgainstSelbri, type ValidationRuleStructure } from '../KERNEL/hominio-validate';
 
 type LoroJsonValue = string | number | boolean | null | LoroJsonObject | LoroJsonArray;
 interface LoroJsonObject { [key: string]: LoroJsonValue }

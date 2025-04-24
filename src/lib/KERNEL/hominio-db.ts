@@ -68,6 +68,17 @@ type LoroJsonValue = string | number | boolean | null | LoroJsonObject | LoroJso
 interface LoroJsonObject { [key: string]: LoroJsonValue }
 type LoroJsonArray = LoroJsonValue[];
 
+// --- Constants for Backlog Queue ---
+const INDEXING_BACKLOG_KEY = '__indexing_backlog';
+// Removing duplicate, non-exported interface declaration:
+// interface IndexingBacklogItem {
+//     pubKey: string;
+//     addedTimestamp: string;
+//     errorCount: number;
+//     lastError?: string | null;
+// }
+// --- End Constants ---
+
 /**
  * Docs interface represents the document registry for tracking and searching
  */
@@ -83,6 +94,19 @@ export interface Docs {
         snapshotCid?: string;  // Local snapshot that needs syncing
         updateCids?: string[]; // Local updates that need syncing
     };
+
+    // --- NEW LOCAL Indexing State ---
+    // This state is specific to the local client's indexing progress for this document.
+    // It is stored in the local database registry alongside other metadata,
+    // NOT within the synced LoroDoc content itself.
+    indexingState?: {
+        lastIndexedSnapshotCid?: string; // Base snapshot processed by local indexer
+        lastIndexedUpdateCidsHash?: string; // Hash of sorted updateCids processed by local indexer
+        needsReindex?: boolean; // Manual flag for forced re-indexing locally
+        lastIndexedTimestamp?: string; // Timestamp of last local processing
+        indexingError?: string | null; // Record last local indexing error for this doc (null indicates cleared)
+    };
+    // --- END NEW Indexing State ---
 }
 
 /**
@@ -119,6 +143,27 @@ interface InitialBridiData {
     selbriRef: string;
     sumtiData: Record<string, LoroJsonValue | string>;
     selbriJavni: Record<string, ValidationRuleStructure> | undefined;
+}
+
+/**
+ * Represents the indexing state of a document.
+ */
+export interface IndexingState {
+    lastIndexedTimestamp?: string; // ISO 8601 timestamp of the last successful indexing
+    lastIndexedSnapshotCid?: string; // Snapshot CID at the time of last indexing
+    lastIndexedUpdateCidsHash?: string; // Hash of updateCids array at the time of last indexing
+    needsReindex: boolean; // Flag indicating if the document needs re-indexing
+    indexingError?: string | null; // Last error message if indexing failed
+}
+
+/**
+ * Represents an item in the indexing backlog.
+ */
+export interface IndexingBacklogItem { // Keeping the exported version
+    pubKey: string;
+    addedTimestamp: string; // ISO 8601 timestamp when added
+    errorCount: number; // How many times indexing failed
+    lastError: string; // The last error message encountered
 }
 
 /**
@@ -898,33 +943,45 @@ class HominioDB {
     /**
      * Load all document metadata from storage and return them as an array.
      * Does not update the Svelte store.
-     * @returns Array of Docs metadata.
+     * Skips entries that fail to parse or lack a pubKey.
+     * @returns Array of valid Docs metadata.
      */
     public async loadAllDocsReturn(): Promise<Docs[]> {
+        const loadedDocs: Docs[] = [];
         try {
             const docsStorage = getDocsStorage();
             const allItems = await docsStorage.getAll();
-            const loadedDocs: Docs[] = [];
 
             for (const item of allItems) {
                 try {
-                    if (item.value) {
-                        const data = await docsStorage.get(item.key);
+                    if (item.key && item.value) { // Ensure key and value exist
+                        const data = await docsStorage.get(item.key); // Re-fetch ensures we have Uint8Array
                         if (data) {
                             const docString = new TextDecoder().decode(data);
-                            const doc = JSON.parse(docString) as Docs;
-                            loadedDocs.push(doc);
+                            const parsedDoc = JSON.parse(docString);
+
+                            // --- Validation Step --- 
+                            if (parsedDoc && typeof parsedDoc === 'object' && typeof parsedDoc.pubKey === 'string' && parsedDoc.pubKey) {
+                                // It looks like a valid Docs object (at least has a pubKey)
+                                loadedDocs.push(parsedDoc as Docs);
+                            } else {
+                                console.warn(`[HominioDB loadAllDocsReturn] Skipping invalid/incomplete metadata entry for key ${item.key}. Data:`, parsedDoc);
+                            }
+                            // -----------------------
                         }
+                    } else {
+                        console.warn(`[HominioDB loadAllDocsReturn] Encountered item with missing key or value:`, item);
                     }
                 } catch (parseErr) {
-                    console.error(`Error parsing document ${item.key} in loadAllDocsReturn:`, parseErr);
+                    console.warn(`[HominioDB loadAllDocsReturn] Error parsing document metadata for key ${item.key}:`, parseErr);
+                    // Optionally log the problematic string: console.warn("Problematic string:", new TextDecoder().decode(item.value));
                 }
             }
-            return loadedDocs;
         } catch (err) {
-            console.error('Error loading documents in loadAllDocsReturn:', err);
-            return []; // Return empty array on error
+            console.error('[HominioDB loadAllDocsReturn] Error fetching documents from storage:', err);
+            // Return whatever was loaded successfully before the error
         }
+        return loadedDocs;
     }
 
     /**
@@ -972,11 +1029,19 @@ class HominioDB {
         const snapshotCid = docMetadata.localState?.snapshotCid || docMetadata.snapshotCid;
         if (!snapshotCid) {
             console.warn(`[getLoroDoc] No snapshot CID found for ${pubKey}. Returning empty doc.`);
-            // Return a new empty doc, maybe? Or null? Returning null seems safer.
-            // const newDoc = new LoroDoc();
-            // activeLoroDocuments.set(pubKey, newDoc);
-            // return newDoc;
-            return null;
+            const emptyDoc = new LoroDoc();
+            emptyDoc.setPeerId(1);
+
+            // <<< FIX: Add subscription to the newly created empty doc >>>
+            emptyDoc.subscribe(() => {
+                this._persistLoroUpdateAsync(pubKey, emptyDoc).catch(err => {
+                    console.error(`[Loro Subscribe - EmptyDoc] Failed to persist update for ${pubKey}:`, err);
+                });
+            });
+            // <<< END FIX >>>
+
+            activeLoroDocuments.set(pubKey, emptyDoc); // Caches potentially unsubscribed doc
+            return emptyDoc;
         }
 
         // 4. Load Snapshot Content
@@ -995,9 +1060,9 @@ class HominioDB {
 
             // Add subscribe to changes
             loroDoc.subscribe(() => {
+                console.log(`[Loro Subscribe Callback] Triggered for pubKey: ${pubKey}`);
                 // Check if there are changes that need persisting
                 // This is called when the document changes in-memory
-                // We need to persist these changes to storage
                 this._persistLoroUpdateAsync(pubKey, loroDoc).catch(err => {
                     console.error(`[Loro Subscribe] Failed to persist update for ${pubKey}:`, err);
                 });
@@ -1084,23 +1149,31 @@ class HominioDB {
     // Helper for async persistence triggered by Loro event
     private async _persistLoroUpdateAsync(pubKey: string, loroDoc: LoroDoc): Promise<void> {
         if (this._isInitializingDoc) {
-            console.log("[HominioDB] Skipping persistence during initial document creation.");
+            // REMOVED: console.log("[HominioDB] Skipping persistence during initial document creation.");
             return; // Skip persistence if called during createDocument
         }
 
+        const isFacki = pubKey.startsWith('@facki_');
+        if (isFacki) {
+            console.log(`[HominioDB _persistLoroUpdateAsync] START for Facki: ${pubKey}`);
+        }
+
         const docsStorage = getDocsStorage();
+        // <<< REMOVED Log: Fetching Metadata >>>
         const docMetaDataBytes = await docsStorage.get(pubKey);
         const docMeta: Docs | null = docMetaDataBytes ? JSON.parse(new TextDecoder().decode(docMetaDataBytes)) : null;
         if (!docMeta) {
-            console.error(`Cannot persist update for non-existent document: ${pubKey}`);
+            console.error(`Cannot persist update for non-existent document: ${pubKey}`); // Keep Error
             return;
         }
 
         // 1. Export Snapshot
+        // <<< REMOVED Log: Exporting Snapshot >>>
         const snapshotBytes = loroDoc.exportSnapshot();
         const snapshotCid = await hashService.hashSnapshot(snapshotBytes);
 
         // 2. Save Content
+        // <<< REMOVED Log: Saving Content >>>
         const contentStorage = getContentStorage();
 
         // Save content with minimal metadata known by hominio-db
@@ -1108,6 +1181,8 @@ class HominioDB {
             type: CONTENT_TYPE_SNAPSHOT,
             createdAt: new Date().toISOString()
         });
+
+        // <<< REMOVED Log: Content Saved >>>
 
         // 3. Update Docs Registry
         const updatedDocMeta: Docs = {
@@ -1117,12 +1192,22 @@ class HominioDB {
             updateCids: [], // Clear update CIDs as they are now part of the snapshot
             localState: undefined // Clear local state as snapshot is persisted
         };
+
+        // <<< REMOVED Log: Updating Metadata >>>
         await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDocMeta)));
 
-        console.log(`[HominioDB] Persisted snapshot for ${pubKey}. CID: ${snapshotCid}`);
+        // REMOVED: console.log(`[HominioDB] Persisted snapshot for ${pubKey}. CID: ${snapshotCid}`);
 
         // 4. Trigger notification AFTER successful persistence
         triggerDocChangeNotification();
+
+        // <<< REMOVED Log: Snapshot details >>>
+
+        // REMOVED: Redundant put and logs
+
+        if (isFacki) {
+            console.log(`[HominioDB _persistLoroUpdateAsync] END for Facki: ${pubKey} (New CID: ${snapshotCid.substring(0, 10)}...)`);
+        }
     }
     // -------------------------
 
@@ -1210,7 +1295,8 @@ class HominioDB {
             await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(mergedDoc)));
 
             // Trigger reactivity after saving document
-            docChangeNotifier.update(n => n + 1);
+            // REMOVED: docChangeNotifier.update(n => n + 1);
+            // The main sync loop should trigger the notification once at the end.
 
         } catch (err) {
             console.error(`[saveSyncedDocument] Error processing doc ${pubKey}:`, err);
@@ -1218,6 +1304,151 @@ class HominioDB {
             throw err;
         }
     }
+
+    /**
+     * Updates ONLY the indexingState part of a document's metadata in the local registry.
+     * @param pubKey The public key of the document.
+     * @param stateUpdate An object containing the indexingState fields to update.
+     */
+    public async updateDocIndexingState(
+        pubKey: string,
+        stateUpdate: Partial<NonNullable<Docs['indexingState']>>
+    ): Promise<void> {
+        try {
+            const currentDoc = await this.getDocument(pubKey);
+            if (!currentDoc) {
+                console.warn(`[updateDocIndexingState] Document ${pubKey} not found. Cannot update indexing state.`);
+                return;
+            }
+
+            // Merge the update with the existing state
+            const newIndexingState = { ...currentDoc.indexingState, ...stateUpdate };
+
+            // Create the updated document metadata, ensuring not to modify other fields
+            const updatedDocData: Docs = {
+                ...currentDoc,
+                indexingState: newIndexingState,
+                // IMPORTANT: Do NOT update updatedAt here unless specifically intended by the caller
+                // Indexing state changes shouldn't necessarily mark the doc as updated for sync purposes.
+            };
+
+            // Persist updated metadata
+            const docsStorage = getDocsStorage();
+            await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDocData)));
+
+            // Trigger notifier? Maybe not for just indexing state?
+            // Let's assume for now that changes relevant to queries will come from
+            // the index documents themselves changing, not just this metadata.
+            // docChangeNotifier.update(n => n + 1); 
+
+        } catch (err) {
+            console.error(`[updateDocIndexingState] Failed for doc ${pubKey}:`, err);
+            // Don't throw, just log the error. The indexer should handle its own errors.
+        }
+    }
+
+    // --- Backlog Queue Management Methods ---
+
+    /**
+     * Adds or updates an item in the indexing backlog queue.
+     * Uses a dedicated key in the KV store.
+     * @param item The backlog item to add/update.
+     */
+    public async addToIndexingBacklog(item: IndexingBacklogItem): Promise<void> {
+        try {
+            const storage = getDocsStorage(); // Assuming docsStorage is the KV store
+            // Fetch the current backlog (assuming it's stored as a single object/map)
+            const backlogData = await storage.get(INDEXING_BACKLOG_KEY);
+            let backlog: Record<string, IndexingBacklogItem> = {};
+            if (backlogData) {
+                try {
+                    backlog = JSON.parse(new TextDecoder().decode(backlogData));
+                } catch (parseErr) {
+                    console.error("[addToIndexingBacklog] Failed to parse existing backlog, starting fresh.", parseErr);
+                    backlog = {}; // Reset on parse error
+                }
+            }
+            // Add/update the item
+            backlog[item.pubKey] = item;
+            // Save the updated backlog
+            await storage.put(INDEXING_BACKLOG_KEY, new TextEncoder().encode(JSON.stringify(backlog)));
+        } catch (err) {
+            console.error(`[addToIndexingBacklog] Error adding item for ${item.pubKey}:`, err);
+            // Consider how to handle failure here - maybe retry?
+        }
+    }
+
+    /**
+     * Retrieves the next item (or items) from the indexing backlog queue.
+     * Simple implementation: gets the first item based on object key order.
+     * More sophisticated strategies (priority, oldest) could be added.
+     * @param count Number of items to retrieve (default 1)
+     * @returns An array of backlog items, or an empty array if none.
+     */
+    public async getNextFromIndexingBacklog(count = 1): Promise<IndexingBacklogItem[]> {
+        try {
+            const storage = getDocsStorage();
+            const backlogData = await storage.get(INDEXING_BACKLOG_KEY);
+            if (!backlogData) {
+                return [];
+            }
+            let backlog: Record<string, IndexingBacklogItem> = {};
+            try {
+                backlog = JSON.parse(new TextDecoder().decode(backlogData));
+            } catch (parseErr) {
+                console.error("[getNextFromIndexingBacklog] Failed to parse backlog.", parseErr);
+                return [];
+            }
+
+            const keys = Object.keys(backlog);
+            if (keys.length === 0) {
+                return [];
+            }
+
+            // Return the first 'count' items
+            const itemsToReturn: IndexingBacklogItem[] = [];
+            for (let i = 0; i < Math.min(count, keys.length); i++) {
+                itemsToReturn.push(backlog[keys[i]]);
+            }
+            return itemsToReturn;
+
+        } catch (err) {
+            console.error("[getNextFromIndexingBacklog] Error getting items:", err);
+            return [];
+        }
+    }
+
+    /**
+     * Removes an item from the indexing backlog queue by its pubKey.
+     * @param pubKey The pubKey of the item to remove.
+     */
+    public async removeFromIndexingBacklog(pubKey: string): Promise<void> {
+        try {
+            const storage = getDocsStorage();
+            const backlogData = await storage.get(INDEXING_BACKLOG_KEY);
+            if (!backlogData) {
+                return; // Nothing to remove from
+            }
+            let backlog: Record<string, IndexingBacklogItem> = {};
+            try {
+                backlog = JSON.parse(new TextDecoder().decode(backlogData));
+            } catch (parseErr) {
+                console.error("[removeFromIndexingBacklog] Failed to parse backlog.", parseErr);
+                return; // Cannot modify corrupt backlog
+            }
+
+            if (backlog[pubKey]) {
+                delete backlog[pubKey];
+                // Save the modified backlog
+                await storage.put(INDEXING_BACKLOG_KEY, new TextEncoder().encode(JSON.stringify(backlog)));
+            } // Else: Item wasn't in the backlog anyway
+
+        } catch (err) {
+            console.error(`[removeFromIndexingBacklog] Error removing item ${pubKey}:`, err);
+        }
+    }
+
+    // --- End Backlog Queue Management Methods ---
 }
 
 // Create and export singleton instance

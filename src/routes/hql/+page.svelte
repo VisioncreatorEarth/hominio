@@ -4,11 +4,12 @@
 		type HqlQueryRequest,
 		type HqlQueryResult,
 		type HqlMutationRequest
-	} from '$lib/KERNEL/hominio-ql';
+	} from '$lib/LEGACY/hominio-ql';
 	import { readable, type Readable } from 'svelte/store';
 	import { getContext } from 'svelte';
 	import { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
 	import SyncStatusUI from '$lib/components/SyncStatusUI.svelte';
+	import { hominioIndexing } from '$lib/KERNEL/hominio-indexing';
 
 	// Define the specific Prenu schema pubkey
 	const PRENU_SCHEMA_PUBKEY = '0xfdd157564621e5bd35bc9276e6dfae3eb5b60076b0d0d20559ac588121be9cf7';
@@ -214,6 +215,16 @@
 				{/each}
 			</ul>
 		{/if}
+
+		<!-- Manual Indexing Button -->
+		<div class="mt-4">
+			<button
+				class="w-full rounded bg-orange-500 px-3 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-orange-600"
+				on:click={() => hominioIndexing.startIndexingCycle()}
+			>
+				Index Now
+			</button>
+		</div>
 
 		<!-- Use the new component -->
 		<SyncStatusUI />

@@ -3,29 +3,8 @@ import { LoroList } from 'loro-crdt';
 import type { BridiRecord } from '../../db/seeding/bridi';
 import type { SelbriId } from '../../db/seeding/selbri';
 import type { SumtiId, SumtiValue, Pubkey } from '../../db/seeding/sumti';
-
-// Define index pubkeys for easy reference using Facki
-export const FACKI_SUMTI_PUBKEY = '@facki_sumti';
-export const FACKI_SELBRI_PUBKEY = '@facki_selbri';
-export const FACKI_BRIDI_PUBKEY = '@facki_bridi';
-export const FACKI_BRIDI_BY_COMPONENT_PUBKEY = '@facki_bridi_by_component';
-
-// Define interface for HominioDB methods we use
-interface HominioDBInterface {
-    getLoroDoc(pubKey: string): Promise<LoroDoc | null>;
-}
-
-// Reference to the HominioDB instance (will be set during initialization)
-let hominioDB: HominioDBInterface | null = null;
-
-/**
- * Initialize the Loro Engine with a HominioDB instance
- * Must be called before using any other functions in this module
- */
-export function initializeLoroEngine(db: HominioDBInterface): void {
-    hominioDB = db;
-    console.log('[Loro Engine] Initialized with HominioDB instance');
-}
+import { hominioDB } from '$lib/KERNEL/hominio-db'; // Import the singleton directly
+import { getFackiIndexPubKey } from './facki-indices'; // Ensure this is imported
 
 // --- Doc Access Functions (Use HominioDB) ---
 
@@ -33,10 +12,11 @@ export function initializeLoroEngine(db: HominioDBInterface): void {
  * Gets the LoroDoc for a Sumti by pubkey using HominioDB
  */
 export async function getSumtiDoc(pubkey: Pubkey): Promise<LoroDoc | null> {
-    if (!hominioDB) {
-        console.error('[Loro Engine] HominioDB not initialized. Call initializeLoroEngine first.');
-        return null;
-    }
+    // Removed initialization check, use imported singleton directly
+    // if (!hominioDB) {
+    //     console.error('[Loro Engine] HominioDB not initialized. Call initializeLoroEngine first.');
+    //     return null;
+    // }
     return await hominioDB.getLoroDoc(pubkey);
 }
 
@@ -44,10 +24,7 @@ export async function getSumtiDoc(pubkey: Pubkey): Promise<LoroDoc | null> {
  * Gets the LoroDoc for a Bridi by pubkey using HominioDB
  */
 export async function getBridiDoc(pubkey: Pubkey): Promise<LoroDoc | null> {
-    if (!hominioDB) {
-        console.error('[Loro Engine] HominioDB not initialized. Call initializeLoroEngine first.');
-        return null;
-    }
+    // Removed initialization check
     return await hominioDB.getLoroDoc(pubkey);
 }
 
@@ -55,10 +32,7 @@ export async function getBridiDoc(pubkey: Pubkey): Promise<LoroDoc | null> {
  * Gets the LoroDoc for a Selbri by pubkey using HominioDB
  */
 export async function getSelbriDoc(pubkey: Pubkey): Promise<LoroDoc | null> {
-    if (!hominioDB) {
-        console.error('[Loro Engine] HominioDB not initialized. Call initializeLoroEngine first.');
-        return null;
-    }
+    // Removed initialization check
     return await hominioDB.getLoroDoc(pubkey);
 }
 
@@ -111,42 +85,53 @@ export async function getDatniForPubkey(pubkey: Pubkey): Promise<Record<string, 
 // --- Existence Index Check Functions ---
 
 /**
- * Checks if a Sumti pubkey exists in the Sumti existence index
+ * Checks if a Sumti document exists in the Facki Sumti index.
+ * @param pubKey The public key of the Sumti document.
+ * @returns True if the Sumti exists in the index, false otherwise.
  */
-export async function checkSumtiExists(pubkey: Pubkey): Promise<boolean> {
-    const fackiSumtiDoc = await getSumtiDoc(FACKI_SUMTI_PUBKEY);
-    if (!fackiSumtiDoc) {
-        console.warn(`[Loro Engine] Facki Sumti Index document (${FACKI_SUMTI_PUBKEY}) not found for existence check.`);
+export async function checkSumtiExists(pubKey: string): Promise<boolean> {
+    const fackiIndexKey = await getFackiIndexPubKey('sumti'); // Await the key
+
+    // Add log to check resolved key
+    console.log(`[checkSumtiExists] fackiIndexKey type: ${typeof fackiIndexKey}, value: ${fackiIndexKey}`);
+
+    if (!fackiIndexKey) {
+        console.warn('[Loro Engine] Facki Sumti Index Key not available for existence check.');
         return false;
     }
-    try {
-        const sumtiIndexMap = fackiSumtiDoc.getMap('datni');
-        return sumtiIndexMap.get(pubkey) !== undefined;
-    } catch (error) {
-        console.error(`[Loro Engine] Error checking Sumti existence for key '${pubkey}':`, error);
+    const fackiDoc = await getSumtiDoc(fackiIndexKey); // Use the resolved string key
+    if (!fackiDoc) {
+        console.warn(`[Loro Engine] Facki Sumti Index document (${fackiIndexKey}) not found for existence check.`);
         return false;
     }
+    const indexMap = fackiDoc.getMap('datni');
+    // Use .get() and check for undefined instead of .has()
+    return indexMap.get(pubKey) !== undefined;
 }
 
 /**
- * Checks if a Selbri pubkey exists in the Selbri existence index
+ * Checks if a Selbri document exists in the Facki Selbri index.
+ * @param pubKey The public key of the Selbri document.
+ * @returns True if the Selbri exists in the index, false otherwise.
  */
-export async function checkSelbriExists(pubkey: Pubkey): Promise<boolean> {
-    const fackiSelbriDoc = await getSelbriDoc(FACKI_SELBRI_PUBKEY);
-    if (!fackiSelbriDoc) {
-        console.warn(`[Loro Engine] Facki Selbri Index document (${FACKI_SELBRI_PUBKEY}) not found for existence check.`);
-        return false;
-    }
-    try {
-        // Access the index map directly from the root 'datni' map
-        const selbriIndexMap = fackiSelbriDoc.getMap('datni');
-        if (!selbriIndexMap) return false; // datni map (index) missing
+export async function checkSelbriExists(pubKey: string): Promise<boolean> { // Use correct parameter name pubKey
+    const fackiIndexKey = await getFackiIndexPubKey('selbri'); // Await the key
 
-        return selbriIndexMap.get(pubkey) !== undefined;
-    } catch (error) {
-        console.error(`[Loro Engine] Error checking Selbri existence for key '${pubkey}':`, error);
+    // Log added previously
+    console.log(`[checkSelbriExists] fackiIndexKey type: ${typeof fackiIndexKey}, value: ${fackiIndexKey}`);
+
+    if (!fackiIndexKey) {
+        console.warn('[Loro Engine] Facki Selbri Index Key not available for existence check.');
         return false;
     }
+    const fackiDoc = await getSelbriDoc(fackiIndexKey); // Use the resolved string key
+    if (!fackiDoc) {
+        console.warn(`[Loro Engine] Facki Selbri Index document (${fackiIndexKey}) not found for existence check.`);
+        return false;
+    }
+    const indexMap = fackiDoc.getMap('datni');
+    // Use .get() and check for undefined instead of .has()
+    return indexMap.get(pubKey) !== undefined; // Use correct parameter name pubKey
 }
 
 // --- Composite Index Access Function ---
@@ -157,9 +142,14 @@ export async function checkSelbriExists(pubkey: Pubkey): Promise<boolean> {
  * Returns undefined if the index list doesn't exist or isn't a list.
  */
 export async function getBridiIndexList(compositeKey: string): Promise<LoroList<string> | undefined> {
-    const fackiBridiDoc = await getSumtiDoc(FACKI_BRIDI_BY_COMPONENT_PUBKEY);
+    const fackiBridiByCompPubKey = getFackiIndexPubKey('bridi_by_component'); // <<< Use dynamic key
+    if (!fackiBridiByCompPubKey) {
+        console.error(`[Loro Engine] Cannot get Bridi index list: Facki Bridi Component index pubkey not available.`);
+        return undefined;
+    }
+    const fackiBridiDoc = await getSumtiDoc(fackiBridiByCompPubKey); // Assumes index docs are like Sumti (Map root)
     if (!fackiBridiDoc) {
-        console.warn(`[Loro Engine] Facki Bridi Component Index document (${FACKI_BRIDI_BY_COMPONENT_PUBKEY}) not found.`);
+        console.warn(`[Loro Engine] Facki Bridi Component Index document (${fackiBridiByCompPubKey}) not found.`);
         return undefined;
     }
 
@@ -167,16 +157,12 @@ export async function getBridiIndexList(compositeKey: string): Promise<LoroList<
         // Access the index map directly from the root 'datni' map
         const bridiIndexMap = fackiBridiDoc.getMap('datni');
         if (!bridiIndexMap) {
-            console.warn(`[Loro Engine] Facki Bridi Component Index document (${FACKI_BRIDI_BY_COMPONENT_PUBKEY}) 'datni' map not found.`);
+            console.warn(`[Loro Engine] Facki Bridi Component Index document (${fackiBridiByCompPubKey}) 'datni' map not found.`);
             return undefined;
         }
 
-        console.log(`[Loro Engine getBridiIndexList] Looking up compositeKey: "${compositeKey}"`);
-
         // Access the specific list using the composite key from the root datni map
         const container = bridiIndexMap.get(compositeKey);
-        const resultKeys = container instanceof LoroList ? container.toArray() : undefined;
-        console.log(`[Loro Engine getBridiIndexList] Index lookup result for "${compositeKey}":`, resultKeys);
 
         if (container instanceof LoroList) {
             return container as LoroList<string>;
