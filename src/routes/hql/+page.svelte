@@ -11,6 +11,7 @@
 	import SelbriQueries from '$lib/components/SelbriQueries.svelte';
 	import SumtiQueries from '$lib/components/SumtiQueries.svelte';
 	import QueryEditor from '$lib/components/QueryEditor.svelte';
+	import NodesProps from '$lib/components/NodesProps.svelte';
 
 	// --- Get Effective User Function from Context ---
 	type GetCurrentUserFn = typeof getMeType;
@@ -198,7 +199,7 @@
 	}
 
 	// Tab state
-	let activeTab = $state('selbri'); // Default tab: 'selbri', 'sumti', 'query-editor'
+	let activeTab = $state('nodes-props'); // Default tab: 'selbri', 'sumti', 'query-editor', 'nodes-props'
 
 	// Function to change active tab
 	function setActiveTab(tab: string) {
@@ -244,6 +245,14 @@
 			>
 				Query Editor
 			</button>
+			<button
+				class="border-b-2 px-4 py-2 font-medium transition-colors {activeTab === 'nodes-props'
+					? 'border-indigo-500 text-indigo-600'
+					: 'border-transparent text-gray-500 hover:text-gray-700'}"
+				on:click={() => setActiveTab('nodes-props')}
+			>
+				Nodes Props
+			</button>
 		</nav>
 	</header>
 
@@ -260,6 +269,10 @@
 		{:else if activeTab === 'query-editor'}
 			<div class="h-full">
 				<QueryEditor />
+			</div>
+		{:else if activeTab === 'nodes-props'}
+			<div class="h-full">
+				<NodesProps />
 			</div>
 		{/if}
 	</main>
