@@ -45,3 +45,41 @@ This guide explains how to construct LORO_HQL queries based on user requests. Th
     *   Query Thought: Traverse from `@project_website` via `gunka` where project is `x3`. For each result, map the node at place `x1` (the worker) using `doc.pubkey` to get the worker's ID. Potentially traverse again from the worker node to get their name via `ckaji`.
 
 Use the Selbri definitions provided to understand the place structures (`x1`, `x2`, etc.) for specific relationships (`zukte`, `gunka`, `ckaji`). Remember to use `doc.pubkey` for IDs. 
+
+## 5. `resolve` Directive (Resolving References in Fields)
+
+*   **Purpose:** Resolves a Pubkey (or array of Pubkeys) found within a field of the *current* node, fetches the corresponding document(s), and applies a nested map to the fetched document(s).
+*   **Usage:** Used as the value in a `map` entry, similar to `field` or `traverse`.
+*   **Structure:**
+    ```json
+    {
+      "resolve": {
+        "fromField": "self.path.to.pubkey_field",
+        "map": { /* Map definition for the resolved document */ }
+      }
+    }
+    ```
+*   **Keys:**
+    *   `fromField: string`: The path within the *current* node's data (`self.*`) that contains the Pubkey string (or array of strings) to resolve.
+    *   `map: { ... }`: The standard `map` definition to apply to the document(s) successfully fetched using the Pubkey(s) from `fromField`. This nested map operates on the *resolved* document.
+*   **Behavior:**
+    *   Retrieves the value from `fromField`.
+    *   If the value is a valid Pubkey string:
+        *   Fetches the corresponding document (currently assumes Sumti, will likely expand).
+        *   Checks if the current user has `read` access to the fetched document.
+        *   If fetch and access are successful, applies the nested `map` to the fetched document.
+        *   If fetch or access fails, the result for this `resolve` block will be `null`.
+    *   If the value from `fromField` is not a valid Pubkey or is null/undefined, the result is `null`.
+    *   (Future: Handling arrays in `fromField` might return an array of resolved map results.)
+*   **Example:** Get the `vasru` (value) of the Sumti whose Pubkey is stored in `x1` of a Bridi.
+    ```json
+    "resolved_x1_value": {
+      "resolve": {
+        "fromField": "self.datni.sumti.x1",
+        "map": {
+          "value": { "field": "self.datni.vasru" }
+        }
+      }
+    }
+    ```
+    This would result in `"resolved_x1_value": { "value": "the actual vasru string" }` if successful, or `"resolved_x1_value": null` if the Sumti couldn't be fetched/read or `self.datni.sumti.x1` was empty. 

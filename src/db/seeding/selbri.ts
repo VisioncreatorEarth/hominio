@@ -205,5 +205,46 @@ export const initialSelbri: SelbriRecord[] = [
                 `
             }
         }
+    },
+    {
+        pubkey: '@selbri_cneme',
+        ckaji: { klesi: 'Selbri' },
+        datni: {
+            selbri: '@selbri_cneme',
+            cneme: 'cneme',
+            sumti: { x1: 'selci\'a', x2: 'cmene sumti' },
+            fanva: {
+                glico: {
+                    x1: 'entity being named',
+                    x2: 'name (as a Sumti containing the name string)'
+                },
+                dotco: {
+                    x1: 'Entität die benannt wird',
+                    x2: 'Name (als Sumti, der den Namenstext enthält)'
+                }
+            },
+            stidi: {
+                glico: `
+                **cneme (x1, x2)**: x1 (entity) has the name represented by Sumti x2.
+                *Purpose:* Specifically links an entity to its corresponding name Sumti.
+                *Details:*
+                    - x1: The entity (person, project, task, etc.).
+                    - x2: The Sumti whose 'datni.vasru' contains the actual name string.
+                *Usage Examples:*
+                    1. Linking Person Name: 'cneme(@person1, @person1_name)' -> Links person1 to the Sumti containing "Alice".
+                    2. Linking Project Name: 'cneme(@project1, @project1_name)' -> Links project1 to the Sumti containing "Project: Website".
+                `,
+                dotco: `
+                **cneme (x1, x2)**: x1 (Entität) hat den Namen, der durch Sumti x2 repräsentiert wird.
+                *Zweck:* Verknüpft spezifisch eine Entität mit ihrem entsprechenden Namens-Sumti.
+                *Details:*
+                    - x1: Die Entität (Person, Projekt, Aufgabe usw.).
+                    - x2: Das Sumti, dessen 'datni.vasru' den tatsächlichen Namenstext enthält.
+                *Anwendungsbeispiele:*
+                    1. Verknüpfung Personenname: 'cneme(@person1, @person1_name)' -> Verknüpft person1 mit dem Sumti, das "Alice" enthält.
+                    2. Verknüpfung Projektname: 'cneme(@project1, @project1_name)' -> Verknüpft project1 mit dem Sumti, das "Project: Website" enthält.
+                `
+            }
+        }
     }
 ];

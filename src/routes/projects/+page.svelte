@@ -21,6 +21,197 @@
 		}
 	};
 
+	// --- Add query for all Bridi ---
+	const allBridiQuery: LoroHqlQuery = {
+		from: {
+			bridi_pubkeys: [] // Empty array fetches all Bridi
+		},
+		map: {
+			id: { field: 'doc.pubkey' },
+			selbri: { field: 'self.datni.selbri' },
+			// Use resolve to get the vasru from the linked Sumti for each place
+			x1: {
+				resolve: {
+					fromField: 'self.datni.sumti.x1',
+					map: {
+						value: { field: 'self.datni' },
+						pubkey: { field: 'doc.pubkey' }
+					}
+				}
+			},
+			x2: {
+				resolve: {
+					fromField: 'self.datni.sumti.x2',
+					map: {
+						value: { field: 'self.datni' },
+						pubkey: { field: 'doc.pubkey' }
+					}
+				}
+			},
+			x3: {
+				resolve: {
+					fromField: 'self.datni.sumti.x3',
+					map: {
+						value: { field: 'self.datni' },
+						pubkey: { field: 'doc.pubkey' }
+					}
+				}
+			},
+			x4: {
+				resolve: {
+					fromField: 'self.datni.sumti.x4',
+					map: {
+						value: { field: 'self.datni' },
+						pubkey: { field: 'doc.pubkey' }
+					}
+				}
+			},
+			x5: {
+				resolve: {
+					fromField: 'self.datni.sumti.x5',
+					map: {
+						value: { field: 'self.datni' },
+						pubkey: { field: 'doc.pubkey' }
+					}
+				}
+			}
+		}
+	};
+
+	// --- NEW: Query for Tasks in Project1 ---
+	const projectTasksQuery: LoroHqlQuery = {
+		from: {
+			// Start from the generated pubkey for @project1
+			sumti_pubkeys: ['0x82987b80cd423e8ff658a00ab59e51827440a101636650716b01ef201b8d8ec5']
+		},
+		map: {
+			project_id: { field: 'doc.pubkey' },
+			project_name: {
+				// Traverse to find the project's name
+				traverse: {
+					bridi_where: {
+						selbri: '0x96360692ef7f876a32e1a3c46a15bd597da160e76ac9c4bfd96026cb4afe3412', // @selbri_cneme
+						place: 'x1' // Project is x1 in this cneme bridi
+					},
+					return: 'first',
+					map: {
+						// Map the name Sumti found at x2
+						name: { place: 'x2', field: 'self.datni' }
+					}
+				}
+			},
+			tasks: {
+				// Traverse to find tasks related via @selbri_gunka
+				traverse: {
+					bridi_where: {
+						selbri: '0xc05e9db099a2a9b699b208778a5c60db302700fd15147bba9f232c13183635b3', // @selbri_gunka
+						place: 'x2' // Project is x2 in gunka(task, project)
+					},
+					return: 'array',
+					map: {
+						// Map the task node found at x3
+						task: {
+							// Apply a sub-map to the task Sumti
+							place: 'x3',
+							map: {
+								id: { field: 'doc.pubkey' },
+								name: {
+									// Nested traverse for task name
+									traverse: {
+										bridi_where: {
+											selbri: '0x96360692ef7f876a32e1a3c46a15bd597da160e76ac9c4bfd96026cb4afe3412', // @selbri_cneme
+											place: 'x1' // Task is x1
+										},
+										return: 'first',
+										map: {
+											value: { place: 'x2', field: 'self.datni' }
+										}
+									}
+								},
+								status: {
+									// Nested traverse for task status
+									traverse: {
+										bridi_where: {
+											selbri: '0xa83a44305ddc3cc4f51ee41665eb0e6de585ab312a370fc47002f07d168a4d7b', // @selbri_ckaji
+											place: 'x1' // Task is x1
+										},
+										// Filter: x2 must be the @prop_status concept
+										where_related: [
+											{
+												place: 'x2',
+												field: 'doc.pubkey',
+												condition: {
+													equals:
+														'0x45eb5f36485e5358fc93901314ee456fb702e398d3a8bf82f980471d863dbecb' // @prop_status
+												}
+											}
+										],
+										return: 'first',
+										map: {
+											// Extract the value from x3 (the PropertyValue concept)
+											value: { place: 'x3', field: 'self.datni' }
+										}
+									}
+								},
+								priority: {
+									// Nested traverse for task priority
+									traverse: {
+										bridi_where: {
+											selbri: '0xa83a44305ddc3cc4f51ee41665eb0e6de585ab312a370fc47002f07d168a4d7b', // @selbri_ckaji
+											place: 'x1' // Task is x1
+										},
+										// Filter: x2 must be the @prop_priority concept
+										where_related: [
+											{
+												place: 'x2',
+												field: 'doc.pubkey',
+												condition: {
+													equals:
+														'0xc889bb62a85681801b1c5f6d40780770eef3df3e602e84e07a1bc4a92e00ad6b' // @prop_priority
+												}
+											}
+										],
+										return: 'first',
+										map: {
+											// Extract the value from x3 (the PropertyValue concept)
+											value: { place: 'x3', field: 'self.datni' }
+										}
+									}
+								},
+								tags: {
+									// Nested traverse for task tags (can be multiple)
+									traverse: {
+										bridi_where: {
+											selbri: '0xa83a44305ddc3cc4f51ee41665eb0e6de585ab312a370fc47002f07d168a4d7b', // @selbri_ckaji
+											place: 'x1' // Task is x1
+										},
+										// Filter: x2 must be the @prop_tag concept
+										where_related: [
+											{
+												place: 'x2',
+												field: 'doc.pubkey',
+												condition: {
+													equals:
+														'0xdf5f0e08ec7468b8407817bf26042bfe3fa1a558988029b7e58caa77251bae36' // @prop_tag
+												}
+											}
+										],
+										return: 'array', // Expect multiple tags
+										map: {
+											// Extract the value from x3 (the PropertyValue concept)
+											value: { place: 'x3', field: 'self.datni' }
+										}
+									}
+								}
+								// Assignee omitted for now - requires different traversal logic
+							}
+						}
+					}
+				}
+			}
+		}
+	};
+
 	// --- Use writable store for active query ---
 	const activeQueryDefinition = writable<LoroHqlQuery | null>(null);
 
@@ -32,7 +223,11 @@
 
 	// --- Simplified runQuery function using .set ---
 	function runQuery(queryToRun: LoroHqlQuery) {
-		const queryName = queryToRun.from?.selbri_pubkeys ? 'Example 4' : 'Example 5'; // Determine name based on from clause
+		const queryName = queryToRun.from?.selbri_pubkeys
+			? 'Selbri Defs'
+			: queryToRun.from?.bridi_pubkeys
+				? 'All Bridi'
+				: 'Unknown Query';
 		console.log(`[runQuery] Setting active query definition: ${queryName}`);
 		activeQueryDefinition.set(queryToRun); // Use .set() on the writable store
 	}
@@ -57,6 +252,34 @@
 		translations?: Record<string, Record<string, string>>;
 		prompts?: Record<string, string>;
 	};
+
+	// Update helper type for Bridi Query Result (reflecting resolved values AND pubkey)
+	type BridiQueryResult = {
+		id: string;
+		selbri?: string;
+		// Resolved value will be nested, include pubkey
+		x1?: { value: unknown; pubkey: string } | null;
+		x2?: { value: unknown; pubkey: string } | null;
+		x3?: { value: unknown; pubkey: string } | null;
+		x4?: { value: unknown; pubkey: string } | null;
+		x5?: { value: unknown; pubkey: string } | null;
+	};
+
+	// --- NEW: Type for Project Tasks Query Result ---
+	type TaskDetail = {
+		id: string;
+		name?: { value: string } | null; // Result of nested traverse { value: ... }
+		status?: { value: string } | null;
+		priority?: { value: string } | null;
+		tags?: { value: string }[] | null; // Array result from nested traverse
+		// assignee?: ...
+	};
+
+	type ProjectTaskQueryResult = {
+		project_id: string;
+		project_name?: { name: string } | null; // Result of traverse { name: ... }
+		tasks?: { task: TaskDetail }[] | null; // Array of tasks, each nested under 'task' key
+	};
 </script>
 
 <div class="p-6 text-black">
@@ -71,6 +294,24 @@
 			{$queryResultsStore === undefined && !!$activeQueryDefinition?.from?.selbri_pubkeys
 				? 'Running...'
 				: 'Run Query (Selbri Defs)'}
+		</button>
+		<button
+			class="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 disabled:opacity-50"
+			on:click={() => runQuery(allBridiQuery)}
+			disabled={$queryResultsStore === undefined && !!$activeQueryDefinition?.from?.bridi_pubkeys}
+		>
+			{$queryResultsStore === undefined && !!$activeQueryDefinition?.from?.bridi_pubkeys
+				? 'Running...'
+				: 'Run Query (All Bridi)'}
+		</button>
+		<button
+			class="rounded bg-green-600 px-4 py-2 text-white hover:bg-green-700 disabled:opacity-50"
+			on:click={() => runQuery(projectTasksQuery)}
+			disabled={$queryResultsStore === undefined && !!$activeQueryDefinition?.from?.sumti_pubkeys}
+		>
+			{$queryResultsStore === undefined && !!$activeQueryDefinition?.from?.sumti_pubkeys
+				? 'Running...'
+				: 'Run Query (Project Tasks)'}
 		</button>
 	</div>
 
@@ -158,12 +399,148 @@
 							</div>
 						{/each}
 					</div>
+				{:else if $activeQueryDefinition?.from?.bridi_pubkeys && $queryResultsStore.length > 0}
+					<div class="space-y-4">
+						{#each $queryResultsStore as result (result.id)}
+							{@const bridi = result as BridiQueryResult}
+							<div class="rounded border border-gray-300 bg-blue-50 p-4">
+								<h3 class="mb-2 text-lg font-semibold text-blue-800">{bridi.id}</h3>
+								<p class="mb-1 text-sm"><strong>Selbri:</strong> {bridi.selbri || 'N/A'}</p>
+								<ul class="list-disc space-y-1 pl-5 text-sm">
+									{#if bridi.x1 === null}
+										<li><strong>x1:</strong> [Resolution Failed/No Access]</li>
+									{:else if bridi.x1?.value !== undefined}
+										<li>
+											<strong>x1:</strong>
+											{bridi.x1.value}
+											<span class="text-xs text-gray-500">({typeof bridi.x1.value})</span>
+										</li>
+									{:else if bridi.x1?.pubkey}
+										<li>
+											<strong>x1:</strong>
+											{bridi.x1.pubkey.substring(0, 12)}...
+											<span class="text-xs text-gray-500">(concept)</span>
+										</li>
+									{/if}
+									{#if bridi.x2 === null}
+										<li><strong>x2:</strong> [Resolution Failed/No Access]</li>
+									{:else if bridi.x2?.value !== undefined}
+										<li>
+											<strong>x2:</strong>
+											{bridi.x2.value}
+											<span class="text-xs text-gray-500">({typeof bridi.x2.value})</span>
+										</li>
+									{:else if bridi.x2?.pubkey}
+										<li>
+											<strong>x2:</strong>
+											{bridi.x2.pubkey.substring(0, 12)}...
+											<span class="text-xs text-gray-500">(concept)</span>
+										</li>
+									{/if}
+									{#if bridi.x3 === null}
+										<li><strong>x3:</strong> [Resolution Failed/No Access]</li>
+									{:else if bridi.x3?.value !== undefined}
+										<li>
+											<strong>x3:</strong>
+											{bridi.x3.value}
+											<span class="text-xs text-gray-500">({typeof bridi.x3.value})</span>
+										</li>
+									{:else if bridi.x3?.pubkey}
+										<li>
+											<strong>x3:</strong>
+											{bridi.x3.pubkey.substring(0, 12)}...
+											<span class="text-xs text-gray-500">(concept)</span>
+										</li>
+									{/if}
+									{#if bridi.x4 === null}
+										<li><strong>x4:</strong> [Resolution Failed/No Access]</li>
+									{:else if bridi.x4?.value !== undefined}
+										<li>
+											<strong>x4:</strong>
+											{bridi.x4.value}
+											<span class="text-xs text-gray-500">({typeof bridi.x4.value})</span>
+										</li>
+									{:else if bridi.x4?.pubkey}
+										<li>
+											<strong>x4:</strong>
+											{bridi.x4.pubkey.substring(0, 12)}...
+											<span class="text-xs text-gray-500">(concept)</span>
+										</li>
+									{/if}
+									{#if bridi.x5 === null}
+										<li><strong>x5:</strong> [Resolution Failed/No Access]</li>
+									{:else if bridi.x5?.value !== undefined}
+										<li>
+											<strong>x5:</strong>
+											{bridi.x5.value}
+											<span class="text-xs text-gray-500">({typeof bridi.x5.value})</span>
+										</li>
+									{:else if bridi.x5?.pubkey}
+										<li>
+											<strong>x5:</strong>
+											{bridi.x5.pubkey.substring(0, 12)}...
+											<span class="text-xs text-gray-500">(concept)</span>
+										</li>
+									{/if}
+								</ul>
+							</div>
+						{/each}
+					</div>
 				{:else if $activeQueryDefinition?.from?.sumti_pubkeys && $queryResultsStore.length > 0}
-					<h3 class="mb-2 text-lg font-semibold">LORO HQL Syntax Prompt:</h3>
-					{#each $queryResultsStore as result}
-						<pre
-							class="rounded border border-gray-300 bg-gray-100 p-4 font-mono text-sm whitespace-pre-wrap">{result.prompt_text}</pre>
-					{/each}
+					<!-- NEW: Display Project Tasks -->
+					<div class="space-y-6">
+						{#each $queryResultsStore as result (result.project_id)}
+							{@const projectData = result as ProjectTaskQueryResult}
+							<div class="rounded border border-green-300 bg-green-50 p-4">
+								<h3 class="mb-3 text-xl font-semibold text-green-800">
+									Project: {projectData.project_name?.name || projectData.project_id}
+									{#if !projectData.project_name?.name}
+										<span class="text-sm font-normal text-orange-600">
+											(Name requires seeded @prop_name)
+										</span>
+									{/if}
+								</h3>
+								<h4 class="mb-2 text-lg font-medium text-gray-700">Tasks:</h4>
+								{#if projectData.tasks && projectData.tasks.length > 0}
+									<ul class="ml-4 space-y-3">
+										{#each projectData.tasks as taskItem (taskItem.task.id)}
+											{@const task = taskItem.task}
+											<li class="rounded border border-gray-200 bg-white p-3 shadow-sm">
+												<p class="font-semibold">
+													{task.name?.value || task.id}
+													{#if !task.name?.value}
+														<span class="text-xs font-normal text-orange-600">
+															(Name requires seeded @prop_name)
+														</span>
+													{/if}
+												</p>
+												<p class="text-sm text-gray-600">
+													Status: <span class="font-medium">{task.status || 'N/A'}</span>
+												</p>
+												<p class="text-sm text-gray-600">
+													Priority: <span class="font-medium">{task.priority || 'N/A'}</span>
+												</p>
+												{#if task.tags && task.tags.length > 0}
+													<p class="mt-1 text-sm text-gray-600">
+														Tags:
+														{#each task.tags as tagItem (tagItem.value)}
+															<span
+																class="ml-1 inline-block rounded bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-800"
+															>
+																{tagItem.value}
+															</span>
+														{/each}
+													</p>
+												{/if}
+											</li>
+										{/each}
+									</ul>
+								{:else}
+									<p class="ml-4 text-sm text-gray-500">No tasks found for this project.</p>
+								{/if}
+							</div>
+						{/each}
+					</div>
 				{:else}
 					<pre
 						class="overflow-x-auto rounded border border-gray-300 bg-gray-100 p-4 text-sm">{JSON.stringify(

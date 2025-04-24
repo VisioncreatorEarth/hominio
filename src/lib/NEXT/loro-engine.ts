@@ -1,11 +1,14 @@
-import type { BridiRecord, SumtiId, SelbriId, Pubkey, SumtiValue } from './db';
-import { LoroList } from 'loro-crdt';
 import type { LoroDoc } from 'loro-crdt';
+import { LoroList } from 'loro-crdt';
+import type { BridiRecord } from '../../db/seeding/bridi';
+import type { SelbriId } from '../../db/seeding/selbri';
+import type { SumtiId, SumtiValue, Pubkey } from '../../db/seeding/sumti';
 
 // Define index pubkeys for easy reference using Facki
 export const FACKI_SUMTI_PUBKEY = '@facki_sumti';
 export const FACKI_SELBRI_PUBKEY = '@facki_selbri';
 export const FACKI_BRIDI_PUBKEY = '@facki_bridi';
+export const FACKI_BRIDI_BY_COMPONENT_PUBKEY = '@facki_bridi_by_component';
 
 // Define interface for HominioDB methods we use
 interface HominioDBInterface {
@@ -80,7 +83,9 @@ export function getCkajiFromDoc(doc: LoroDoc | null): Record<string, unknown> | 
 export function getDatniFromDoc(doc: LoroDoc | null): Record<string, unknown> | SumtiValue | undefined {
     if (!doc) return undefined;
     try {
-        return doc.toJSON()?.['datni'] as Record<string, unknown> | SumtiValue | undefined;
+        const jsonData = doc.toJSON();
+        console.log(`[Loro Engine getDatniFromDoc] doc.toJSON() result:`, JSON.stringify(jsonData));
+        return jsonData?.['datni'] as Record<string, unknown> | SumtiValue | undefined;
     } catch (e) {
         console.error(`[Loro Engine] Error calling toJSON() on doc:`, e);
         return undefined;
@@ -152,9 +157,9 @@ export async function checkSelbriExists(pubkey: Pubkey): Promise<boolean> {
  * Returns undefined if the index list doesn't exist or isn't a list.
  */
 export async function getBridiIndexList(compositeKey: string): Promise<LoroList<string> | undefined> {
-    const fackiBridiDoc = await getSumtiDoc(FACKI_BRIDI_PUBKEY);
+    const fackiBridiDoc = await getSumtiDoc(FACKI_BRIDI_BY_COMPONENT_PUBKEY);
     if (!fackiBridiDoc) {
-        console.warn(`[Loro Engine] Facki Bridi Index document (${FACKI_BRIDI_PUBKEY}) not found.`);
+        console.warn(`[Loro Engine] Facki Bridi Component Index document (${FACKI_BRIDI_BY_COMPONENT_PUBKEY}) not found.`);
         return undefined;
     }
 
@@ -162,12 +167,16 @@ export async function getBridiIndexList(compositeKey: string): Promise<LoroList<
         // Access the index map directly from the root 'datni' map
         const bridiIndexMap = fackiBridiDoc.getMap('datni');
         if (!bridiIndexMap) {
-            console.warn(`[Loro Engine] Facki Bridi Index document (${FACKI_BRIDI_PUBKEY}) 'datni' map not found.`);
+            console.warn(`[Loro Engine] Facki Bridi Component Index document (${FACKI_BRIDI_BY_COMPONENT_PUBKEY}) 'datni' map not found.`);
             return undefined;
         }
 
+        console.log(`[Loro Engine getBridiIndexList] Looking up compositeKey: "${compositeKey}"`);
+
         // Access the specific list using the composite key from the root datni map
         const container = bridiIndexMap.get(compositeKey);
+        const resultKeys = container instanceof LoroList ? container.toArray() : undefined;
+        console.log(`[Loro Engine getBridiIndexList] Index lookup result for "${compositeKey}":`, resultKeys);
 
         if (container instanceof LoroList) {
             return container as LoroList<string>;
@@ -176,6 +185,7 @@ export async function getBridiIndexList(compositeKey: string): Promise<LoroList<
             return undefined;
         } else {
             // Key doesn't exist in the index map
+            console.warn(`[Loro Engine getBridiIndexList] Key "${compositeKey}" not found in index map. Available keys:`, Array.from(bridiIndexMap.keys()));
             return undefined;
         }
     } catch (error) {
@@ -194,11 +204,11 @@ export async function findBridiDocsBySelbriAndPlace(
     selbriId: SelbriId,
     place: keyof BridiRecord['datni']['sumti'],
     sumtiId: SumtiId
-): Promise<LoroDoc[]> {
-    const results: LoroDoc[] = [];
+): Promise<{ pubkey: string; doc: LoroDoc }[]> {
+    const results: { pubkey: string; doc: LoroDoc }[] = [];
 
     // Build the composite key and check the index
-    const compositeKey = `${selbriId}:${place}:${sumtiId}`;
+    const compositeKey = `${selbriId}:${String(place)}:${sumtiId}`;
     const indexedBridiPubkeys = await getBridiIndexList(compositeKey);
     const bridiKeys = indexedBridiPubkeys?.toArray() || [];
 
@@ -212,7 +222,7 @@ export async function findBridiDocsBySelbriAndPlace(
                 // Verification is still good practice
                 const datni = getDatniFromDoc(bridiDoc) as BridiRecord['datni'] | undefined;
                 if (datni && datni.selbri === selbriId && datni.sumti[place] === sumtiId) {
-                    results.push(bridiDoc);
+                    results.push({ pubkey, doc: bridiDoc });
                 } else {
                     console.warn(`[Loro Engine] Index inconsistency? Doc ${pubkey} found via key ${compositeKey} but data mismatch.`);
                 }
@@ -243,7 +253,7 @@ export async function findBridiDocsInvolvingSumti(
 
     // Check each possible place the sumti could be
     for (const place of places) {
-        const compositeKey = `${selbriId}:${place}:${sumtiId}`;
+        const compositeKey = `${selbriId}:${String(place)}:${sumtiId}`;
         const indexedBridiPubkeys = await getBridiIndexList(compositeKey);
         const bridiKeys = indexedBridiPubkeys?.toArray() || [];
 

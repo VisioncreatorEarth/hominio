@@ -1,6 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 import { drizzle } from 'drizzle-orm/neon-http';
-import { LoroDoc, LoroMap } from 'loro-crdt';
+import { LoroDoc, LoroMap, LoroList } from 'loro-crdt';
 import { blake3 } from '@noble/hashes/blake3';
 import b4a from 'b4a';
 import * as schema from './schema';
@@ -20,8 +20,8 @@ const FACKI_META_PUBKEY = '@facki_meta';
 const FACKI_SUMTI_PUBKEY = '@facki_sumti';
 const FACKI_SELBRI_PUBKEY = '@facki_selbri';
 const FACKI_BRIDI_PUBKEY = '@facki_bridi';
+const FACKI_BRIDI_BY_COMPONENT_PUBKEY = '@facki_bridi_by_component';
 
-// Define Facki records directly here - Radically Simplified Structure
 // Define Facki records directly here - Updated Structure
 const initialFacki: SumtiRecord[] = [
     // System Index Sumti Definitions (Facki)
@@ -34,27 +34,33 @@ const initialFacki: SumtiRecord[] = [
             vasru: {
                 sumti: FACKI_SUMTI_PUBKEY,
                 selbri: FACKI_SELBRI_PUBKEY,
-                bridi: FACKI_BRIDI_PUBKEY
+                bridi: FACKI_BRIDI_PUBKEY,
+                bridi_by_component: FACKI_BRIDI_BY_COMPONENT_PUBKEY
             }
         }
     },
     {
         pubkey: FACKI_SUMTI_PUBKEY,
         ckaji: { klesi: 'Facki', cmene: '@facki_sumti' },
-        // Datni for Sumti index is now directly the map (no klesi/vasru needed inside datni)
-        datni: { klesi: 'LoroMap', vasru: {} } // Keep structure for seedSumtiDocument for now
+        // Datni for Sumti index is now directly the map
+        datni: { klesi: 'LoroMap', vasru: {} } // Simple key-value store
     },
     {
         pubkey: FACKI_SELBRI_PUBKEY,
         ckaji: { klesi: 'Facki', cmene: '@facki_selbri' },
         // Datni for Selbri index is now directly the map
-        datni: { klesi: 'LoroMap', vasru: {} } // Keep structure for seedSumtiDocument for now
+        datni: { klesi: 'LoroMap', vasru: {} } // Simple key-value store
     },
     {
         pubkey: FACKI_BRIDI_PUBKEY,
         ckaji: { klesi: 'Facki', cmene: '@facki_bridi' },
-        // Datni for Bridi index is now directly the map
-        datni: { klesi: 'LoroMap', vasru: {} } // Keep structure for seedSumtiDocument for now
+        datni: { klesi: 'LoroMap', vasru: {} } // Simple key-value store
+    },
+    {
+        pubkey: FACKI_BRIDI_BY_COMPONENT_PUBKEY,
+        ckaji: { klesi: 'Facki', cmene: '@facki_bridi_by_component' },
+        // Datni remains a LoroMap holding LoroLists
+        datni: { klesi: 'LoroMap', vasru: {} } // Structure for component index
     },
 ];
 
@@ -78,7 +84,7 @@ async function seedSumtiDocument(
     db: ReturnType<typeof drizzle>,
     sumtiRecord: SumtiRecord,
     generatedKeys: Map<string, string>
-) {
+): Promise<{ contentEntry: schema.InsertContent; docEntry: schema.InsertDoc } | null> {
     const originalPubKey = sumtiRecord.pubkey;
 
     // Skip Facki records - keep their original pubkeys
@@ -94,15 +100,6 @@ async function seedSumtiDocument(
     }
 
     console.log(`Processing Sumti: ${originalPubKey} -> ${pubKey}`);
-
-    const existingDoc = await db.select({ pubKey: schema.docs.pubKey })
-        .from(schema.docs)
-        .where(eq(schema.docs.pubKey, pubKey))
-        .limit(1);
-    if (existingDoc.length > 0) {
-        console.log(`  - Document already exists. Skipping.`);
-        return pubKey;
-    }
 
     const loroDoc = new LoroDoc();
     loroDoc.setPeerId(1);
@@ -127,13 +124,13 @@ async function seedSumtiDocument(
             }
         } else if (datniKlesi === 'LoroText' && 'vasru' in sumtiRecord.datni) {
             // Dynamically import if needed
-            const { LoroText } = await import('loro-crdt');
+            await import('loro-crdt'); // Import the module, but don't need to destructure LoroText if not used
             const datniContainer = loroDoc.getText('datni');
             const textValue = sumtiRecord.datni.vasru as string; // Safe access
             datniContainer.insert(0, textValue);
         } else if ((datniKlesi === 'LoroList' || datniKlesi === 'LoroMovableList') && 'vasru' in sumtiRecord.datni) {
             // Dynamically import if needed
-            const { LoroList } = await import('loro-crdt');
+            await import('loro-crdt'); // Import the module, but don't need to destructure LoroList if not used
             const datniContainer = loroDoc.getList('datni');
             const listData = sumtiRecord.datni.vasru as unknown[]; // Safe access
             listData.forEach((item, index) => {
@@ -159,16 +156,13 @@ async function seedSumtiDocument(
     const cid = await hashSnapshot(snapshot);
     const now = new Date();
 
-    await db.insert(schema.content)
-        .values({
-            cid: cid,
-            type: 'snapshot',
-            raw: Buffer.from(snapshot),
-
-            createdAt: now
-        })
-        .onConflictDoNothing({ target: schema.content.cid });
-    console.log(`  - Ensured content entry exists: ${cid}`);
+    // --- Prepare data instead of inserting --- 
+    const contentEntry: schema.InsertContent = {
+        cid: cid,
+        type: 'snapshot',
+        raw: Buffer.from(snapshot),
+        createdAt: now
+    };
 
     const docEntry: schema.InsertDoc = {
         pubKey: pubKey,
@@ -178,18 +172,16 @@ async function seedSumtiDocument(
         updatedAt: now,
         createdAt: now
     };
-    await db.insert(schema.docs).values(docEntry);
-    console.log(`  - Created document entry: ${pubKey}`);
 
-    console.log(`✅ Successfully seeded Sumti: ${originalPubKey} -> ${pubKey}`);
-    return pubKey;
+    console.log(`  - Prepared Sumti: ${originalPubKey} -> ${pubKey} (CID: ${cid.substring(0, 10)}...)`);
+    return { contentEntry, docEntry };
 }
 
 async function seedSelbriDocument(
     db: ReturnType<typeof drizzle>,
     selbriRecord: SelbriRecord,
     generatedKeys: Map<string, string>
-) {
+): Promise<{ contentEntry: schema.InsertContent; docEntry: schema.InsertDoc } | null> {
     const originalPubKey = selbriRecord.pubkey;
 
     // Generate deterministic pubkey if not already in the map
@@ -202,15 +194,6 @@ async function seedSelbriDocument(
     }
 
     console.log(`Processing Selbri: ${originalPubKey} -> ${pubKey}`);
-
-    const existingDoc = await db.select({ pubKey: schema.docs.pubKey })
-        .from(schema.docs)
-        .where(eq(schema.docs.pubKey, pubKey))
-        .limit(1);
-    if (existingDoc.length > 0) {
-        console.log(`  - Document already exists. Skipping.`);
-        return pubKey;
-    }
 
     const loroDoc = new LoroDoc();
     loroDoc.setPeerId(1);
@@ -253,16 +236,13 @@ async function seedSelbriDocument(
     const cid = await hashSnapshot(snapshot);
     const now = new Date();
 
-    await db.insert(schema.content)
-        .values({
-            cid: cid,
-            type: 'snapshot',
-            raw: Buffer.from(snapshot),
-
-            createdAt: now
-        })
-        .onConflictDoNothing({ target: schema.content.cid });
-    console.log(`  - Ensured content entry exists: ${cid}`);
+    // --- Prepare data instead of inserting --- 
+    const contentEntry: schema.InsertContent = {
+        cid: cid,
+        type: 'snapshot',
+        raw: Buffer.from(snapshot),
+        createdAt: now
+    };
 
     const docEntry: schema.InsertDoc = {
         pubKey: pubKey,
@@ -272,18 +252,16 @@ async function seedSelbriDocument(
         updatedAt: now,
         createdAt: now
     };
-    await db.insert(schema.docs).values(docEntry);
-    console.log(`  - Created document entry: ${pubKey}`);
 
-    console.log(`✅ Successfully seeded Selbri: ${originalPubKey} -> ${pubKey}`);
-    return pubKey;
+    console.log(`  - Prepared Selbri: ${originalPubKey} -> ${pubKey} (CID: ${cid.substring(0, 10)}...)`);
+    return { contentEntry, docEntry };
 }
 
 async function seedBridiDocument(
     db: ReturnType<typeof drizzle>,
     bridiRecord: BridiRecord,
     generatedKeys: Map<string, string>
-) {
+): Promise<{ contentEntry: schema.InsertContent; docEntry: schema.InsertDoc } | null> {
     const originalPubKey = bridiRecord.pubkey;
 
     // Generate deterministic pubkey if not already in the map
@@ -297,22 +275,28 @@ async function seedBridiDocument(
 
     console.log(`Processing Bridi: ${originalPubKey} -> ${pubKey}`);
 
-    const existingDoc = await db.select({ pubKey: schema.docs.pubKey })
-        .from(schema.docs)
-        .where(eq(schema.docs.pubKey, pubKey))
-        .limit(1);
-    if (existingDoc.length > 0) {
-        console.log(`  - Document already exists. Skipping.`);
-        return pubKey;
+    // Check referenced selbri BEFORE creating the document
+    const originalSelbriRef = bridiRecord.datni.selbri;
+    const selbriRef = generatedKeys.get(originalSelbriRef);
+    if (!selbriRef) {
+        console.error(`❌ ERROR creating Bridi ${originalPubKey}: Referenced selbri ${originalSelbriRef} not found in generatedKeys.`);
+        return null; // Prevent seeding this Bridi if its selbri wasn't processed
     }
 
-    // Make sure the referenced selbri exists and get its mapped pubkey
-    const originalSelbriRef = bridiRecord.datni.selbri;
-    if (!generatedKeys.has(originalSelbriRef)) {
-        console.error(`❌ ERROR: Bridi ${originalPubKey} references non-existent selbri ${originalSelbriRef}`);
-        return null;
+    // Check all referenced sumti BEFORE creating the document
+    const missingSumtiRefs: string[] = [];
+    for (const place of ['x1', 'x2', 'x3', 'x4', 'x5'] as const) {
+        const originalValue = bridiRecord.datni.sumti[place];
+        if (originalValue && typeof originalValue === 'string' && originalValue.startsWith('@')) {
+            if (!generatedKeys.has(originalValue)) {
+                missingSumtiRefs.push(originalValue);
+            }
+        }
     }
-    const selbriRef = generatedKeys.get(originalSelbriRef)!;
+    if (missingSumtiRefs.length > 0) {
+        console.error(`❌ ERROR creating Bridi ${originalPubKey}: Referenced sumti not found in generatedKeys: ${missingSumtiRefs.join(', ')}.`);
+        return null; // Prevent seeding this Bridi if dependencies are missing
+    }
 
     const loroDoc = new LoroDoc();
     loroDoc.setPeerId(1);
@@ -345,16 +329,13 @@ async function seedBridiDocument(
     const cid = await hashSnapshot(snapshot);
     const now = new Date();
 
-    await db.insert(schema.content)
-        .values({
-            cid: cid,
-            type: 'snapshot',
-            raw: Buffer.from(snapshot),
-
-            createdAt: now
-        })
-        .onConflictDoNothing({ target: schema.content.cid });
-    console.log(`  - Ensured content entry exists: ${cid}`);
+    // --- Prepare data instead of inserting --- 
+    const contentEntry: schema.InsertContent = {
+        cid: cid,
+        type: 'snapshot',
+        raw: Buffer.from(snapshot),
+        createdAt: now
+    };
 
     const docEntry: schema.InsertDoc = {
         pubKey: pubKey,
@@ -364,15 +345,14 @@ async function seedBridiDocument(
         updatedAt: now,
         createdAt: now
     };
-    await db.insert(schema.docs).values(docEntry);
-    console.log(`  - Created document entry: ${pubKey}`);
 
-    console.log(`✅ Successfully seeded Bridi: ${originalPubKey} -> ${pubKey}`);
-    return pubKey;
+    console.log(`  - Prepared Bridi: ${originalPubKey} -> ${pubKey} (CID: ${cid.substring(0, 10)}...)`);
+    return { contentEntry, docEntry };
 }
 
-async function populateBridiIndex(
-    db: ReturnType<typeof drizzle>,
+// --- NEW HELPER for modifying the index map in memory --- 
+async function updateBridiIndexInMemory(
+    indexMap: LoroMap, // Pass the map directly
     originalBridiPubkey: string,
     bridiData: {
         selbri: string;
@@ -380,111 +360,72 @@ async function populateBridiIndex(
     },
     generatedKeys: Map<string, string>
 ) {
+    // LoroList is imported at the top level now
+
     // Get the generated pubkeys for the bridi and selbri
-    const bridiPubkey = generatedKeys.get(originalBridiPubkey)!;
-    const selbriId = generatedKeys.get(bridiData.selbri)!;
+    const bridiPubkey = generatedKeys.get(originalBridiPubkey);
+    const selbriId = generatedKeys.get(bridiData.selbri);
 
-    // Load the Facki bridi index document
-    const indexDoc = await db.select({ snapshotCid: schema.docs.snapshotCid })
-        .from(schema.docs)
-        .where(eq(schema.docs.pubKey, FACKI_BRIDI_PUBKEY))
-        .limit(1);
-
-    if (indexDoc.length === 0 || !indexDoc[0].snapshotCid) {
-        console.error(`❌ ERROR: Facki bridi index document ${FACKI_BRIDI_PUBKEY} not found or has no snapshot`);
+    if (!bridiPubkey) {
+        console.warn(`  - [Bridi Index] Skipping Bridi ${originalBridiPubkey} - Could not find generated key.`);
+        return;
+    }
+    if (!selbriId) {
+        console.warn(`  - [Bridi Index] Skipping Bridi ${originalBridiPubkey} - Could not find generated key for Selbri ${bridiData.selbri}.`);
         return;
     }
 
-    // Load the snapshot
-    const contentResult = await db.select({ raw: schema.content.raw })
-        .from(schema.content)
-        .where(eq(schema.content.cid, indexDoc[0].snapshotCid))
-        .limit(1);
-
-    if (contentResult.length === 0 || !contentResult[0].raw) {
-        console.error(`❌ ERROR: Content for ${FACKI_BRIDI_PUBKEY} not found`);
-        return;
-    }
-
-    // Create in-memory LoroDoc and import the snapshot
-    const loroDoc = new LoroDoc();
-    loroDoc.import(contentResult[0].raw);
-
-    // Get the index map directly from the root 'datni' map - FIX
-    const indexMap = loroDoc.getMap('datni'); // datni IS the index map
-    if (!indexMap) {
-        console.error(`❌ ERROR: Could not find root 'datni' map in ${FACKI_BRIDI_PUBKEY}`);
-        return;
-    }
-
-    // Update the index with the bridi data
-    // First check if there's an entry for this selbri
-    if (indexMap.get(selbriId) === undefined) {
-        // Create a new map for this selbri
-        indexMap.set(selbriId, {});
-    }
-
-    const selbriMap = indexMap.get(selbriId) as Record<string, unknown>;
-
-    // For each place in the sumti, add the bridi to the index
+    // Directly update the index map passed as argument
     for (const place in bridiData.sumti) {
         const originalSumtiId = bridiData.sumti[place];
         if (!originalSumtiId) continue;
 
-        const sumtiId = generatedKeys.get(originalSumtiId)!;
-
-        // Ensure there's an entry for this place
-        if (!selbriMap[place]) {
-            selbriMap[place] = {};
+        const sumtiId = generatedKeys.get(originalSumtiId);
+        if (!sumtiId) {
+            console.warn(`  - [Bridi Comp Index] Skipping place ${place} for Bridi ${originalBridiPubkey} - Could not find generated key for Sumti ${originalSumtiId}. This indicates an issue.`);
+            continue;
         }
 
-        const placeMap = selbriMap[place] as Record<string, unknown>;
+        // Ensure place is a valid key string (like 'x1', 'x2', etc.)
+        const placeKey = String(place);
 
-        // Ensure there's an entry for this sumti
-        if (!placeMap[sumtiId]) {
-            placeMap[sumtiId] = [];
+        // --- Index 1: selbri:place:sumti --- 
+        const compositeKey1 = `${selbriId}:${placeKey}:${sumtiId}`;
+        let listContainer1 = indexMap.get(compositeKey1);
+        if (!listContainer1 || !(listContainer1 instanceof LoroList)) {
+            const newList = new LoroList<string>();
+            indexMap.setContainer(compositeKey1, newList);
+            listContainer1 = newList;
+        }
+        const bridiList1 = listContainer1 as LoroList<string>; // Cast after check/creation
+        // Using Set might be overkill if lists are expected short, direct check might be ok
+        if (!bridiList1.toArray().includes(bridiPubkey)) {
+            bridiList1.push(bridiPubkey);
+            // console.log(`  - [Bridi Comp Index] Added ${bridiPubkey.substring(0, 10)}... to list for ${compositeKey1}`);
+            if (selbriId === generatedKeys.get('@selbri_cneme')) {
+                console.log(`    --> Indexed CNEME Bridi under key: ${compositeKey1}`);
+            }
         }
 
-        // Add this bridi to the list for this sumti at this place
-        const bridiList = placeMap[sumtiId] as string[];
-        if (!bridiList.includes(bridiPubkey)) {
-            bridiList.push(bridiPubkey);
+        // --- Index 2: sumti:place:selbri --- 
+        const compositeKey2 = `${sumtiId}:${placeKey}:${selbriId}`;
+        let listContainer2 = indexMap.get(compositeKey2);
+        if (!listContainer2 || !(listContainer2 instanceof LoroList)) {
+            const newList = new LoroList<string>();
+            indexMap.setContainer(compositeKey2, newList);
+            listContainer2 = newList;
         }
-
-        // Update the place map with the updated bridi list
-        placeMap[sumtiId] = bridiList;
-        selbriMap[place] = placeMap;
+        const bridiList2 = listContainer2 as LoroList<string>; // Cast after check/creation
+        if (!bridiList2.toArray().includes(bridiPubkey)) {
+            bridiList2.push(bridiPubkey);
+            // console.log(`  - [Bridi Comp Index] Added ${bridiPubkey.substring(0, 10)}... to list for ${compositeKey2}`);
+            if (selbriId === generatedKeys.get('@selbri_cneme')) {
+                console.log(`    --> Indexed CNEME Bridi under key: ${compositeKey2}`);
+            }
+        }
     }
-
-    // Update the root index map with the updated selbri map
-    // indexMap.set(selbriId, selbriMap); // No longer needed, direct modification
-
-    // Export snapshot and save to database
-    const snapshot = loroDoc.exportSnapshot();
-    const cid = await hashSnapshot(snapshot);
-    const now = new Date();
-
-    await db.insert(schema.content)
-        .values({
-            cid: cid,
-            type: 'snapshot',
-            raw: Buffer.from(snapshot),
-            createdAt: now
-        })
-        .onConflictDoNothing({ target: schema.content.cid });
-
-    // Update the facki_bridi document to point to the new snapshot
-    await db.update(schema.docs)
-        .set({
-            snapshotCid: cid,
-            updatedAt: now
-        })
-        .where(eq(schema.docs.pubKey, FACKI_BRIDI_PUBKEY));
-
-    console.log(`✅ Updated Bridi index with ${bridiPubkey} (was ${originalBridiPubkey})`);
 }
 
-// --- NEW FUNCTION ---
 async function populateSelbriIndex(
     db: ReturnType<typeof drizzle>,
     generatedKeys: Map<string, string>
@@ -571,7 +512,181 @@ async function populateSelbriIndex(
 
     console.log(`✅ Successfully updated Selbri index (${addedCount} added). New snapshot CID: ${cid}`);
 }
-// --- END NEW FUNCTION ---
+
+// --- NEW FUNCTION for SUMTI INDEX ---
+async function populateSumtiIndex(
+    db: ReturnType<typeof drizzle>,
+    generatedKeys: Map<string, string>
+) {
+    console.log("--- Populating Sumti Index ---");
+
+    // Load the Facki sumti index document
+    const indexDocMeta = await db.select({ snapshotCid: schema.docs.snapshotCid })
+        .from(schema.docs)
+        .where(eq(schema.docs.pubKey, FACKI_SUMTI_PUBKEY))
+        .limit(1);
+
+    if (indexDocMeta.length === 0 || !indexDocMeta[0].snapshotCid) {
+        console.error(`❌ ERROR: Facki sumti index document ${FACKI_SUMTI_PUBKEY} not found or has no snapshot`);
+        return;
+    }
+
+    // Load the snapshot content
+    const contentResult = await db.select({ raw: schema.content.raw })
+        .from(schema.content)
+        .where(eq(schema.content.cid, indexDocMeta[0].snapshotCid))
+        .limit(1);
+
+    if (contentResult.length === 0 || !contentResult[0].raw) {
+        console.error(`❌ ERROR: Content for ${FACKI_SUMTI_PUBKEY} not found`);
+        return;
+    }
+
+    // Create in-memory LoroDoc and import the snapshot
+    const loroDoc = new LoroDoc();
+    loroDoc.import(contentResult[0].raw);
+
+    // Get the index map directly from the root 'datni' map
+    const indexMap = loroDoc.getMap('datni'); // datni IS the index map
+    if (!indexMap) {
+        console.error(`❌ ERROR: Could not find root 'datni' map in ${FACKI_SUMTI_PUBKEY}`);
+        return;
+    }
+
+    // Iterate over all sumti records and add their generated pubkeys to the index
+    let addedCount = 0;
+    // Combine initialSumti and initialFacki as Facki records also need to be in the index?
+    // Let's just index initialSumti for now, as Facki pubkeys are predictable.
+    // If Facki needs indexing, add initialFacki to the loop.
+    for (const sumti of initialSumti) {
+        const originalPubKey = sumti.pubkey;
+        // Skip Facki records for now (they have predictable keys)
+        if (originalPubKey.startsWith('@facki_')) continue;
+
+        if (generatedKeys.has(originalPubKey)) {
+            const generatedPubKey = generatedKeys.get(originalPubKey)!;
+            if (indexMap.get(generatedPubKey) === undefined) {
+                indexMap.set(generatedPubKey, true); // Store the pubkey as a key, value can be simple
+                console.log(`  - Added Sumti ${generatedPubKey} (from ${originalPubKey}) to index.`);
+                addedCount++;
+            }
+        } else {
+            console.warn(`  - Could not find generated key for original Sumti: ${originalPubKey}`);
+        }
+    }
+
+    if (addedCount === 0) {
+        console.log("  - No new Sumti added to the index (already populated?).");
+        return; // No need to save if nothing changed
+    }
+
+    // Export snapshot and save to database
+    const snapshot = loroDoc.exportSnapshot();
+    const cid = await hashSnapshot(snapshot);
+    const now = new Date();
+
+    await db.insert(schema.content)
+        .values({
+            cid: cid,
+            type: 'snapshot',
+            raw: Buffer.from(snapshot),
+            createdAt: now
+        })
+        .onConflictDoNothing({ target: schema.content.cid });
+
+    // Update the facki_sumti document to point to the new snapshot
+    await db.update(schema.docs)
+        .set({
+            snapshotCid: cid,
+            updatedAt: now
+        })
+        .where(eq(schema.docs.pubKey, FACKI_SUMTI_PUBKEY));
+
+    console.log(`✅ Successfully updated Sumti index (${addedCount} added). New snapshot CID: ${cid}`);
+}
+// --- END NEW SUMTI INDEX FUNCTION ---
+
+// --- NEW FUNCTION for Simple Bridi Index --- 
+async function populateBridiIndexSimple(
+    db: ReturnType<typeof drizzle>,
+    generatedKeys: Map<string, string>,
+    seededBridiPubkeys: Set<string> // Pass the set of successfully seeded Bridi keys
+) {
+    console.log("--- Populating Simple Bridi Index ---");
+
+    // Load the Facki Bridi index document (the simple one)
+    const indexDocMeta = await db.select({ snapshotCid: schema.docs.snapshotCid })
+        .from(schema.docs)
+        .where(eq(schema.docs.pubKey, FACKI_BRIDI_PUBKEY))
+        .limit(1);
+
+    if (indexDocMeta.length === 0 || !indexDocMeta[0].snapshotCid) {
+        console.error(`❌ ERROR: Facki simple bridi index document ${FACKI_BRIDI_PUBKEY} not found or has no snapshot`);
+        return;
+    }
+
+    // Load the snapshot content
+    const contentResult = await db.select({ raw: schema.content.raw })
+        .from(schema.content)
+        .where(eq(schema.content.cid, indexDocMeta[0].snapshotCid))
+        .limit(1);
+
+    if (contentResult.length === 0 || !contentResult[0].raw) {
+        console.error(`❌ ERROR: Content for ${FACKI_BRIDI_PUBKEY} not found`);
+        return;
+    }
+
+    // Create in-memory LoroDoc and import the snapshot
+    const loroDoc = new LoroDoc();
+    loroDoc.import(contentResult[0].raw);
+
+    // Get the index map directly from the root 'datni' map
+    const indexMap = loroDoc.getMap('datni'); // datni IS the index map
+    if (!indexMap) {
+        console.error(`❌ ERROR: Could not find root 'datni' map in ${FACKI_BRIDI_PUBKEY}`);
+        return;
+    }
+
+    // Iterate over successfully seeded bridi records and add their generated pubkeys
+    let addedCount = 0;
+    for (const bridiPubKey of seededBridiPubkeys) {
+        if (indexMap.get(bridiPubKey) === undefined) {
+            indexMap.set(bridiPubKey, true); // Store the pubkey as a key
+            console.log(`  - Added Bridi ${bridiPubKey.substring(0, 10)}... to simple index.`);
+            addedCount++;
+        }
+    }
+
+    if (addedCount === 0) {
+        console.log("  - No new Bridi added to the simple index (already populated?).");
+        return; // No need to save if nothing changed
+    }
+
+    // Export snapshot and save to database
+    const snapshot = loroDoc.exportSnapshot();
+    const cid = await hashSnapshot(snapshot);
+    const now = new Date();
+
+    await db.insert(schema.content)
+        .values({
+            cid: cid,
+            type: 'snapshot',
+            raw: Buffer.from(snapshot),
+            createdAt: now
+        })
+        .onConflictDoNothing({ target: schema.content.cid });
+
+    // Update the facki_bridi document to point to the new snapshot
+    await db.update(schema.docs)
+        .set({
+            snapshotCid: cid,
+            updatedAt: now
+        })
+        .where(eq(schema.docs.pubKey, FACKI_BRIDI_PUBKEY));
+
+    console.log(`✅ Successfully updated Simple Bridi index (${addedCount} added). New snapshot CID: ${cid}`);
+}
+// --- END NEW Simple Bridi Index --- 
 
 async function main() {
     const dbUrl = process.env.SECRET_DATABASE_URL_HOMINIO;
@@ -595,40 +710,192 @@ async function main() {
         generatedKeys.set(FACKI_SUMTI_PUBKEY, FACKI_SUMTI_PUBKEY);
         generatedKeys.set(FACKI_SELBRI_PUBKEY, FACKI_SELBRI_PUBKEY);
         generatedKeys.set(FACKI_BRIDI_PUBKEY, FACKI_BRIDI_PUBKEY);
+        generatedKeys.set(FACKI_BRIDI_BY_COMPONENT_PUBKEY, FACKI_BRIDI_BY_COMPONENT_PUBKEY);
 
-        // 1. Seed Facki records
-        console.log("\n--- Seeding Facki Records ---");
+        // --- Prepare data arrays --- 
+        const allContentEntries: schema.InsertContent[] = [];
+        const allDocEntries: schema.InsertDoc[] = [];
+
+        // 1. Prepare Facki records
+        console.log("\n--- Preparing Facki Records ---");
         for (const facki of initialFacki) {
-            await seedSumtiDocument(db, facki, generatedKeys);
+            const prepared = await seedSumtiDocument(db, facki, generatedKeys);
+            if (prepared) {
+                allContentEntries.push(prepared.contentEntry);
+                allDocEntries.push(prepared.docEntry);
+            }
         }
 
-        // 2. Seed Sumti records
-        console.log("\n--- Seeding Sumti Records ---");
+        // 2. Prepare Sumti records
+        console.log("\n--- Preparing Sumti Records ---");
         for (const sumti of initialSumti) {
-            await seedSumtiDocument(db, sumti, generatedKeys);
+            const prepared = await seedSumtiDocument(db, sumti, generatedKeys);
+            if (prepared) {
+                allContentEntries.push(prepared.contentEntry);
+                allDocEntries.push(prepared.docEntry);
+            }
         }
 
-        // 3. Seed Selbri records
-        console.log("\n--- Seeding Selbri Records ---");
+        // 3. Prepare Selbri records
+        console.log("\n--- Preparing Selbri Records ---");
         for (const selbri of initialSelbri) {
-            await seedSelbriDocument(db, selbri, generatedKeys);
+            const prepared = await seedSelbriDocument(db, selbri, generatedKeys);
+            if (prepared) {
+                allContentEntries.push(prepared.contentEntry);
+                allDocEntries.push(prepared.docEntry);
+            }
         }
 
-        // 4. Seed Bridi records
-        console.log("\n--- Seeding Bridi Records ---");
+        // 4. Prepare Bridi records
+        console.log("\n--- Preparing Bridi Records ---");
+        const successfullySeededBridiPubkeys = new Set<string>();
         for (const bridi of initialBridi) {
-            await seedBridiDocument(db, bridi, generatedKeys);
+            const prepared = await seedBridiDocument(db, bridi, generatedKeys);
+            if (prepared) {
+                allContentEntries.push(prepared.contentEntry);
+                allDocEntries.push(prepared.docEntry);
+                successfullySeededBridiPubkeys.add(prepared.docEntry.pubKey);
+            }
         }
 
-        // 5. Temporary static indexing step
+        // --- Perform Batch Inserts --- 
+        console.log(`\n--- Inserting ${allContentEntries.length} Content Entries ---`);
+        if (allContentEntries.length > 0) {
+            // Insert content entries, ignore conflicts on CID
+            await db.insert(schema.content)
+                .values(allContentEntries)
+                .onConflictDoNothing({ target: schema.content.cid });
+            console.log("✅ Content entries inserted.");
+        } else {
+            console.log("  - No new content entries to insert.");
+        }
+
+        console.log(`\n--- Inserting ${allDocEntries.length} Document Entries ---`);
+        if (allDocEntries.length > 0) {
+            // Insert doc entries, update snapshotCid and updatedAt on conflict
+            await db.insert(schema.docs)
+                .values(allDocEntries)
+                .onConflictDoUpdate({
+                    target: schema.docs.pubKey,
+                    set: {
+                        snapshotCid: schema.docs.snapshotCid, // Reference column directly
+                        updatedAt: schema.docs.updatedAt      // Reference column directly
+                    }
+                });
+            console.log("✅ Document entries inserted/updated.");
+        } else {
+            console.log("  - No new document entries to insert.");
+        }
+
+        // 5. Indexing step (Refactored Bridi Indexing)
         console.log("\n--- Building Facki indexes ---");
+
+        // Populate Selbri and Sumti indexes (these are already reasonably efficient)
         await populateSelbriIndex(db, generatedKeys);
-        for (const bridi of initialBridi) {
-            await populateBridiIndex(db, bridi.pubkey, {
-                selbri: bridi.datni.selbri,
-                sumti: bridi.datni.sumti as Record<string, string>
-            }, generatedKeys);
+        await populateSumtiIndex(db, generatedKeys);
+
+        // <<< Populate the NEW simple Bridi index FIRST >>>
+        await populateBridiIndexSimple(db, generatedKeys, successfullySeededBridiPubkeys);
+
+        // --- Efficient Bridi Component Index Population --- 
+        console.log("--- Populating Bridi Component Index ---");
+        const bridiCompIndexDocMeta = await db.select({ snapshotCid: schema.docs.snapshotCid })
+            .from(schema.docs)
+            .where(eq(schema.docs.pubKey, FACKI_BRIDI_BY_COMPONENT_PUBKEY))
+            .limit(1);
+
+        if (bridiCompIndexDocMeta.length === 0 || !bridiCompIndexDocMeta[0].snapshotCid) {
+            console.error(`❌ ERROR: Cannot populate Bridi component index - ${FACKI_BRIDI_BY_COMPONENT_PUBKEY} not found or has no snapshot.`);
+        } else {
+            const bridiCompIndexContent = await db.select({ raw: schema.content.raw })
+                .from(schema.content)
+                .where(eq(schema.content.cid, bridiCompIndexDocMeta[0].snapshotCid))
+                .limit(1);
+
+            if (bridiCompIndexContent.length === 0 || !bridiCompIndexContent[0].raw) {
+                console.error(`❌ ERROR: Cannot populate Bridi component index - Content for ${FACKI_BRIDI_BY_COMPONENT_PUBKEY} not found.`);
+            } else {
+                const indexLoroDoc = new LoroDoc();
+                indexLoroDoc.import(bridiCompIndexContent[0].raw);
+                const indexMap = indexLoroDoc.getMap('datni');
+
+                if (!indexMap) {
+                    console.error(`❌ ERROR: Cannot populate Bridi component index - Could not find root 'datni' map in ${FACKI_BRIDI_BY_COMPONENT_PUBKEY}`);
+                } else {
+                    console.log("  - Updating Bridi Component Index in memory...");
+                    let bridiUpdateCount = 0;
+                    for (const bridi of initialBridi) {
+                        const generatedBridiKey = generatedKeys.get(bridi.pubkey);
+                        if (generatedBridiKey && successfullySeededBridiPubkeys.has(generatedBridiKey)) {
+                            await updateBridiIndexInMemory(indexMap, bridi.pubkey, {
+                                selbri: bridi.datni.selbri,
+                                sumti: bridi.datni.sumti as Record<string, string>
+                            }, generatedKeys);
+                            bridiUpdateCount++;
+                        }
+                    }
+                    console.log(`  - Processed ${bridiUpdateCount} successfully seeded Bridis for component index update.`);
+
+                    console.log("  - Saving updated Bridi Component Index Document...");
+                    const finalSnapshot = indexLoroDoc.exportSnapshot();
+                    const finalCid = await hashSnapshot(finalSnapshot);
+                    const now = new Date();
+
+                    await db.insert(schema.content)
+                        .values({
+                            cid: finalCid,
+                            type: 'snapshot',
+                            raw: Buffer.from(finalSnapshot),
+                            createdAt: now
+                        })
+                        .onConflictDoNothing({ target: schema.content.cid });
+
+                    await db.update(schema.docs)
+                        .set({
+                            snapshotCid: finalCid,
+                            updatedAt: now
+                        })
+                        .where(eq(schema.docs.pubKey, FACKI_BRIDI_BY_COMPONENT_PUBKEY));
+
+                    console.log(`✅ Successfully updated Bridi Component index. New snapshot CID: ${finalCid}`);
+                }
+            }
         }
+        // --- End Efficient Bridi Component Index Population --- 
+
+        // <<< ADD INDEX VERIFICATION LOGGING >>>
+        console.log("\n--- Verifying Saved Bridi Component Index ---");
+        const verifyIndexDoc = await db.select({ snapshotCid: schema.docs.snapshotCid })
+            .from(schema.docs)
+            .where(eq(schema.docs.pubKey, FACKI_BRIDI_BY_COMPONENT_PUBKEY))
+            .limit(1);
+        if (verifyIndexDoc.length > 0 && verifyIndexDoc[0].snapshotCid) {
+            const verifyContent = await db.select({ raw: schema.content.raw })
+                .from(schema.content)
+                .where(eq(schema.content.cid, verifyIndexDoc[0].snapshotCid))
+                .limit(1);
+            if (verifyContent.length > 0 && verifyContent[0].raw) {
+                const loadedIndexDoc = new LoroDoc();
+                loadedIndexDoc.import(verifyContent[0].raw);
+                const loadedIndexMap = loadedIndexDoc.getMap('datni');
+                if (loadedIndexMap) {
+                    const allKeys = Array.from(loadedIndexMap.keys());
+                    console.log(`  - Keys found in saved index (${allKeys.length} total):`);
+                    // Filter for cneme keys specifically for easier reading
+                    const cnemeKeys = allKeys.filter(k => k.startsWith(generatedKeys.get('@selbri_cneme')!));
+                    console.log("    CNEME Keys:", cnemeKeys);
+                    // Log a few others for context
+                    // console.log("    All Keys:", allKeys);
+                } else {
+                    console.error("  - ERROR: Could not get 'datni' map from reloaded index doc.");
+                }
+            } else {
+                console.error("  - ERROR: Could not reload content for saved index doc.");
+            }
+        } else {
+            console.error("  - ERROR: Could not reload saved index doc metadata.");
+        }
+        // <<< END INDEX VERIFICATION LOGGING >>>
 
         console.log('\n✅ Database seeding completed successfully.');
         console.log('\nGenerated Keys Map: (Original -> Generated)');

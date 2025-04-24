@@ -102,6 +102,11 @@ const staticSumti: SumtiRecord[] = [
         ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'concept' }
     },
+    {
+        pubkey: '@prop_name',
+        ckaji: { klesi: 'Sumti' },
+        datni: { klesi: 'concept' }
+    },
 
     // Property Value Concepts
     {
