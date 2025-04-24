@@ -287,7 +287,7 @@ class HominioIndexing {
                             }
 
                             // 2. Index by Sumti
-                            for (const [/* place */, sumtiRefVal] of Object.entries(sumtiRefsData)) { // Omit unused place variable
+                            for (const [place, sumtiRefVal] of Object.entries(sumtiRefsData)) {
                                 if (typeof sumtiRefVal === 'string' && sumtiRefVal) {
                                     const sumtiKey = `sumti:${sumtiRefVal}`;
                                     let sumtiListTyped: LoroList<string>;
@@ -303,6 +303,20 @@ class HominioIndexing {
                                     if (!sumtiListTyped.toArray().includes(pubKey)) {
                                         sumtiListTyped.push(pubKey);
                                         // REMOVED: console.log(`[HominioIndexing] Indexed ${pubKey} by sumti (${place}): ${sumtiRefVal}`);
+                                    }
+
+                                    // 3. NEW: Create composite keys for relationship traversal
+                                    const compositeKey = `selbri:${selbriRef}:${place}:${sumtiRefVal}`;
+                                    let compositeListTyped: LoroList<string>;
+                                    const potentialCompositeList = bridiByComponentMap.get(compositeKey);
+                                    if (potentialCompositeList instanceof LoroList) {
+                                        compositeListTyped = potentialCompositeList;
+                                    } else {
+                                        compositeListTyped = bridiByComponentMap.setContainer(compositeKey, new LoroList<string>());
+                                    }
+                                    if (!compositeListTyped.toArray().includes(pubKey)) {
+                                        compositeListTyped.push(pubKey);
+                                        console.log(`[HominioIndexing] Indexed ${pubKey} by composite key: ${compositeKey}`);
                                     }
                                 } else {
                                     // REMOVED: console.warn(`[HominioIndexing] Sumti data at place ${place} for bridi ${pubKey} is not a non-empty string:`, sumtiRefVal);

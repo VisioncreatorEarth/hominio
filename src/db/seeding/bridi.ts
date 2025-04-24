@@ -231,4 +231,30 @@ export const initialBridi: BridiRecord[] = [
             sumti: { x1: '@task3', x2: '@task3_name' }
         }
     },
+
+    // Person classification (using @selbri_prenu to classify entities as people)
+    {
+        pubkey: '@bridi_person1_prenu',
+        ckaji: { klesi: 'Bridi' },
+        datni: {
+            selbri: '@selbri_prenu',
+            sumti: { x1: '@person1' }
+        }
+    },
+    {
+        pubkey: '@bridi_person2_prenu',
+        ckaji: { klesi: 'Bridi' },
+        datni: {
+            selbri: '@selbri_prenu',
+            sumti: { x1: '@person2' }
+        }
+    },
+    {
+        pubkey: '@bridi_person3_prenu',
+        ckaji: { klesi: 'Bridi' },
+        datni: {
+            selbri: '@selbri_prenu',
+            sumti: { x1: '@person3' }
+        }
+    },
 ];

@@ -63,7 +63,7 @@ const staticSumti: SumtiRecord[] = [
     {
         pubkey: '@person3',
         ckaji: { klesi: 'Sumti' },
-        datni: { klesi: 'LoroText', vasru: 'Charlie' } // Kept person3 example as LoroText
+        datni: { klesi: 'concept' }
     },
 
     // Property Type Concepts
@@ -246,10 +246,7 @@ const staticSumti: SumtiRecord[] = [
         ckaji: { klesi: 'Sumti' },
         datni: { klesi: 'LoroText', vasru: 'Charlie' }
     },
-    // --- REMOVED AI Prompt Sumti from here ---
 ];
-
-// --- Dynamically Load Prompt Sumti from Markdown Files ---
 
 const documentationPath = resolve(__dirname, '../documentation');
 const promptSumtiRecords: SumtiRecord[] = [];

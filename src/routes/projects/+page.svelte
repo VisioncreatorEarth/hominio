@@ -82,6 +82,84 @@
 		}
 	};
 
+	// --- NEW: Function to create a filtered bridi query by selbri type ---
+	function createFilteredBridiQuery(selbriPubkey: string): LoroHqlQuery {
+		return {
+			from: {
+				bridi_pubkeys: [] // Empty array fetches all Bridi
+			},
+			where: [
+				{
+					field: 'self.datni.selbri',
+					condition: { equals: selbriPubkey }
+				}
+			],
+			map: {
+				id: { field: 'doc.pubkey' },
+				selbri: { field: 'self.datni.selbri' },
+				x1: {
+					resolve: {
+						fromField: 'self.datni.sumti.x1',
+						map: {
+							value: { field: 'self.datni' },
+							pubkey: { field: 'doc.pubkey' }
+						}
+					}
+				},
+				x2: {
+					resolve: {
+						fromField: 'self.datni.sumti.x2',
+						map: {
+							value: { field: 'self.datni' },
+							pubkey: { field: 'doc.pubkey' }
+						}
+					}
+				},
+				x3: {
+					resolve: {
+						fromField: 'self.datni.sumti.x3',
+						map: {
+							value: { field: 'self.datni' },
+							pubkey: { field: 'doc.pubkey' }
+						}
+					}
+				},
+				x4: {
+					resolve: {
+						fromField: 'self.datni.sumti.x4',
+						map: {
+							value: { field: 'self.datni' },
+							pubkey: { field: 'doc.pubkey' }
+						}
+					}
+				},
+				x5: {
+					resolve: {
+						fromField: 'self.datni.sumti.x5',
+						map: {
+							value: { field: 'self.datni' },
+							pubkey: { field: 'doc.pubkey' }
+						}
+					}
+				}
+			}
+		};
+	}
+
+	// --- EXAMPLE: Create a filtered query for specific selbri types ---
+	const zukteQuery = createFilteredBridiQuery(
+		'0x17af593bc5411987e911d3d49e033cbfc34c0f885cc2fd6a5b4161629eafaa93'
+	);
+	const cnemeQuery = createFilteredBridiQuery(
+		'0x96360692ef7f876a32e1a3c46a15bd597da160e76ac9c4bfd96026cb4afe3412'
+	);
+	const gunkaQuery = createFilteredBridiQuery(
+		'0xc05e9db099a2a9b699b208778a5c60db302700fd15147bba9f232c13183635b3'
+	);
+	const ckajiQuery = createFilteredBridiQuery(
+		'0xa83a44305ddc3cc4f51ee41665eb0e6de585ab312a370fc47002f07d168a4d7b'
+	);
+
 	// --- NEW: Query for Tasks in Project1 ---
 	const projectTasksQuery: LoroHqlQuery = {
 		from: {
@@ -91,123 +169,44 @@
 		map: {
 			project_id: { field: 'doc.pubkey' },
 			project_name: {
-				// Traverse to find the project's name
-				traverse: {
-					bridi_where: {
-						selbri: '0x96360692ef7f876a32e1a3c46a15bd597da160e76ac9c4bfd96026cb4afe3412', // @selbri_cneme
-						place: 'x1' // Project is x1 in this cneme bridi
-					},
-					return: 'first',
-					map: {
-						// Map the name Sumti found at x2
-						name: { place: 'x2', field: 'self.datni' }
-					}
-				}
+				// Look for the project name in Project Sumti directly
+				field: 'self.datni'
 			},
-			tasks: {
-				// Traverse to find tasks related via @selbri_gunka
+			bridi_relationships: {
+				// Find all bridi documents directly
+				// This can be used to explore the actual relationships
 				traverse: {
 					bridi_where: {
-						selbri: '0xc05e9db099a2a9b699b208778a5c60db302700fd15147bba9f232c13183635b3', // @selbri_gunka
-						place: 'x2' // Project is x2 in gunka(task, project)
+						// Looking for project relationship with any selbri
+						// where project is in any place
+						selbri: 'selbri:0x96360692ef7f876a32e1a3c46a15bd597da160e76ac9c4bfd96026cb4afe3412', // @selbri_cneme
+						place: 'x1'
 					},
 					return: 'array',
 					map: {
-						// Map the task node found at x3
-						task: {
-							// Apply a sub-map to the task Sumti
-							place: 'x3',
-							map: {
-								id: { field: 'doc.pubkey' },
-								name: {
-									// Nested traverse for task name
-									traverse: {
-										bridi_where: {
-											selbri: '0x96360692ef7f876a32e1a3c46a15bd597da160e76ac9c4bfd96026cb4afe3412', // @selbri_cneme
-											place: 'x1' // Task is x1
-										},
-										return: 'first',
-										map: {
-											value: { place: 'x2', field: 'self.datni' }
-										}
-									}
+						bridi_id: { field: 'doc.pubkey' },
+						bridi_data: { field: 'self.datni' }
+					}
+				}
+			},
+			// Add a simpler query to verify we can at least get the selbri document
+			selbri_test: {
+				resolve: {
+					fromField: 'doc.pubkey', // Use the project ID as a placeholder
+					map: {
+						// Try to resolve @selbri_gunka directly
+						gunka_selbri: {
+							field: 'self.datni',
+							traverse: {
+								bridi_where: {
+									selbri:
+										'selbri:0xc05e9db099a2a9b699b208778a5c60db302700fd15147bba9f232c13183635b3',
+									place: 'x2'
 								},
-								status: {
-									// Nested traverse for task status
-									traverse: {
-										bridi_where: {
-											selbri: '0xa83a44305ddc3cc4f51ee41665eb0e6de585ab312a370fc47002f07d168a4d7b', // @selbri_ckaji
-											place: 'x1' // Task is x1
-										},
-										// Filter: x2 must be the @prop_status concept
-										where_related: [
-											{
-												place: 'x2',
-												field: 'doc.pubkey',
-												condition: {
-													equals:
-														'0x45eb5f36485e5358fc93901314ee456fb702e398d3a8bf82f980471d863dbecb' // @prop_status
-												}
-											}
-										],
-										return: 'first',
-										map: {
-											// Extract the value from x3 (the PropertyValue concept)
-											value: { place: 'x3', field: 'self.datni' }
-										}
-									}
-								},
-								priority: {
-									// Nested traverse for task priority
-									traverse: {
-										bridi_where: {
-											selbri: '0xa83a44305ddc3cc4f51ee41665eb0e6de585ab312a370fc47002f07d168a4d7b', // @selbri_ckaji
-											place: 'x1' // Task is x1
-										},
-										// Filter: x2 must be the @prop_priority concept
-										where_related: [
-											{
-												place: 'x2',
-												field: 'doc.pubkey',
-												condition: {
-													equals:
-														'0xc889bb62a85681801b1c5f6d40780770eef3df3e602e84e07a1bc4a92e00ad6b' // @prop_priority
-												}
-											}
-										],
-										return: 'first',
-										map: {
-											// Extract the value from x3 (the PropertyValue concept)
-											value: { place: 'x3', field: 'self.datni' }
-										}
-									}
-								},
-								tags: {
-									// Nested traverse for task tags (can be multiple)
-									traverse: {
-										bridi_where: {
-											selbri: '0xa83a44305ddc3cc4f51ee41665eb0e6de585ab312a370fc47002f07d168a4d7b', // @selbri_ckaji
-											place: 'x1' // Task is x1
-										},
-										// Filter: x2 must be the @prop_tag concept
-										where_related: [
-											{
-												place: 'x2',
-												field: 'doc.pubkey',
-												condition: {
-													equals:
-														'0xdf5f0e08ec7468b8407817bf26042bfe3fa1a558988029b7e58caa77251bae36' // @prop_tag
-												}
-											}
-										],
-										return: 'array', // Expect multiple tags
-										map: {
-											// Extract the value from x3 (the PropertyValue concept)
-											value: { place: 'x3', field: 'self.datni' }
-										}
-									}
+								return: 'array',
+								map: {
+									x1_sumti: { place: 'x1', field: 'doc.pubkey' }
 								}
-								// Assignee omitted for now - requires different traversal logic
 							}
 						}
 					}
@@ -230,7 +229,9 @@
 		const queryName = queryToRun.from?.selbri_pubkeys
 			? 'Selbri Defs'
 			: queryToRun.from?.bridi_pubkeys
-				? 'All Bridi'
+				? queryToRun.where
+					? 'Filtered Bridi'
+					: 'All Bridi'
 				: 'Unknown Query';
 		console.log(`[runQuery] Setting active query definition: ${queryName}`);
 		activeQueryDefinition.set(queryToRun); // Use .set() on the writable store
@@ -316,6 +317,43 @@
 			{$queryResultsStore === undefined && !!$activeQueryDefinition?.from?.sumti_pubkeys
 				? 'Running...'
 				: 'Run Query (Project Tasks)'}
+		</button>
+		<!-- Add buttons for the filtered queries -->
+		<button
+			class="rounded bg-purple-600 px-4 py-2 text-white hover:bg-purple-700 disabled:opacity-50"
+			on:click={() => runQuery(zukteQuery)}
+			disabled={$queryResultsStore === undefined && !!$activeQueryDefinition?.where}
+		>
+			{$queryResultsStore === undefined && !!$activeQueryDefinition?.where
+				? 'Running...'
+				: 'Run Query (Zukte Relationships)'}
+		</button>
+		<button
+			class="rounded bg-pink-600 px-4 py-2 text-white hover:bg-pink-700 disabled:opacity-50"
+			on:click={() => runQuery(cnemeQuery)}
+			disabled={$queryResultsStore === undefined && !!$activeQueryDefinition?.where}
+		>
+			{$queryResultsStore === undefined && !!$activeQueryDefinition?.where
+				? 'Running...'
+				: 'Run Query (Name Relationships)'}
+		</button>
+		<button
+			class="rounded bg-orange-600 px-4 py-2 text-white hover:bg-orange-700 disabled:opacity-50"
+			on:click={() => runQuery(gunkaQuery)}
+			disabled={$queryResultsStore === undefined && !!$activeQueryDefinition?.where}
+		>
+			{$queryResultsStore === undefined && !!$activeQueryDefinition?.where
+				? 'Running...'
+				: 'Run Query (Gunka Relationships)'}
+		</button>
+		<button
+			class="rounded bg-cyan-600 px-4 py-2 text-white hover:bg-cyan-700 disabled:opacity-50"
+			on:click={() => runQuery(ckajiQuery)}
+			disabled={$queryResultsStore === undefined && !!$activeQueryDefinition?.where}
+		>
+			{$queryResultsStore === undefined && !!$activeQueryDefinition?.where
+				? 'Running...'
+				: 'Run Query (Ckaji Relationships)'}
 		</button>
 	</div>
 
