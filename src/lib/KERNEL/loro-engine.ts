@@ -1,37 +1,33 @@
 import type { LoroDoc } from 'loro-crdt';
-import { LoroList } from 'loro-crdt';
-import type { BridiRecord } from '../../db/seeding/bridi';
-import type { SelbriId } from '../../db/seeding/selbri';
-import type { SumtiId, SumtiValue, Pubkey } from '../../db/seeding/sumti';
+import { LoroList, LoroMap } from 'loro-crdt';
+import type { CompositeRecord } from '../../db/seeding/composite.data';
+import type { SchemaId } from '../../db/seeding/schema.data';
+import type { LeafId, LeafValue, LeafValueIndex, Pubkey } from '../../db/seeding/leaf.data';
 import { hominioDB } from '$lib/KERNEL/hominio-db'; // Import the singleton directly
-import { getFackiIndexPubKey } from './facki-indices'; // Ensure this is imported
+import { getIndexLeafPubKey } from './index-registry'; // Ensure this is imported
 
 // --- Doc Access Functions (Use HominioDB) ---
 
 /**
- * Gets the LoroDoc for a Sumti by pubkey using HominioDB
+ * Gets the LoroDoc for a Leaf by pubkey using HominioDB
  */
-export async function getSumtiDoc(pubkey: Pubkey): Promise<LoroDoc | null> {
+export async function getLeafDoc(pubkey: Pubkey): Promise<LoroDoc | null> {
     // Removed initialization check, use imported singleton directly
-    // if (!hominioDB) {
-    //     console.error('[Loro Engine] HominioDB not initialized. Call initializeLoroEngine first.');
-    //     return null;
-    // }
     return await hominioDB.getLoroDoc(pubkey);
 }
 
 /**
- * Gets the LoroDoc for a Bridi by pubkey using HominioDB
+ * Gets the LoroDoc for a Composite by pubkey using HominioDB
  */
-export async function getBridiDoc(pubkey: Pubkey): Promise<LoroDoc | null> {
+export async function getCompositeDoc(pubkey: Pubkey): Promise<LoroDoc | null> {
     // Removed initialization check
     return await hominioDB.getLoroDoc(pubkey);
 }
 
 /**
- * Gets the LoroDoc for a Selbri by pubkey using HominioDB
+ * Gets the LoroDoc for a Schema by pubkey using HominioDB
  */
-export async function getSelbriDoc(pubkey: Pubkey): Promise<LoroDoc | null> {
+export async function getSchemaDoc(pubkey: Pubkey): Promise<LoroDoc | null> {
     // Removed initialization check
     return await hominioDB.getLoroDoc(pubkey);
 }
@@ -39,12 +35,12 @@ export async function getSelbriDoc(pubkey: Pubkey): Promise<LoroDoc | null> {
 // --- Plain Data Accessors (from LoroDocs) ---
 
 /**
- * Helper to get the plain JS 'ckaji' object from a LoroDoc's root map
+ * Helper to get the plain JS 'metadata' object from a LoroDoc's root map
  */
-export function getCkajiFromDoc(doc: LoroDoc | null): Record<string, unknown> | undefined {
+export function getMetadataFromDoc(doc: LoroDoc | null): Record<string, unknown> | undefined {
     if (!doc) return undefined;
     try {
-        return doc.toJSON()?.['ckaji'] as Record<string, unknown> | undefined;
+        return doc.toJSON()?.['metadata'] as Record<string, unknown> | undefined;
     } catch (e) {
         console.error(`[Loro Engine] Error calling toJSON() on doc:`, e);
         return undefined;
@@ -52,22 +48,22 @@ export function getCkajiFromDoc(doc: LoroDoc | null): Record<string, unknown> | 
 }
 
 /**
- * Helper to get the plain JS 'datni' object/value from a LoroDoc's root map
+ * Helper to get the plain JS 'data' object/value from a LoroDoc's root map
  */
-export function getDatniFromDoc(doc: LoroDoc | null): Record<string, unknown> | SumtiValue | undefined {
+export function getDataFromDoc(doc: LoroDoc | null): Record<string, unknown> | LeafValue | undefined {
     if (!doc) return undefined;
     try {
         const jsonData = doc.toJSON();
-        const datni = jsonData?.['datni'];
+        const data = jsonData?.['data'];
 
-        // Return the complete datni object with its structure intact
-        if (typeof datni === 'object' && datni !== null) {
-            return datni as Record<string, unknown> | SumtiValue;
-        } else if (typeof datni === 'string') {
-            // For LoroText datni, create a proper structure
-            return { klesi: 'LoroText', vasru: datni } as SumtiValue;
+        // Return the complete data object with its structure intact
+        if (typeof data === 'object' && data !== null) {
+            return data as Record<string, unknown> | LeafValue;
+        } else if (typeof data === 'string') {
+            console.warn(`[Loro Engine getDataFromDoc] Found raw string at 'data' key for doc. Reconstructing LeafValueText.`);
+            return { type: 'LoroText', value: data } as LeafValue;
         } else {
-            return datni as Record<string, unknown> | SumtiValue | undefined;
+            return data as Record<string, unknown> | LeafValue | undefined;
         }
     } catch (e) {
         console.error(`[Loro Engine] Error calling toJSON() on doc:`, e);
@@ -76,71 +72,97 @@ export function getDatniFromDoc(doc: LoroDoc | null): Record<string, unknown> | 
 }
 
 /**
- * Helper to get the plain JS 'ckaji' object for a given pubkey
+ * Helper to get the plain JS 'metadata' object for a given pubkey
  */
-export async function getCkajiForPubkey(pubkey: Pubkey): Promise<Record<string, unknown> | undefined> {
-    const doc = await getSumtiDoc(pubkey) || await getBridiDoc(pubkey) || await getSelbriDoc(pubkey);
-    return getCkajiFromDoc(doc);
+export async function getMetadataForPubkey(pubkey: Pubkey): Promise<Record<string, unknown> | undefined> {
+    const doc = await getLeafDoc(pubkey) || await getCompositeDoc(pubkey) || await getSchemaDoc(pubkey);
+    return getMetadataFromDoc(doc);
 }
 
 /**
- * Helper to get the plain JS 'datni' object/value for a given pubkey
+ * Helper to get the plain JS 'data' object/value for a given pubkey
  */
-export async function getDatniForPubkey(pubkey: Pubkey): Promise<Record<string, unknown> | SumtiValue | undefined> {
-    const doc = await getSumtiDoc(pubkey) || await getBridiDoc(pubkey) || await getSelbriDoc(pubkey);
-    return getDatniFromDoc(doc);
+export async function getDataForPubkey(pubkey: Pubkey): Promise<Record<string, unknown> | LeafValue | undefined> {
+    const doc = await getLeafDoc(pubkey) || await getCompositeDoc(pubkey) || await getSchemaDoc(pubkey);
+    return getDataFromDoc(doc);
 }
 
 // --- Existence Index Check Functions ---
 
 /**
- * Checks if a Sumti document exists in the Facki Sumti index.
- * @param pubKey The public key of the Sumti document.
- * @returns True if the Sumti exists in the index, false otherwise.
+ * Checks if a Leaf document exists in the Leaf index.
+ * @param pubkey The public key of the Leaf document.
+ * @returns True if the Leaf exists in the index, false otherwise.
  */
-export async function checkSumtiExists(pubkey: string): Promise<boolean> {
-    const fackiPubKey = await getFackiIndexPubKey('sumti');
-    if (!fackiPubKey) {
-        console.error('[Loro Engine] Facki Sumti index pubkey not available for existence check.');
-        return false; // Cannot check without index
-    }
+export async function checkLeafExists(pubkey: string): Promise<boolean> {
     try {
-        const fackiDoc = await getSumtiDoc(fackiPubKey); // Index is stored like a Sumti doc
-        if (!fackiDoc) {
-            console.warn('[Loro Engine] Facki Sumti index document not found for existence check.');
+        const indexPubKey = await getIndexLeafPubKey('leaves');
+        if (!indexPubKey) {
+            console.error('[Loro Engine] Leaf index pubkey not found.');
+            return false; // Cannot check without index
+        }
+        const indexDoc = await getLeafDoc(indexPubKey);
+        if (!indexDoc) {
+            console.warn(`[Loro Engine] Leaf index document ${indexPubKey} not loaded.`);
+            return false; // Consider it non-existent if index is missing
+        }
+
+        // FIX: Parse data.value LoroMap for the key
+        const dataMap = indexDoc.getMap('data');
+        if (!(dataMap instanceof LoroMap)) {
+            console.error('[Loro Engine] Leaf index document structure invalid (data is not LoroMap) for existence check.');
             return false;
         }
-        const datniMap = fackiDoc.getMap('datni');
-        const exists = datniMap.get(pubkey);
-        return exists === true; // Check if the key exists and value is true (or just exists)
+        const valueContainer = dataMap.get('value');
+        if (!(valueContainer instanceof LoroMap)) {
+            console.error('[Loro Engine] Leaf index document structure invalid (data.value is not LoroMap) for existence check.');
+            return false;
+        }
+
+        // FIX: Use .get() to check for key existence
+        return valueContainer.get(pubkey) !== undefined;
+
     } catch (error) {
-        console.error(`[Loro Engine] Error checking Sumti existence for ${pubkey}:`, error);
+        console.error(`[Loro Engine] Error checking Leaf existence for ${pubkey}:`, error);
         return false;
     }
 }
 
 /**
- * Checks if a Selbri document exists in the Facki Selbri index.
- * @param pubKey The public key of the Selbri document.
- * @returns True if the Selbri exists in the index, false otherwise.
+ * Checks if a Schema document exists in the Schema index.
+ * @param pubkey The public key of the Schema document.
+ * @returns True if the Schema exists in the index, false otherwise.
  */
-export async function checkSelbriExists(pubkey: string): Promise<boolean> {
-    const fackiPubKey = await getFackiIndexPubKey('selbri');
-    if (!fackiPubKey) {
-        console.error('[Loro Engine] Facki Selbri index pubkey not available for existence check.');
-        return false; // Cannot check without index
-    }
+export async function checkSchemaExists(pubkey: string): Promise<boolean> {
     try {
-        const fackiDoc = await getSelbriDoc(fackiPubKey); // Selbri index uses getSelbriDoc
-        if (!fackiDoc) {
-            console.warn('[Loro Engine] Facki Selbri index document not found for existence check.');
+        const indexPubKey = await getIndexLeafPubKey('schemas');
+        if (!indexPubKey) {
+            console.error('[Loro Engine] Schema index pubkey not found.');
+            return false; // Cannot check without index
+        }
+        const indexDoc = await getLeafDoc(indexPubKey); // Index is a Leaf
+        if (!indexDoc) {
+            console.warn(`[Loro Engine] Schema index document ${indexPubKey} not loaded.`);
+            return false; // Consider it non-existent if index is missing
+        }
+
+        // FIX: Parse data.value LoroMap for the key
+        const dataMap = indexDoc.getMap('data');
+        if (!(dataMap instanceof LoroMap)) {
+            console.error('[Loro Engine] Schema index document structure invalid (data is not LoroMap) for existence check.');
             return false;
         }
-        const datniMap = fackiDoc.getMap('datni');
-        const exists = datniMap.get(pubkey);
-        return exists === true; // Check if the key exists and value is true
+        const valueContainer = dataMap.get('value');
+        if (!(valueContainer instanceof LoroMap)) {
+            console.error('[Loro Engine] Schema index document structure invalid (data.value is not LoroMap) for existence check.');
+            return false;
+        }
+
+        // FIX: Use .get() to check for key existence
+        return valueContainer.get(pubkey) !== undefined;
+
     } catch (error) {
-        console.error(`[Loro Engine] Error checking Selbri existence for ${pubkey}:`, error);
+        console.error(`[Loro Engine] Error checking Schema existence for ${pubkey}:`, error);
         return false;
     }
 }
@@ -148,41 +170,50 @@ export async function checkSelbriExists(pubkey: string): Promise<boolean> {
 // --- Composite Index Access Function ---
 
 /**
- * Retrieves the LoroList of Bridi pubkeys for a given composite relationship key.
- * Key format: "<SelbriId>:<Place>:<SumtiId>"
+ * Retrieves the LoroList of Composite pubkeys for a given composite relationship key.
+ * Key format: "schema:<SchemaId>:<Place>:<LeafId>"
  * Returns undefined if the index list doesn't exist or isn't a list.
  */
-export async function getBridiIndexList(compositeKey: string): Promise<LoroList<string> | undefined> {
-    const fackiBridiByCompPubKey = await getFackiIndexPubKey('bridi_by_component'); // <<< Use dynamic key
-    if (!fackiBridiByCompPubKey) {
-        console.error(`[Loro Engine] Cannot get Bridi index list: Facki Bridi Component index pubkey not available.`);
+export async function getCompositeIndexList(compositeKey: string): Promise<LoroList<string> | undefined> {
+    const indexCompositeByCompPubKey = await getIndexLeafPubKey('composites-by-component');
+    if (!indexCompositeByCompPubKey) {
+        console.error(`[Loro Engine] Cannot get Composite index list: Component index pubkey not available.`);
         return undefined;
     }
-    const fackiBridiDoc = await getSumtiDoc(fackiBridiByCompPubKey); // Assumes index docs are like Sumti (Map root)
-    if (!fackiBridiDoc) {
-        console.warn(`[Loro Engine] Facki Bridi Component Index document (${fackiBridiByCompPubKey}) not found.`);
+    const indexCompositeDoc = await getLeafDoc(indexCompositeByCompPubKey);
+    if (!indexCompositeDoc) {
+        console.warn(`[Loro Engine] Composite Component Index document (${indexCompositeByCompPubKey}) not found.`);
         return undefined;
     }
 
     try {
-        // Access the index map directly from the root 'datni' map
-        const bridiIndexMap = fackiBridiDoc.getMap('datni');
-        if (!bridiIndexMap) {
-            console.warn(`[Loro Engine] Facki Bridi Component Index document (${fackiBridiByCompPubKey}) 'datni' map not found.`);
+        const indexData = getDataFromDoc(indexCompositeDoc) as LeafValueIndex | undefined;
+        if (!indexData || indexData.type !== 'Index') {
+            console.warn(`[Loro Engine] Composite Component Index document (${indexCompositeByCompPubKey}) data structure invalid (not type Index).`);
             return undefined;
         }
 
-        // Access the specific list using the composite key from the root datni map
-        const container = bridiIndexMap.get(compositeKey);
+        const rootDataMap = indexCompositeDoc.getMap('data');
+        if (!rootDataMap) {
+            console.warn(`[Loro Engine] Composite Component Index document (${indexCompositeByCompPubKey}) 'data' LoroMap not found.`);
+            return undefined;
+        }
+        const indexValueContainer = rootDataMap.get('value');
+        if (!(indexValueContainer instanceof LoroMap)) {
+            console.warn(`[Loro Engine] Composite Component Index document (${indexCompositeByCompPubKey}) 'data.value' is not a LoroMap container.`);
+            return undefined;
+        }
+        const indexValueMap = indexValueContainer as LoroMap;
+
+        const container = indexValueMap.get(compositeKey);
 
         if (container instanceof LoroList) {
             return container as LoroList<string>;
         } else if (container !== undefined) {
-            console.warn(`[Loro Engine] Composite index key '${compositeKey}' exists but is not a LoroList.`);
+            console.warn(`[Loro Engine] Composite index key '${compositeKey}' exists but is not a LoroList in the index map.`);
             return undefined;
         } else {
-            // Key doesn't exist in the index map
-            console.warn(`[Loro Engine getBridiIndexList] Key "${compositeKey}" not found in index map. Available keys:`, Array.from(bridiIndexMap.keys()));
+            console.warn(`[Loro Engine getCompositeIndexList] Key "${compositeKey}" not found in index map.`);
             return undefined;
         }
     } catch (error) {
@@ -194,98 +225,70 @@ export async function getBridiIndexList(compositeKey: string): Promise<LoroList<
 // --- Relationship Finding Functions ---
 
 /**
- * Finds Bridi LoroDocs where a specific Sumti occupies a given place within a specific Selbri relationship.
+ * Finds Composite LoroDocs where a specific Leaf occupies a given place within a specific Schema relationship.
  * Uses the composite index for efficient lookup.
  */
-export async function findBridiDocsBySelbriAndPlace(
-    selbriId: SelbriId,
-    place: keyof BridiRecord['datni']['sumti'],
-    sumtiId: SumtiId
+export async function findCompositeDocsBySchemaAndPlace(
+    schemaId: SchemaId,
+    place: keyof CompositeRecord['data']['places'],
+    leafId: LeafId
 ): Promise<{ pubkey: string; doc: LoroDoc }[]> {
     const results: { pubkey: string; doc: LoroDoc }[] = [];
 
-    // Build the composite key and check the index
-    // Add 'selbri:' prefix to match the indexing format
-    const compositeKey = `selbri:${selbriId}:${String(place)}:${sumtiId}`;
-    const indexedBridiPubkeys = await getBridiIndexList(compositeKey);
+    const compositeKey = `schema:${schemaId}:${String(place)}:${leafId}`;
+    const indexedCompositePubkeys = await getCompositeIndexList(compositeKey);
 
-    // If we don't find the composite key, try the old format or look for keys directly
-    const bridiKeys = indexedBridiPubkeys?.toArray() || [];
+    const compositeKeys = indexedCompositePubkeys?.toArray() || [];
 
-    if (bridiKeys.length === 0) {
-        // Try to get all bridi documents for this selbri directly
-        const selbriKey = `selbri:${selbriId}`;
-        const selbriIndexedBridiPubkeys = await getBridiIndexList(selbriKey);
-        const potentialBridiKeys = selbriIndexedBridiPubkeys?.toArray() || [];
-
-        // For each potential bridi, check if it matches our conditions
-        for (const pubkey of potentialBridiKeys) {
-            const bridiDoc = await getBridiDoc(pubkey);
-            if (bridiDoc) {
-                const datni = getDatniFromDoc(bridiDoc) as BridiRecord['datni'] | undefined;
-                if (datni && datni.selbri === selbriId && datni.sumti[place] === sumtiId) {
-                    results.push({ pubkey, doc: bridiDoc });
-                }
-            }
-        }
-        return results;
+    if (compositeKeys.length === 0) {
+        console.log(`[Loro Engine] Composite index miss for '${compositeKey}'. No matching Composite found via index.`);
+        return [];
     }
 
-    if (bridiKeys.length > 0) {
-
-        // Fetch each Bridi document and verify
-        for (const pubkey of bridiKeys) {
-            const bridiDoc = await getBridiDoc(pubkey);
-            if (bridiDoc) {
-                // Verification is still good practice
-                const datni = getDatniFromDoc(bridiDoc) as BridiRecord['datni'] | undefined;
-                if (datni && datni.selbri === selbriId && datni.sumti[place] === sumtiId) {
-                    results.push({ pubkey, doc: bridiDoc });
-                } else {
-                    console.warn(`[Loro Engine] Index inconsistency? Doc ${pubkey} found via key ${compositeKey} but data mismatch.`);
-                }
+    for (const pubkey of compositeKeys) {
+        const compositeDoc = await getCompositeDoc(pubkey);
+        if (compositeDoc) {
+            const data = getDataFromDoc(compositeDoc) as CompositeRecord['data'] | undefined;
+            if (data && data.schemaId === schemaId && data.places[place] === leafId) {
+                results.push({ pubkey, doc: compositeDoc });
             } else {
-                console.warn(`[Loro Engine] Index inconsistency? Pubkey ${pubkey} from index key ${compositeKey} not found.`);
+                console.warn(`[Loro Engine] Index inconsistency? Doc ${pubkey} found via key ${compositeKey} but data mismatch.`);
             }
+        } else {
+            console.warn(`[Loro Engine] Index inconsistency? Pubkey ${pubkey} from index key ${compositeKey} not found.`);
         }
-    } else {
-        console.log(`[Loro Engine] Composite index miss for '${compositeKey}'. No matching Bridi found via index.`);
     }
 
     return results;
 }
 
 /**
- * Finds Bridi LoroDocs involving a specific Sumti in any place within a specific Selbri relationship.
- * Returns the Bridi LoroDoc and the place the Sumti occupies.
+ * Finds Composite LoroDocs involving a specific Leaf in any place within a specific Schema relationship.
+ * Returns the Composite LoroDoc and the place the Leaf occupies.
  */
-export async function findBridiDocsInvolvingSumti(
-    selbriId: SelbriId,
-    sumtiId: SumtiId
-): Promise<{ bridiDoc: LoroDoc; place: keyof BridiRecord['datni']['sumti'] }[]> {
-    const results: { bridiDoc: LoroDoc; place: keyof BridiRecord['datni']['sumti'] }[] = [];
-    const places: (keyof BridiRecord['datni']['sumti'])[] = ['x1', 'x2', 'x3', 'x4', 'x5'];
-    const foundBridiPubkeys = new Set<string>(); // Track found Bridi to avoid duplicates
+export async function findCompositeDocsInvolvingLeaf(
+    schemaId: SchemaId,
+    leafId: LeafId
+): Promise<{ compositeDoc: LoroDoc; place: keyof CompositeRecord['data']['places'] }[]> {
+    const results: { compositeDoc: LoroDoc; place: keyof CompositeRecord['data']['places'] }[] = [];
+    const places: (keyof CompositeRecord['data']['places'])[] = ['x1', 'x2', 'x3', 'x4', 'x5'];
+    const foundCompositePubkeys = new Set<string>();
 
-
-    // Check each possible place the sumti could be
     for (const place of places) {
-        const compositeKey = `selbri:${selbriId}:${String(place)}:${sumtiId}`;
-        const indexedBridiPubkeys = await getBridiIndexList(compositeKey);
-        const bridiKeys = indexedBridiPubkeys?.toArray() || [];
+        const compositeKey = `schema:${schemaId}:${String(place)}:${leafId}`;
+        const indexedCompositePubkeys = await getCompositeIndexList(compositeKey);
+        const compositeKeys = indexedCompositePubkeys?.toArray() || [];
 
-        if (bridiKeys.length > 0) {
+        if (compositeKeys.length > 0) {
 
-            for (const pubkey of bridiKeys) {
-                // Avoid adding the same Bridi multiple times
-                if (!foundBridiPubkeys.has(pubkey)) {
-                    const bridiDoc = await getBridiDoc(pubkey);
-                    if (bridiDoc) {
-                        // Verification
-                        const datni = getDatniFromDoc(bridiDoc) as BridiRecord['datni'] | undefined;
-                        if (datni && datni.selbri === selbriId && datni.sumti[place] === sumtiId) {
-                            results.push({ bridiDoc, place });
-                            foundBridiPubkeys.add(pubkey); // Mark as found
+            for (const pubkey of compositeKeys) {
+                if (!foundCompositePubkeys.has(pubkey)) {
+                    const compositeDoc = await getCompositeDoc(pubkey);
+                    if (compositeDoc) {
+                        const data = getDataFromDoc(compositeDoc) as CompositeRecord['data'] | undefined;
+                        if (data && data.schemaId === schemaId && data.places[place] === leafId) {
+                            results.push({ compositeDoc, place });
+                            foundCompositePubkeys.add(pubkey);
                         } else {
                             console.warn(`[Loro Engine] Index inconsistency? Doc ${pubkey} found via key ${compositeKey} but data mismatch.`);
                         }
@@ -303,7 +306,7 @@ export async function findBridiDocsInvolvingSumti(
 // --- Utility Functions ---
 
 /**
- * Simple utility to get a value from a potentially nested object path string like "ckaji.cmene".
+ * Simple utility to get a value from a potentially nested object path string like "metadata.type".
  * Operates on plain JS objects/values retrieved from LoroDocs.
  */
 export function getPathValue<T = unknown>(obj: object | null | undefined, path: string): T | undefined {

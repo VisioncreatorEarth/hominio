@@ -1,41 +1,37 @@
 import { type LoroDoc, LoroMap, LoroText, LoroList } from 'loro-crdt';
 import {
-    getSumtiDoc,
-    getSelbriDoc,
-    findBridiDocsBySelbriAndPlace,
-    getCkajiFromDoc,
-    getDatniFromDoc,
-    checkSumtiExists,
-    checkSelbriExists,
-    getBridiDoc
+    getLeafDoc,
+    getSchemaDoc,
+    getCompositeDoc,
+    findCompositeDocsBySchemaAndPlace,
+    getDataFromDoc,
+    checkLeafExists,
+    checkSchemaExists
 } from './loro-engine';
 import { canRead, type CapabilityUser } from '$lib/KERNEL/hominio-caps';
 import { docChangeNotifier } from '$lib/KERNEL/hominio-db';
 import { readable, type Readable, get } from 'svelte/store';
 import { authClient, type getMe as getMeType } from '$lib/KERNEL/hominio-auth';
 import { browser } from '$app/environment';
-import { getFackiIndexPubKey } from '$lib/KERNEL/facki-indices';
+import { getIndexLeafPubKey, isIndexLeafDocument } from './index-registry';
 
-
-// Use string directly instead of SumtiPlace type alias if it came from db.ts
-type SumtiPlaceKey = 'x1' | 'x2' | 'x3' | 'x4' | 'x5';
+// FIX: Export PlaceKey
+export type PlaceKey = 'x1' | 'x2' | 'x3' | 'x4' | 'x5';
 
 // Refined: Defines how to get a value for an output property
 interface LoroHqlMapValue {
-    field?: string;      // Option 1: Direct field access from *current* node (e.g., "self.ckaji.cmene")
-    traverse?: LoroHqlTraverse; // Option 2: Traverse relationship from *current* node
-    resolve?: LoroHqlResolve; // <<< Add resolve directive type
+    field?: string;      // Option 1: Direct field access (e.g., "self.metadata.type", "self.data.value")
+    traverse?: LoroHqlTraverse; // Option 2: Traverse relationship
+    resolve?: LoroHqlResolve;
 
     // Target selection (used *only* inside traverse.map)
-    place?: SumtiPlaceKey;  // Specifies the target node's place in the Bridi
+    place?: PlaceKey;  // Specifies the target node's place in the Composite
 
     // Action on target node (used *only* inside traverse.map, requires 'place')
-    map?: LoroHqlMap;    // Option 3a: Define a sub-map structure for the node found at 'place'
-    // If used, `field` and `traverse` in this object are ignored.
-    // `field` or nested `traverse` should be used *inside* this map.
+    map?: LoroHqlMap;
 }
 
-// Defines the output structure (applies at top level and inside traverse)
+// Defines the output structure
 interface LoroHqlMap {
     [outputKey: string]: LoroHqlMapValue;
 }
@@ -44,61 +40,54 @@ interface LoroHqlMap {
 interface LoroHqlCondition {
     equals?: unknown;
     in?: unknown[];
-    // Future: contains?: string; startsWith?: string; gt?: number; lt?: number; ...
 }
 
 // Top-level filter for starting nodes
 interface LoroHqlWhereClause {
-    field: string; // Path on the starting node (e.g., "self.ckaji.cmene")
+    field: string; // Path on the starting node (e.g., "self.metadata.type")
     condition: LoroHqlCondition;
 }
 
 // Filter applied to related nodes during traversal
 interface LoroHqlWhereRelatedClause {
-    place: SumtiPlaceKey; // Which related node place to filter
-    field: string;     // Path on the related node (e.g., "self.ckaji.pubkey")
+    place: PlaceKey; // Which related node place to filter
+    field: string;     // Path on the related node (e.g., "self.data.type")
     condition: LoroHqlCondition;
 }
 
 // Defines a traversal step
 interface LoroHqlTraverse {
-    bridi_where: {
-        selbri: string | '*'; // Allow wildcard string
-        place: SumtiPlaceKey | '*'; // Allow wildcard string
+    composite_where: {
+        schemaId: string | '*';
+        place: PlaceKey | '*';
     };
-    return?: 'array' | 'first'; // Default: 'array'
-    where_related?: LoroHqlWhereRelatedClause[]; // Filter related nodes (can be multiple conditions)
-    map: LoroHqlMap; // Defines output structure for *each* related node
+    return?: 'array' | 'first';
+    where_related?: LoroHqlWhereRelatedClause[];
+    map: LoroHqlMap;
 }
 
-// <<< Add LoroHqlResolve interface >>>
+// Resolve definition
 interface LoroHqlResolve {
-    fromField: string; // Path in the current node containing the pubkey(s) to resolve
-    targetType?: 'sumti' | 'selbri'; // <<< Add optional target type (default: 'sumti')
-    // e.g., "self.datni.sumti.x1"
-    // Optional: onError?: 'null' | 'skip_key' (default 'null') - TODO: Implement error handling
-    map: LoroHqlMap;   // The map definition to apply to the RESOLVED document(s)
-    // e.g., { value: { field: 'self.datni.vasru' } }
+    fromField: string; // Path in the current node containing the pubkey(s)
+    targetType?: 'leaf' | 'gismu';
+    map: LoroHqlMap;   // Map to apply to the RESOLVED document(s)
 }
 
 // Top-level Query Structure
 export interface LoroHqlQuery {
     from: {
-        sumti_pubkeys?: string[]; // Replaced Pubkey[] with string[]
-        selbri_pubkeys?: string[]; // Replaced Pubkey[] with string[]
-        bridi_pubkeys?: string[]; // Replaced Pubkey[] with string[]
+        leaf?: string[];          // Renamed from leaf_pubkeys
+        schema?: string[];        // Renamed from gismu_pubkeys
+        composite?: string[];     // Renamed from composite_pubkeys
     };
     map: LoroHqlMap;
-    where?: LoroHqlWhereClause[]; // Can be multiple conditions (implicitly ANDed)
+    where?: LoroHqlWhereClause[];
 }
 
-// Result type remains the same
+// Result type
 export type QueryResult = Record<string, unknown>;
-// Type for the possible results of a traversal operation
-// Include 'unknown' to handle the direct value extraction case
 type TraversalResult = QueryResult[] | QueryResult | unknown | null;
 
-// Define a minimal type for the session object structure needed
 type MinimalSession = {
     data?: {
         user?: {
@@ -107,12 +96,10 @@ type MinimalSession = {
     } | null;
 } | null;
 
-// --- Query Engine Implementation (Map-Based Syntax) ---
+// --- Query Engine Implementation ---
 
 /**
  * Main function to execute a LORO_HQL map-based query.
- * Adds capability checks to filter documents based on user permissions.
- * Special handling: if selbri_pubkeys is provided but empty, returns all selbri.
  */
 export async function executeQuery(
     query: LoroHqlQuery,
@@ -121,257 +108,210 @@ export async function executeQuery(
     const results: QueryResult[] = [];
 
     // 1. Determine Starting Nodes & Process
-    const startSumtiPubkeys = query.from.sumti_pubkeys || [];
-    let startSelbriPubkeys = query.from.selbri_pubkeys;
-    let startBridiPubkeys = query.from.bridi_pubkeys;
+    let startLeafPubkeys = query.from.leaf;
+    let startGismuPubkeys = query.from.schema; // Renamed internal variable for clarity
+    let startCompositePubkeys = query.from.composite;
 
-    // --- Special Handling for All Sumti ---
-    if (startSumtiPubkeys.length === 0 && query.from.sumti_pubkeys !== undefined) {
+    // --- Handling Fetch All (Leaf) ---
+    if (startLeafPubkeys && Array.isArray(startLeafPubkeys) && startLeafPubkeys.length === 0) {
         try {
-            const fackiSumtiPubKey = await getFackiIndexPubKey('sumti');
-            if (!fackiSumtiPubKey) {
-                console.error('[Query Engine] Cannot fetch all Sumti: Facki Sumti index pubkey not available.');
-                return []; // Return empty results if no sumti index available
-            }
-
-            const fackiSumtiDoc = await getSumtiDoc(fackiSumtiPubKey);
-            if (!fackiSumtiDoc) {
-                console.warn(`[Query Engine] Facki Sumti index document could not be loaded.`);
-                return []; // Return empty results if no sumti index document
-            }
-
-            const indexMap = fackiSumtiDoc.getMap('datni');
-            if (!(indexMap instanceof LoroMap)) {
-                console.warn('[Query Engine] Facki Sumti index map not found or not a LoroMap.');
-                return []; // Return empty results if index is invalid
-            }
-
-            const allSumtiPubkeys = Array.from(indexMap.keys());
-            console.log(`[Query Engine] Found ${allSumtiPubkeys.length} sumti in Facki Sumti index.`);
-
-            // Process each sumti document
-            for (const pubkey of allSumtiPubkeys) {
-                try {
-                    // Skip additional existence check since this came from the index
-                    const docMeta = await import('$lib/KERNEL/hominio-db').then(
-                        module => module.hominioDB.getDocument(pubkey)
-                    );
-                    if (docMeta && user && !canRead(user, docMeta)) {
-                        continue; // Skip if user can't read
-                    }
-
-                    const startDoc = await getSumtiDoc(pubkey);
-                    if (!startDoc) {
-                        continue;
-                    }
-
-                    if (query.where && !evaluateWhereClauses(startDoc, query.where, pubkey)) {
-                        continue;
-                    }
-
-                    const nodeResult = await processMap(startDoc, query.map, pubkey, user);
-                    results.push(nodeResult);
-                } catch (error) {
-                    console.error(`[Query Engine] Error processing sumti ${pubkey}:`, error);
-                    // Continue with next sumti
-                }
-            }
-
-            return results; // Return the results after processing all sumti
-        } catch (error) {
-            console.error('[Query Engine] Error fetching all Sumti from index:', error);
-            return []; // Return empty results on error
-        }
-    }
-    // --- End Special Handling for All Sumti ---
-
-    // --- Special Handling for All Selbri --- 
-    let fetchAllSelbri = false;
-    if (startSelbriPubkeys && Array.isArray(startSelbriPubkeys) && startSelbriPubkeys.length === 0) {
-        fetchAllSelbri = true;
-        try {
-            const fackiSelbriPubKey = await getFackiIndexPubKey('selbri');
-            if (!fackiSelbriPubKey) {
-                console.error('[Query Engine] Cannot fetch all Selbri: Facki Selbri index pubkey not available.');
-                startSelbriPubkeys = []; // Reset to prevent processing
+            const indexPubKey = await getIndexLeafPubKey('leaves');
+            if (!indexPubKey) {
+                console.error('[Query Engine] Cannot fetch all Leaves: Index pubkey for leaves not available.');
             } else {
-                const fackiSelbriDoc = await getSelbriDoc(fackiSelbriPubKey);
-                if (fackiSelbriDoc) {
-                    const indexMap = fackiSelbriDoc.getMap('datni');
-                    if (indexMap instanceof LoroMap) {
-                        startSelbriPubkeys = Array.from(indexMap.keys());
-                    } else {
-                        console.warn('[Query Engine] Facki Selbri index map not found or not a LoroMap.');
-                        startSelbriPubkeys = [];
-                    }
+                const indexDoc = await getLeafDoc(indexPubKey);
+                if (!indexDoc) {
+                    console.warn(`[Query Engine] Index document for leaves (${indexPubKey}) could not be loaded.`);
                 } else {
-                    console.warn(`[Query Engine] Facki Selbri index document could not be loaded.`);
-                    startSelbriPubkeys = [];
+                    // FIX: Correctly parse the index Leaf structure (data: { type:'LoroMap', value: LoroMap }) 
+                    const dataMap = indexDoc.getMap('data');
+                    if (!(dataMap instanceof LoroMap)) {
+                        console.warn('[Query Engine] Leaves Index document data container is not a LoroMap.');
+                    } else {
+                        const valueContainer = dataMap.get('value');
+                        if (!(valueContainer instanceof LoroMap)) {
+                            console.warn('[Query Engine] Leaves Index document data.value is not a LoroMap.');
+                        } else {
+                            // Successfully found the value map, get its keys
+                            startLeafPubkeys = Object.keys(valueContainer.toJSON());
+                            console.log(`[Query Engine] Fetched ${startLeafPubkeys?.length ?? 0} Leaf keys from index:`, startLeafPubkeys);
+                        }
+                    }
                 }
             }
         } catch (error) {
-            console.error('[Query Engine] Error fetching all Selbri from index:', error);
-            startSelbriPubkeys = []; // Reset to empty on error
+            console.error('[Query Engine] Error fetching all Leaves from index:', error);
         }
-    } else if (startSelbriPubkeys === undefined) {
-        startSelbriPubkeys = []; // Ensure it's an array if not provided
+        // Ensure startLeafPubkeys is always an array if it was initially empty array
+        if (startLeafPubkeys && Array.isArray(startLeafPubkeys) && startLeafPubkeys.length === 0 && query.from.leaf?.length === 0) {
+            startLeafPubkeys = []; // Keep it as empty array if fetch failed
+        }
+    } else if (startLeafPubkeys === undefined) {
+        startLeafPubkeys = [];
     }
-    // --- End Special Handling for All Selbri ---
 
-    // --- Special Handling for All Bridi ---
-    let fetchAllBridi = false;
-    if (startBridiPubkeys && Array.isArray(startBridiPubkeys) && startBridiPubkeys.length === 0) {
-        fetchAllBridi = true;
+    // --- Handling Fetch All (Schema/Gismu) ---
+    if (startGismuPubkeys && Array.isArray(startGismuPubkeys) && startGismuPubkeys.length === 0) {
         try {
-            const fackiBridiPubKey = await getFackiIndexPubKey('bridi');
-            if (!fackiBridiPubKey) {
-                console.error('[Query Engine] Cannot fetch all Bridi: Facki Bridi index pubkey not available.');
-                startBridiPubkeys = [];
+            const indexPubKey = await getIndexLeafPubKey('schemas');
+            if (!indexPubKey) {
+                console.error('[Query Engine] Cannot fetch all Schemas: Index pubkey for schemas not available.');
             } else {
-                const fackiBridiDoc = await getSumtiDoc(fackiBridiPubKey);
-                if (fackiBridiDoc) {
-                    const indexMap = fackiBridiDoc.getMap('datni');
-                    if (indexMap instanceof LoroMap) {
-                        startBridiPubkeys = Array.from(indexMap.keys());
-                    } else {
-                        console.warn(`[Query Engine] Facki Bridi simple index map not found or not a LoroMap.`);
-                        startBridiPubkeys = [];
-                    }
+                const indexDoc = await getLeafDoc(indexPubKey);
+                if (!indexDoc) {
+                    console.warn(`[Query Engine] Index document for schemas (${indexPubKey}) could not be loaded.`);
                 } else {
-                    console.warn(`[Query Engine] Facki Bridi simple index document could not be loaded.`);
-                    startBridiPubkeys = [];
+                    // FIX: Correctly parse the index Leaf structure
+                    const dataMap = indexDoc.getMap('data');
+                    if (!(dataMap instanceof LoroMap)) {
+                        console.warn('[Query Engine] Schemas Index document data container is not a LoroMap.');
+                    } else {
+                        const valueContainer = dataMap.get('value');
+                        if (!(valueContainer instanceof LoroMap)) {
+                            console.warn('[Query Engine] Schemas Index document data.value is not a LoroMap.');
+                        } else {
+                            startGismuPubkeys = Object.keys(valueContainer.toJSON());
+                            console.log(`[Query Engine] Fetched ${startGismuPubkeys.length} Schema keys from index.`);
+                        }
+                    }
                 }
             }
         } catch (error) {
-            console.error('[Query Engine] Error fetching all Bridi from simple index:', error);
-            startBridiPubkeys = []; // Reset on error
+            console.error('[Query Engine] Error fetching all Schemas from index:', error);
         }
-    } else if (startBridiPubkeys === undefined) {
-        startBridiPubkeys = []; // Ensure it's an array
+        // Ensure startGismuPubkeys is always an array if it was initially empty array
+        if (startGismuPubkeys && Array.isArray(startGismuPubkeys) && startGismuPubkeys.length === 0 && query.from.schema?.length === 0) {
+            startGismuPubkeys = [];
+        }
+    } else if (startGismuPubkeys === undefined) {
+        startGismuPubkeys = [];
     }
-    // --- End Special Handling ---
 
-    if (startSumtiPubkeys.length === 0 && startSelbriPubkeys.length === 0 && startBridiPubkeys.length === 0 && !fetchAllSelbri && !fetchAllBridi) {
-        console.warn('Query requires start keys in "from" clause or empty array [] to fetch all.');
+    // --- Handling Fetch All (Composite) ---
+    if (startCompositePubkeys && Array.isArray(startCompositePubkeys) && startCompositePubkeys.length === 0) {
+        try {
+            const indexPubKey = await getIndexLeafPubKey('composites');
+            if (!indexPubKey) {
+                console.error('[Query Engine] Cannot fetch all Composites: Index pubkey for composites not available.');
+            } else {
+                const indexDoc = await getLeafDoc(indexPubKey);
+                if (!indexDoc) {
+                    console.warn(`[Query Engine] Index document for composites (${indexPubKey}) could not be loaded.`);
+                } else {
+                    // FIX: Correctly parse the index Leaf structure
+                    const dataMap = indexDoc.getMap('data');
+                    if (!(dataMap instanceof LoroMap)) {
+                        console.warn('[Query Engine] Composites Index document data container is not a LoroMap.');
+                    } else {
+                        const valueContainer = dataMap.get('value');
+                        if (!(valueContainer instanceof LoroMap)) {
+                            console.warn('[Query Engine] Composites Index document data.value is not a LoroMap.');
+                        } else {
+                            startCompositePubkeys = Object.keys(valueContainer.toJSON());
+                            console.log(`[Query Engine] Fetched ${startCompositePubkeys.length} Composite keys from index.`);
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('[Query Engine] Error fetching all Composites from index:', error);
+        }
+        // Ensure startCompositePubkeys is always an array if it was initially empty array
+        if (startCompositePubkeys && Array.isArray(startCompositePubkeys) && startCompositePubkeys.length === 0 && query.from.composite?.length === 0) {
+            startCompositePubkeys = [];
+        }
+    } else if (startCompositePubkeys === undefined) {
+        startCompositePubkeys = [];
+    }
+
+    // FIX: Update check message
+    if (startLeafPubkeys.length === 0 && startGismuPubkeys.length === 0 && startCompositePubkeys.length === 0) {
+        console.warn('[Query Engine] No starting keys provided in "from" and failed to fetch keys from index (or index is empty).');
         return [];
     }
 
-    // Process Sumti Starting Nodes
-    for (const pubkey of startSumtiPubkeys) {
-        const exists = await checkSumtiExists(pubkey);
-        if (!exists) {
-            continue;
+    // Process Leaf Starting Nodes
+    for (const pubkey of startLeafPubkeys) {
+        if (!isIndexLeafDocument(pubkey)) {
+            const exists = await checkLeafExists(pubkey);
+            if (!exists) {
+                console.log(`[Query Engine] Skipping Leaf ${pubkey}, does not exist in index.`);
+                continue;
+            }
         }
-        const docMeta = await import('$lib/KERNEL/hominio-db').then(
-            module => module.hominioDB.getDocument(pubkey)
-        );
-        if (docMeta && user && !canRead(user, docMeta)) {
-            continue;
-        }
-        const startDoc = await getSumtiDoc(pubkey);
+        const docMeta = await import('$lib/KERNEL/hominio-db').then(m => m.hominioDB.getDocument(pubkey));
+        if (docMeta && user && !canRead(user, docMeta)) continue;
+        const startDoc = await getLeafDoc(pubkey);
+        console.log(`[Query Engine Debug] Processing Leaf ${pubkey}. startDoc loaded: ${!!startDoc}`);
         if (!startDoc) {
+            console.warn(`[Query Engine] Failed to load Leaf doc for existing pubkey: ${pubkey}`);
             continue;
         }
-        if (query.where && !evaluateWhereClauses(startDoc, query.where, pubkey)) {
-            continue;
-        }
+        if (query.where && !evaluateWhereClauses(startDoc, query.where, pubkey)) continue;
         const nodeResult = await processMap(startDoc, query.map, pubkey, user);
         results.push(nodeResult);
     }
 
-    // Process Selbri Starting Nodes
-    for (const pubkey of startSelbriPubkeys) {
-        // Skip existence check - if it came from Facki index, assume it exists
-        const docMeta = await import('$lib/KERNEL/hominio-db').then(
-            module => module.hominioDB.getDocument(pubkey)
-        );
-        if (docMeta && user && !canRead(user, docMeta)) {
-            continue;
+    // Process Schema (Gismu) Starting Nodes
+    for (const pubkey of startGismuPubkeys) {
+        if (!isIndexLeafDocument(pubkey)) {
+            const exists = await checkSchemaExists(pubkey);
+            if (!exists) {
+                console.log(`[Query Engine] Skipping Schema ${pubkey}, does not exist in index.`);
+                continue;
+            }
         }
-        const startDoc = await getSelbriDoc(pubkey);
-        if (!startDoc) {
-            continue;
-        }
-        if (query.where && !evaluateWhereClauses(startDoc, query.where, pubkey)) {
-            continue;
-        }
+        const docMeta = await import('$lib/KERNEL/hominio-db').then(m => m.hominioDB.getDocument(pubkey));
+        if (docMeta && user && !canRead(user, docMeta)) continue;
+        const startDoc = await getSchemaDoc(pubkey);
+        if (!startDoc) continue;
+        if (query.where && !evaluateWhereClauses(startDoc, query.where, pubkey)) continue;
         const nodeResult = await processMap(startDoc, query.map, pubkey, user);
         results.push(nodeResult);
     }
 
-    // Process Bridi Starting Nodes
-    for (const pubkey of startBridiPubkeys) {
+    // Process Composite Starting Nodes
+    for (const pubkey of startCompositePubkeys) {
         let docMeta;
         try {
-            docMeta = await import('$lib/KERNEL/hominio-db').then(
-                module => module.hominioDB.getDocument(pubkey)
-            );
-        } catch (e) {
-            console.error(`[Query Engine] Error getting document metadata for Bridi ${pubkey}:`, e);
-            continue; // Skip if metadata cannot be fetched
-        }
-
-        if (docMeta && user && !canRead(user, docMeta)) {
-            continue;
-        }
-
-        const startDoc = await getBridiDoc(pubkey);
-        if (!startDoc) {
-            continue;
-        }
-        if (query.where && !evaluateWhereClauses(startDoc, query.where, pubkey)) {
-            continue;
-        }
+            docMeta = await import('$lib/KERNEL/hominio-db').then(m => m.hominioDB.getDocument(pubkey));
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        } catch (_e) { continue; }
+        if (docMeta && user && !canRead(user, docMeta)) continue;
+        const startDoc = await getCompositeDoc(pubkey);
+        if (!startDoc) continue;
+        if (query.where && !evaluateWhereClauses(startDoc, query.where, pubkey)) continue;
         try {
             const nodeResult = await processMap(startDoc, query.map, pubkey, user);
             results.push(nodeResult);
-        } catch (mapError) {
-            console.error(`[Query Engine] Error processing map for Bridi ${pubkey}:`, mapError);
-            continue;
-        }
+        } catch (mapError) { console.error(`[Query Engine] Error processing map for Composite ${pubkey}:`, mapError); continue; }
     }
 
     return results;
 }
 
 /**
- * Processes a `map` object for a given LoroDoc (the current context `self`).
+ * Processes a `map` object for a given LoroDoc.
  */
 async function processMap(
     currentDoc: LoroDoc,
     mapDefinition: LoroHqlMap,
     docPubKey: string,
-    user: CapabilityUser | null // <<< Add user for capability checks
+    user: CapabilityUser | null
 ): Promise<QueryResult> {
     const result: QueryResult = {};
     const mapEntries = Object.entries(mapDefinition);
 
     for (const [outputKey, valueDefinition] of mapEntries) {
         if (valueDefinition.field) {
-            // Handle direct field selection from currentDoc, passing its pubkey
             result[outputKey] = selectFieldValue(currentDoc, valueDefinition.field, docPubKey);
         } else if (valueDefinition.traverse) {
-            // Handle traversal starting from currentDoc, passing its pubkey and user
             let traverseResult: TraversalResult = await processTraversal(currentDoc, valueDefinition.traverse, docPubKey, user);
-
-            // Simplify result if return: 'first' yielded a single-key object
-            if (
-                valueDefinition.traverse.return === 'first' &&
-                traverseResult &&
-                typeof traverseResult === 'object' &&
-                !Array.isArray(traverseResult) &&
-                Object.keys(traverseResult).length === 1
-            ) {
-                const originalValue = Object.values(traverseResult)[0];
-                traverseResult = originalValue;
-            } else if (valueDefinition.traverse.return === 'first' && traverseResult === null) {
-                // Result was null, do nothing extra
+            if (valueDefinition.traverse.return === 'first' && traverseResult && typeof traverseResult === 'object' && !Array.isArray(traverseResult) && Object.keys(traverseResult).length === 1) {
+                traverseResult = Object.values(traverseResult)[0];
             }
-
-            // Assign the potentially simplified result
             result[outputKey] = traverseResult;
         } else if (valueDefinition.resolve) {
-            // <<< Handle resolve directive >>>
             result[outputKey] = await processResolve(currentDoc, valueDefinition.resolve, user);
         }
     }
@@ -379,102 +319,80 @@ async function processMap(
 }
 
 /**
- * Selects a field value from a LoroDoc based on a path string starting with "self."
+ * Selects a field value from a LoroDoc based on a path string (e.g., "self.metadata.type").
  */
 function selectFieldValue(doc: LoroDoc, fieldPath: string, docPubKey: string): unknown {
-    if (fieldPath === 'doc.pubkey') {
-        return docPubKey;
-    }
-
+    if (fieldPath === 'doc.pubkey') return docPubKey;
     if (!fieldPath || !fieldPath.startsWith('self.')) {
         console.warn(`Invalid field path: "${fieldPath}". Must start with "self." or be "doc.pubkey".`);
         return undefined;
     }
 
-    const path = fieldPath.substring(5); // Remove "self."
-
-    if (path === 'ckaji.cmene') {
-        console.warn(`Accessing 'self.ckaji.cmene' directly is deprecated.`);
-        return undefined;
-    }
-
+    const path = fieldPath.substring(5);
     let baseObject: unknown;
     let relativePath: string;
 
-    // Determine base object (ckaji or datni)
-    if (path.startsWith('ckaji.')) {
-        baseObject = getCkajiFromDoc(doc);
-        relativePath = path.substring(6);
-    } else if (path.startsWith('datni.')) {
-        baseObject = getDatniFromDoc(doc);
-        relativePath = path.substring(6);
-    } else if (path === 'ckaji') {
-        return getCkajiFromDoc(doc);
-    } else if (path === 'datni') {
-        const datniValue = getDatniFromDoc(doc);
-        return datniValue;
+    if (path.startsWith('metadata.')) {
+        baseObject = doc.getMap('metadata')?.toJSON();
+        relativePath = path.substring(9);
+    } else if (path.startsWith('data.')) {
+        baseObject = getDataFromDoc(doc);
+        relativePath = path.substring(5);
+    } else if (path === 'metadata') {
+        baseObject = doc.getMap('metadata')?.toJSON();
+        relativePath = '';
+    } else if (path === 'data') {
+        baseObject = getDataFromDoc(doc);
+        relativePath = '';
     } else {
-        // Allow accessing top-level ckaji fields directly e.g. "self.pubkey"
-        if (path === 'cmene') {
-            console.warn(`Accessing 'self.cmene' directly is deprecated.`);
-            return undefined;
-        }
-        baseObject = getCkajiFromDoc(doc);
+        baseObject = doc.getMap('metadata')?.toJSON();
         relativePath = path;
     }
 
     if (!relativePath) {
+        if (path === 'data') return baseObject;
         return baseObject;
     }
 
-    // --- NEW: Traverse the relative path --- 
     const pathParts = relativePath.split('.');
     let currentValue: unknown = baseObject;
 
     for (const part of pathParts) {
-        if (currentValue === undefined || currentValue === null) {
-            return undefined; // Cannot traverse further
+        if (currentValue === undefined || currentValue === null) return undefined;
+
+        if (typeof currentValue === 'object' && currentValue !== null && 'type' in currentValue && 'value' in currentValue && path.startsWith('data.')) {
+            if (part === 'type' || part === 'value') {
+                currentValue = (currentValue as Record<string, unknown>)[part];
+                continue;
+            }
+            if (typeof (currentValue as { value: unknown }).value === 'object' && (currentValue as { value: unknown }).value !== null) {
+                currentValue = ((currentValue as { value: Record<string, unknown> }).value)[part];
+                continue;
+            }
         }
 
-        if (currentValue instanceof LoroMap) {
+        if (typeof currentValue === 'object' && currentValue !== null) {
+            currentValue = (currentValue as Record<string, unknown>)[part];
+        } else if (currentValue instanceof LoroMap) {
             currentValue = currentValue.get(part);
         } else if (currentValue instanceof LoroList) {
             const index = parseInt(part, 10);
             if (!isNaN(index) && index >= 0) {
-                try {
-                    currentValue = currentValue.get(index);
-                } catch (e) {
-                    console.warn(`Error accessing index ${index} in LoroList:`, e);
-                    return undefined;
-                }
-            } else {
-                console.warn(`Invalid index "${part}" for LoroList access in path "${fieldPath}".`);
-                return undefined;
-            }
+                // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                try { currentValue = currentValue.get(index) as unknown; } catch (_e) { return undefined; }
+            } else { return undefined; }
         } else if (currentValue instanceof LoroText) {
-            console.warn(`Cannot traverse into LoroText with path part "${part}" in "${fieldPath}".`);
             return undefined;
-        } else if (typeof currentValue === 'object') {
-            currentValue = (currentValue as Record<string, unknown>)[part];
         } else {
             return undefined;
         }
     }
 
-    if (currentValue instanceof LoroText) {
-        return currentValue.toString();
-    }
-
-    // --- Correction: Return JSON for Loro Containers --- 
+    if (currentValue instanceof LoroText) return currentValue.toString();
     if (currentValue instanceof LoroMap || currentValue instanceof LoroList) {
-        try {
-            return currentValue.toJSON();
-        } catch (e) {
-            console.error(`Error converting Loro container to JSON for path "${fieldPath}":`, e);
-            return undefined; // Return undefined on error
-        }
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        try { return currentValue.toJSON(); } catch (_e) { return undefined; }
     }
-    // --- End Correction ---
 
     return currentValue;
 }
@@ -488,169 +406,129 @@ async function processTraversal(
     sourcePubKey: string,
     user: CapabilityUser | null
 ): Promise<QueryResult[] | QueryResult | null> {
-    if (!sourcePubKey) {
-        console.error('Cannot traverse: source document pubkey is empty or undefined.');
-        return traverseDefinition.return === 'first' ? null : [];
-    }
+    if (!sourcePubKey) return traverseDefinition.return === 'first' ? null : [];
 
-    // <<< DEBUG LOG >>>
-    console.log(`[Query Traversal] Starting traversal from source: ${sourcePubKey}, selbri: ${traverseDefinition.bridi_where.selbri}, place: ${traverseDefinition.bridi_where.place}`);
+    const compositeWhere = traverseDefinition.composite_where;
+    console.log(`[Query Traversal] Starting from source Leaf/Schema: ${sourcePubKey}, Composite schemaId: ${compositeWhere.schemaId}, source place: ${compositeWhere.place}`);
 
-    let bridiMatches: { pubkey: string; doc: LoroDoc }[] = [];
-    const selbriWildcard = traverseDefinition.bridi_where.selbri === '*';
-    const placeWildcard = traverseDefinition.bridi_where.place === '*';
-    const targetPlace = traverseDefinition.bridi_where.place;
+    let compositeMatches: { pubkey: string; doc: LoroDoc }[] = [];
+    const schemaWildcard = compositeWhere.schemaId === '*';
+    const placeWildcard = compositeWhere.place === '*';
+    const sourcePlaceInComposite = compositeWhere.place;
 
-    if (selbriWildcard) {
-        // --- WILDCARD HANDLING (SELBRI) --- 
-        console.warn(`[Query Engine] Traversing with selbri wildcard (place: ${targetPlace}) from ${sourcePubKey}. This may be slow.`);
+    if (schemaWildcard) {
+        console.warn(`[Query Engine] Traversing with Composite schemaId wildcard (place: ${sourcePlaceInComposite}) from ${sourcePubKey}. This may be slow.`);
         try {
-            const fackiBridiPubKey = await getFackiIndexPubKey('bridi');
-            if (fackiBridiPubKey) {
-                const fackiBridiDoc = await getSumtiDoc(fackiBridiPubKey); // Bridi existence index is like a Sumti doc
-                if (fackiBridiDoc) {
-                    const indexMap = fackiBridiDoc.getMap('datni');
-                    const allBridiPubkeys = Array.from(indexMap.keys());
-                    console.log(`[Query Engine Wildcard] Checking ${allBridiPubkeys.length} total Bridi documents...`);
+            // 1. Get the 'composites' index pubkey
+            const indexPubKey = await getIndexLeafPubKey('composites');
+            console.log(`[Query Traversal Wildcard Debug] Index PubKey for 'composites': ${indexPubKey}`); // DEBUG LOG 1
+            if (indexPubKey) {
+                // 2. Get the 'composites' index Leaf document
+                const indexDoc = await getLeafDoc(indexPubKey);
+                if (indexDoc) {
+                    // 3. Extract all composite pubkeys from the index Leaf's data.value
+                    // FIX: Correctly read the { type: 'LoroMap', value: LoroMap } structure
+                    const indexDocData = getDataFromDoc(indexDoc) as { type: string, value?: Record<string, unknown> } | undefined;
+                    let allCompositePubkeys: string[] = [];
+                    if (indexDocData && indexDocData.type === 'LoroMap' && indexDocData.value) {
+                        allCompositePubkeys = Object.keys(indexDocData.value);
+                    } else {
+                        console.warn(`[Query Traversal Wildcard Debug] Index doc ${indexPubKey} data structure unexpected:`, indexDocData);
+                    }
 
-                    for (const bridiPubKey of allBridiPubkeys) {
-                        const bridiDoc = await getBridiDoc(bridiPubKey);
-                        if (bridiDoc) {
-                            const datni = getDatniFromDoc(bridiDoc) as { selbri: string; sumti: Record<string, string> } | undefined;
-                            if (datni?.sumti) {
+                    console.log(`[Query Traversal Wildcard Debug] Found ${allCompositePubkeys.length} total composite keys in index:`, allCompositePubkeys); // DEBUG LOG 2
+
+                    // 4. Loop through every composite pubkey found
+                    for (const compositePubKey of allCompositePubkeys) {
+                        console.log(`[Query Traversal Wildcard Debug] Checking Composite PubKey: ${compositePubKey}`); // DEBUG LOG 3
+                        const compositeDoc = await getCompositeDoc(compositePubKey);
+                        if (compositeDoc) {
+                            // 5. Get data from the actual composite document
+                            const compositeData = getDataFromDoc(compositeDoc) as { schemaId: string; places: Record<string, string> } | undefined;
+                            console.log(`[Query Traversal Wildcard Debug]   - Extracted places:`, compositeData?.places); // DEBUG LOG 4
+                            if (compositeData?.places) {
+                                // 6. Check if the sourcePubKey matches any place (since place='*')
                                 if (placeWildcard) {
-                                    // --- WILDCARD HANDLING (PLACE) ---
-                                    const placesToCheck: SumtiPlaceKey[] = ['x1', 'x2', 'x3', 'x4', 'x5'];
+                                    const placesToCheck: PlaceKey[] = ['x1', 'x2', 'x3', 'x4', 'x5'];
                                     for (const place of placesToCheck) {
-                                        if (datni.sumti[place] === sourcePubKey) {
-                                            bridiMatches.push({ pubkey: bridiPubKey, doc: bridiDoc });
-                                            break; // Found a match for this Bridi, no need to check other places
+                                        const placeValue = compositeData.places[place];
+                                        console.log(`[Query Traversal Wildcard Debug]   - Comparing place '${place}' value '${placeValue}' === '${sourcePubKey}'`); // DEBUG LOG 5
+                                        // 7. Compare the Leaf ID in the place with the sourcePubKey
+                                        if (placeValue === sourcePubKey) {
+                                            console.log(`[Query Traversal Wildcard Debug]   - MATCH FOUND for place ${place}!`);
+                                            compositeMatches.push({ pubkey: compositePubKey, doc: compositeDoc });
+                                            break; // Found a match, move to next composite
                                         }
                                     }
-                                    // --- END WILDCARD HANDLING (PLACE) ---
                                 } else {
-                                    // Selbri wildcard, but specific place
-                                    if (datni.sumti[targetPlace] === sourcePubKey) {
-                                        bridiMatches.push({ pubkey: bridiPubKey, doc: bridiDoc });
+                                    if (compositeData.places[sourcePlaceInComposite] === sourcePubKey) {
+                                        compositeMatches.push({ pubkey: compositePubKey, doc: compositeDoc });
                                     }
                                 }
                             }
                         }
                     }
-                } else {
-                    console.error('[Query Engine Wildcard] Could not load Facki Bridi index document.');
                 }
-            } else {
-                console.error('[Query Engine Wildcard] Facki Bridi index pubkey not found.');
             }
-        } catch (error) {
-            console.error('[Query Engine Wildcard] Error fetching all Bridi:', error);
-        }
-        // --- END WILDCARD HANDLING (SELBRI) ---
+        } catch (error) { console.error('[Query Engine Wildcard] Error fetching all Composites:', error); }
     } else {
-        // --- SPECIFIC SELBRI HANDLING --- 
-        // If place is wildcard but selbri is specific, we might need another index or logic here.
         if (placeWildcard) {
-            console.error(`[Query Engine] Wildcard for 'place' is only supported when 'selbri' is also a wildcard ('*').`);
-            // Potentially fetch all Bridi for the specific selbri and filter by place here if needed.
-            // Ensure bridiMatches remains empty as this case is unsupported for now
-            bridiMatches = [];
-
-            // <<< DEBUG LOG >>>
-            console.log(`[Query Traversal] Found ${bridiMatches.length} specific bridi matches for source ${sourcePubKey}. Pubkeys: ${bridiMatches.map(m => m.pubkey).slice(0, 5).join(', ')}...`);
-
+            console.error(`[Query Engine] Wildcard for 'place' is only supported when 'schemaId' is also a wildcard ('*').`);
+            compositeMatches = [];
         } else {
-            bridiMatches = await findBridiDocsBySelbriAndPlace(
-                traverseDefinition.bridi_where.selbri, // Specific Selbri ID
-                targetPlace as SumtiPlaceKey, // Cast: Guaranteed not to be '*' here
+            compositeMatches = await findCompositeDocsBySchemaAndPlace(
+                compositeWhere.schemaId,
+                sourcePlaceInComposite as PlaceKey,
                 sourcePubKey
             );
         }
-        // --- END SPECIFIC SELBRI HANDLING ---
     }
 
     const results: QueryResult[] = [];
-
-    // <<< DEBUG LOG >>>
-    if (bridiMatches.length === 0) {
-        console.log(`[Query Traversal] No bridi matches found for source ${sourcePubKey}. Returning empty results.`);
+    if (compositeMatches.length === 0) {
+        console.log(`[Query Traversal] No composite matches found for source ${sourcePubKey}.`);
     }
 
-    // 2. Process each potential related node via the Bridi (Common logic for both cases)
-    for (const { /* pubkey: bridiPubKey, */ doc: bridiDoc } of bridiMatches) {
-        const bridiDatni = getDatniFromDoc(bridiDoc) as { selbri: string; sumti: Record<string, string> } | undefined;
-        if (!bridiDatni) continue;
+    for (const { pubkey: compositePubKey, doc: compositeDoc } of compositeMatches) {
+        const compositeData = getDataFromDoc(compositeDoc) as { schemaId: string; places: Record<string, string> } | undefined;
+        if (!compositeData) continue;
 
-        // 3. Filter related nodes based on `where_related`
         if (traverseDefinition.where_related) {
             let passesAllFilters = true;
             for (const relatedFilter of traverseDefinition.where_related) {
-                const targetNodePubkey = bridiDatni.sumti[relatedFilter.place];
-                if (!targetNodePubkey) {
-                    passesAllFilters = false;
-                    break;
-                }
-                const targetNodeDoc = await getSumtiDoc(targetNodePubkey);
+                const targetNodePubkey = compositeData.places[relatedFilter.place];
+                if (!targetNodePubkey) { passesAllFilters = false; break; }
+                const targetNodeDoc = await getLeafDoc(targetNodePubkey);
                 if (!targetNodeDoc || !evaluateSingleWhere(targetNodeDoc, relatedFilter.field, relatedFilter.condition, targetNodePubkey)) {
                     passesAllFilters = false;
                     break;
                 }
             }
-            if (!passesAllFilters) {
-                continue;
-            }
+            if (!passesAllFilters) continue;
         }
 
-        // 4. Map the related nodes defined in `traverseDefinition.map`
         const relatedNodeResult: QueryResult = {};
         const mapEntries = Object.entries(traverseDefinition.map);
 
         for (const [outputKey, valueDefinition] of mapEntries) {
-
-            // --- Check if field is meant for the Bridi doc itself ---
-            let isBridiField = false;
-            if (valueDefinition.field) {
-                if (valueDefinition.field === 'doc.pubkey' || valueDefinition.field.startsWith('self.')) {
-                    // These fields can apply to the Bridi doc directly
-                    isBridiField = true;
-                }
+            let isCompositeField = false;
+            if (valueDefinition.field && (valueDefinition.field === 'doc.pubkey' || valueDefinition.field.startsWith('self.'))) {
+                isCompositeField = true;
             }
 
-            if (isBridiField && valueDefinition.field) {
-                // Handle fields requested directly from the Bridi doc
-                // We need the actual pubkey of the bridiDoc here.
-                // Find the matching bridiPubKey from bridiMatches array based on bridiDoc instance.
-                const match = bridiMatches.find(m => m.doc === bridiDoc);
-                const currentBridiPubKey = match ? match.pubkey : ''; // Get the pubkey for the current bridiDoc
-                if (!currentBridiPubKey && valueDefinition.field === 'doc.pubkey') {
-                    console.error("[Query Traversal] Could not find pubkey for bridiDoc when mapping 'doc.pubkey'");
-                }
-                relatedNodeResult[outputKey] = selectFieldValue(bridiDoc, valueDefinition.field, currentBridiPubKey); // Use bridiDoc and its pubkey
-
+            if (isCompositeField && valueDefinition.field) {
+                relatedNodeResult[outputKey] = selectFieldValue(compositeDoc, valueDefinition.field, compositePubKey);
             } else if (valueDefinition.resolve) {
-                // Resolve operates based on the Bridi doc context
-                relatedNodeResult[outputKey] = await processResolve(bridiDoc, valueDefinition.resolve, user);
-
+                relatedNodeResult[outputKey] = await processResolve(compositeDoc, valueDefinition.resolve, user);
             } else {
-                // --- Handle fields requiring a specific PLACE (targeting a Sumti node) ---
                 if (!valueDefinition.place) {
-                    console.warn(`Missing 'place' for key "${outputKey}" in traverse.map (and field is not a direct Bridi field).`);
-                    continue;
+                    console.warn(`Missing 'place' for key "${outputKey}" in traverse.map - cannot get target Leaf.`); continue;
                 }
+                const targetNodePubkey = compositeData.places[valueDefinition.place];
+                if (!targetNodePubkey) { relatedNodeResult[outputKey] = null; continue; }
+                const targetNodeDoc = await getLeafDoc(targetNodePubkey);
+                if (!targetNodeDoc) { relatedNodeResult[outputKey] = null; continue; }
 
-                const targetNodePubkey = bridiDatni.sumti[valueDefinition.place];
-                if (!targetNodePubkey) {
-                    relatedNodeResult[outputKey] = null;
-                    continue;
-                }
-
-                const targetNodeDoc = await getSumtiDoc(targetNodePubkey);
-                if (!targetNodeDoc) {
-                    relatedNodeResult[outputKey] = null;
-                    continue;
-                }
-
-                // Determine the value based on the definition type for the target Sumti node
                 if (valueDefinition.field) {
                     relatedNodeResult[outputKey] = selectFieldValue(targetNodeDoc, valueDefinition.field, targetNodePubkey);
                 } else if (valueDefinition.map) {
@@ -658,27 +536,16 @@ async function processTraversal(
                 } else if (valueDefinition.traverse) {
                     relatedNodeResult[outputKey] = await processTraversal(targetNodeDoc, valueDefinition.traverse, targetNodePubkey, user);
                 }
-                // Note: Nested resolve inside this block would need careful context handling
-                // Currently handled above, assuming resolve always uses Bridi context here.
-                // --- End PLACE-specific handling ---
             }
         }
 
-        // Only add non-empty results
         if (Object.keys(relatedNodeResult).length > 0) {
             results.push(relatedNodeResult);
-            if (traverseDefinition.return === 'first') {
-                break;
-            }
+            if (traverseDefinition.return === 'first') break;
         }
     }
 
-    // 5. Return based on `return` type
-    if (traverseDefinition.return === 'first') {
-        return results.length > 0 ? results[0] : null;
-    } else {
-        return results; // Default return array
-    }
+    return traverseDefinition.return === 'first' ? (results.length > 0 ? results[0] : null) : results;
 }
 
 /**
@@ -686,9 +553,7 @@ async function processTraversal(
  */
 function evaluateWhereClauses(doc: LoroDoc, clauses: LoroHqlWhereClause[], docPubKey: string): boolean {
     for (const clause of clauses) {
-        if (!evaluateSingleWhere(doc, clause.field, clause.condition, docPubKey)) {
-            return false;
-        }
+        if (!evaluateSingleWhere(doc, clause.field, clause.condition, docPubKey)) return false;
     }
     return true;
 }
@@ -703,109 +568,57 @@ function evaluateSingleWhere(
     docPubKey: string
 ): boolean {
     const actualValue = selectFieldValue(doc, fieldPath, docPubKey);
-
-    if (condition.equals !== undefined && actualValue !== condition.equals) {
-        return false;
-    }
-    if (condition.in !== undefined) {
-        if (!Array.isArray(condition.in) || !condition.in.includes(actualValue)) {
-            return false;
-        }
-    }
-    // Add checks for other conditions (contains, gt, lt) here
-
+    if (condition.equals !== undefined && actualValue !== condition.equals) return false;
+    if (condition.in !== undefined && (!Array.isArray(condition.in) || !condition.in.includes(actualValue))) return false;
     return true;
 }
 
 /**
- * Processes a 'resolve' instruction: gets a pubkey from a field in the sourceDoc,
+ * Processes a 'resolve' instruction.
  */
 async function processResolve(
     sourceDoc: LoroDoc,
     resolveDefinition: LoroHqlResolve,
     user: CapabilityUser | null
 ): Promise<QueryResult | null> {
-    // 1. Get the pubkey from the source document field
-    console.log(`[Query Resolve] Attempting resolve using field: ${resolveDefinition.fromField}`); // Log entry and source
     const targetPubKey = selectFieldValue(sourceDoc, resolveDefinition.fromField, "") as string | undefined;
-    console.log(`[Query Resolve] Extracted targetPubKey: ${targetPubKey}`); // Log extracted pubkey
+    if (!targetPubKey) return null;
 
-    if (!targetPubKey) {
-        console.warn(`[Query Resolve] Pubkey not found or invalid in field: ${resolveDefinition.fromField}`);
-        return null; // Or handle based on onError policy
-    }
-
-    // Determine target type (default to 'sumti')
-    const targetType = resolveDefinition.targetType ?? 'sumti';
-    console.log(`[Query Resolve] Resolving target type: ${targetType}`);
-
-    // 2. Fetch the target document
+    const targetType = resolveDefinition.targetType ?? 'leaf';
     let targetDoc: LoroDoc | null = null;
     let docMeta: Awaited<ReturnType<typeof import('$lib/KERNEL/hominio-db')['hominioDB']['getDocument']>> | null = null;
 
     try {
-        console.log(`[Query Resolve] Checking existence for target: ${targetPubKey}`); // Log before check
-
-        // --- Use correct existence check based on type ---
         let exists = false;
-        if (targetType === 'selbri') {
-            exists = await checkSelbriExists(targetPubKey);
-        } else { // Default to sumti
-            exists = await checkSumtiExists(targetPubKey);
+        if (targetType === 'gismu') {
+            exists = await checkSchemaExists(targetPubKey);
+        } else {
+            exists = await checkLeafExists(targetPubKey);
         }
-        if (!exists) {
-            console.warn(`[Query Resolve] Target ${targetType} document ${targetPubKey} not found in index.`);
-            return null;
+        if (!exists) return null;
+
+        if (targetType === 'gismu') {
+            targetDoc = await getSchemaDoc(targetPubKey);
+        } else {
+            targetDoc = await getLeafDoc(targetPubKey);
         }
+        if (!targetDoc) return null;
 
-        console.log(`[Query Resolve] Fetching target document: ${targetPubKey}`); // Log before fetch
+        docMeta = await import('$lib/KERNEL/hominio-db').then(m => m.hominioDB.getDocument(targetPubKey));
+        if (!docMeta) return null;
 
-        // --- Use correct fetch function based on type ---
-        if (targetType === 'selbri') {
-            targetDoc = await getSelbriDoc(targetPubKey);
-        } else { // Default to sumti
-            targetDoc = await getSumtiDoc(targetPubKey);
-        }
+    } catch (error) { console.error(`[Query Resolve] Error fetching ${targetPubKey} (type: ${targetType}):`, error); return null; }
 
-        if (!targetDoc) {
-            console.warn(`[Query Resolve] get${targetType === 'selbri' ? 'Selbri' : 'Sumti'}Doc returned null for ${targetPubKey}`); // Log fetch failure
-            return null;
-        }
-        console.log(`[Query Resolve] Fetched target document successfully: ${targetPubKey}`); // Log fetch success
+    if (user && !canRead(user, docMeta)) return null;
 
-        docMeta = await import('$lib/KERNEL/hominio-db').then(
-            module => module.hominioDB.getDocument(targetPubKey)
-        );
-        if (!docMeta) {
-            console.warn(`[Query Resolve] Metadata not found for target document ${targetPubKey}. Denying access.`);
-            return null;
-        }
-
-    } catch (error) {
-        console.error(`[Query Resolve] Error fetching or getting metadata for ${targetPubKey}:`, error);
-        return null;
-    }
-
-    // 3. Check capabilities
-    if (user && !canRead(user, docMeta)) {
-        console.warn(`[Query Resolve] User ${user.id} does not have read access to resolved document ${targetPubKey}`);
-        return null;
-    }
-
-    // 4. Process the map for the resolved document
     try {
-        console.log(`[Query Resolve] Processing map for resolved document: ${targetPubKey}`); // Log before map processing
         const resolvedResult = await processMap(targetDoc, resolveDefinition.map, targetPubKey, user);
-        console.log(`[Query Resolve] Map processing complete for ${targetPubKey}, result:`, resolvedResult); // Log map result
         return resolvedResult;
-    } catch (error) {
-        console.error(`[Query Resolve] Error processing map for resolved document ${targetPubKey}:`, error);
-        return null;
-    }
+    } catch (error) { console.error(`[Query Resolve] Error processing map for ${targetPubKey}:`, error); return null; }
 }
 
 /**
- * Creates a reactive query that automatically updates when the underlying data changes
+ * Creates a reactive query.
  */
 export function processReactiveQuery(
     getCurrentUserFn: typeof getMeType,
@@ -816,105 +629,60 @@ export function processReactiveQuery(
         const initialQuery = get(queryDefinitionStore);
         const ssrUser = getCurrentUserFn();
         return readable<QueryResult[] | null | undefined>(undefined, (set) => {
-            if (!initialQuery) {
-                set([]);
-                return;
-            }
+            if (!initialQuery) { set([]); return; }
             executeQuery(initialQuery, ssrUser)
                 .then(results => set(results))
-                .catch(err => {
-                    console.error("[SSR LoroHQL] Reactive Query Error:", err);
-                    set(null); // Set to null on error
-                });
+                .catch(err => { console.error("[SSR LoroHQL] Error:", err); set(null); });
         });
-        // --- End SSR Handling --- 
     }
 
     // --- Client-Side Reactive Logic --- 
     return readable<QueryResult[] | null | undefined>(undefined, (set) => {
         let debounceTimer: NodeJS.Timeout | null = null;
-        const DEBOUNCE_MS = 50; // Debounce time
+        const DEBOUNCE_MS = 50;
         let lastSessionState: string | null = null;
         let lastQueryDefinitionString: string | null = null;
-        let currentResults: QueryResult[] | null | undefined = undefined; // Track current state
+        let currentResults: QueryResult[] | null | undefined = undefined;
 
-        // Function to execute the query and update the store, with debouncing
         const triggerDebouncedQuery = () => {
             const currentQueryDefinition = get(queryDefinitionStore);
-            const queryDefString = JSON.stringify(currentQueryDefinition); // Use string compare
-
+            const queryDefString = JSON.stringify(currentQueryDefinition);
             const queryChanged = lastQueryDefinitionString !== queryDefString;
-            lastQueryDefinitionString = queryDefString; // Update last known definition
+            lastQueryDefinitionString = queryDefString;
 
             if (!currentQueryDefinition) {
                 if (debounceTimer) clearTimeout(debounceTimer);
-                if (currentResults && currentResults.length > 0) {
-                    set([]);
-                    currentResults = [];
-                } else if (currentResults === undefined || currentResults === null) {
-                    set([]);
-                    currentResults = [];
-                }
+                if (currentResults && currentResults.length > 0) { set([]); currentResults = []; }
+                else if (currentResults === undefined || currentResults === null) { set([]); currentResults = []; }
                 return;
             }
-
-            if (!queryChanged && currentResults !== undefined) {
-                return;
-            }
-
-
-            if (debounceTimer) {
-                clearTimeout(debounceTimer);
-            }
-
-            if (currentResults === undefined || queryChanged) {
-                set(undefined);
-                currentResults = undefined;
-            }
-
+            if (!queryChanged && currentResults !== undefined) return;
+            if (debounceTimer) clearTimeout(debounceTimer);
+            if (currentResults === undefined || queryChanged) { set(undefined); currentResults = undefined; }
 
             debounceTimer = setTimeout(async () => {
                 const currentUser = getCurrentUserFn();
                 const latestQueryDefinition = get(queryDefinitionStore);
-
-                // <<< DEBUG LOG >>>
-                console.log("[LoroHQL Reactive] Executing with Query Definition:", JSON.stringify(latestQueryDefinition, null, 2));
-
                 const latestQueryDefString = JSON.stringify(latestQueryDefinition);
 
-                if (!latestQueryDefinition || latestQueryDefString !== lastQueryDefinitionString) {
-                    return;
-                }
-
-
-                console.log('[LoroHQL Reactive] Running debounced query...');
+                if (!latestQueryDefinition || latestQueryDefString !== lastQueryDefinitionString) return;
 
                 try {
-                    if (currentResults !== undefined) {
-                        set(undefined);
-                    }
-                    currentResults = undefined; // Mark as loading
-
+                    if (currentResults !== undefined) set(undefined);
+                    currentResults = undefined;
                     const results = await executeQuery(latestQueryDefinition, currentUser);
-
-                    if (JSON.stringify(get(queryDefinitionStore)) !== lastQueryDefinitionString) {
-                        return; // Don't set stale results
-                    }
-
-                    set(results); // Update the store with results
+                    if (JSON.stringify(get(queryDefinitionStore)) !== lastQueryDefinitionString) return;
+                    set(results);
                     currentResults = results;
                 } catch (error) {
-                    console.error("[LoroHQL Reactive] Error executing query:", error);
-                    if (JSON.stringify(get(queryDefinitionStore)) !== lastQueryDefinitionString) {
-                        return; // Don't set stale error state
-                    }
-                    set(null); // Set null on error
+                    console.error("[LoroHQL Reactive] Error:", error);
+                    if (JSON.stringify(get(queryDefinitionStore)) !== lastQueryDefinitionString) return;
+                    set(null);
                     currentResults = null;
                 }
             }, DEBOUNCE_MS);
         };
 
-        // 1. Subscribe to Query Definition Changes
         const unsubscribeQueryDef = queryDefinitionStore.subscribe(newQueryDef => {
             const newQueryDefString = JSON.stringify(newQueryDef);
             if (lastQueryDefinitionString !== newQueryDefString || currentResults === undefined) {
@@ -922,43 +690,32 @@ export function processReactiveQuery(
             }
         });
 
-        // 2. Subscribe to Document Changes
         const unsubscribeNotifier = docChangeNotifier.subscribe(() => {
             triggerDebouncedQuery();
         });
 
-        // 3. Subscribe to Session Changes
         const sessionStore = authClient.useSession();
         const unsubscribeSession = sessionStore.subscribe((session: MinimalSession) => {
-            const currentSessionState = JSON.stringify(session?.data?.user?.id ?? null); // Check only user ID
+            const currentSessionState = JSON.stringify(session?.data?.user?.id ?? null);
             if (lastSessionState !== null && lastSessionState !== currentSessionState) {
                 triggerDebouncedQuery();
             }
             lastSessionState = currentSessionState;
         });
 
-        // Initial setup: capture initial session state
         const initialSessionData = get(sessionStore);
         lastSessionState = JSON.stringify(initialSessionData?.data?.user?.id ?? null);
         lastQueryDefinitionString = JSON.stringify(get(queryDefinitionStore));
-        currentResults = undefined; // Start in undefined state
+        currentResults = undefined;
 
-        if (get(queryDefinitionStore)) {
-            triggerDebouncedQuery(); // Trigger initial run
-        } else {
-            set([]);
-            currentResults = [];
-        }
+        if (get(queryDefinitionStore)) { triggerDebouncedQuery(); } else { set([]); currentResults = []; }
 
-
-        // Cleanup function
+        // Restore: Add the missing cleanup function
         return () => {
             unsubscribeQueryDef();
             unsubscribeNotifier();
             unsubscribeSession();
-            if (debounceTimer) {
-                clearTimeout(debounceTimer);
-            }
+            if (debounceTimer) clearTimeout(debounceTimer);
         };
     });
 } 

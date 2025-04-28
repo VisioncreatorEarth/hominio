@@ -2,11 +2,15 @@ import { type LoroDoc, LoroMap, LoroList } from 'loro-crdt';
 import { hominioDB, /* docChangeNotifier, */ type Docs, type IndexingBacklogItem } from './hominio-db';
 import { hashService } from './hash-service';
 import { browser } from '$app/environment';
-import { getFackiIndexPubKey, isFackiIndexDocument } from './facki-indices';
+import { getIndexLeafPubKey, isIndexLeafDocument, type IndexLeafType } from './index-registry';
+import { getDataFromDoc, getLeafDoc } from './loro-engine';
+import type { CompositeRecord } from '../../db/seeding/composite.data';
+import type { PlaceKey } from './hominio-query';
 
 // Define other constants
 // const INDEXING_DEBOUNCE_MS = 1000; // Remove unused constant
 const MAX_BACKLOG_RETRIES = 5;     // Max times to retry a failed item from backlog
+const BATCH_SIZE = 10; // Process backlog in batches
 
 // Keep track of active indexing jobs to prevent duplicates (simple in-memory set)
 const activeIndexingJobs = new Set<string>();
@@ -47,18 +51,26 @@ class HominioIndexing {
         this.isIndexing = true;
         console.log(`[HominioIndexing] Starting manual indexing cycle...`); // Simplified log
 
+        let indexKeys: Record<IndexLeafType, string> | null = null; // Store keys here
         try {
-            // --- Check if Facki Index Registry is Ready ---
-            const sumtiKey = await getFackiIndexPubKey('sumti');
-            const selbriKey = await getFackiIndexPubKey('selbri');
-            const bridiKey = await getFackiIndexPubKey('bridi');
-            const bridiCompKey = await getFackiIndexPubKey('bridi_by_component');
+            // --- Check if Index Leaf Registry is Ready ---
+            const leavesKey = await getIndexLeafPubKey('leaves');
+            const schemasKey = await getIndexLeafPubKey('schemas');
+            const compositesKey = await getIndexLeafPubKey('composites');
+            const compositesCompKey = await getIndexLeafPubKey('composites-by-component');
 
-            if (!sumtiKey || !selbriKey || !bridiKey || !bridiCompKey) {
-                console.error('[HominioIndexing] Facki index registry not yet fully populated. Cannot run indexing cycle.'); // Keep error
+            if (!leavesKey || !schemasKey || !compositesKey || !compositesCompKey) {
+                console.error('[HominioIndexing] Index Leaf registry not yet fully populated. Cannot run indexing cycle.'); // Keep error
                 this.isIndexing = false; // Release lock
                 return; // Wait for sync to populate the registry
             }
+            // Store keys for passing down
+            indexKeys = {
+                leaves: leavesKey,
+                schemas: schemasKey,
+                composites: compositesKey,
+                'composites-by-component': compositesCompKey
+            };
             // ---------------------------------------------
 
             // 1. Fetch all document metadata
@@ -80,12 +92,12 @@ class HominioIndexing {
 
             // 3. Process identified documents (concurrently?)
             for (const pubKey of docsToIndex) {
-                await this.processDocumentForIndexing(pubKey);
+                await this.processDocumentForIndexing(pubKey, indexKeys);
             }
 
             // 4. Process backlog queue
             // REMOVED: console.log('[HominioIndexing] Processing backlog queue...');
-            await this.processBacklogQueue();
+            await this.processBacklogQueue(indexKeys);
 
         } catch (error) {
             console.error('[HominioIndexing] Error during indexing cycle:', error); // Keep critical error
@@ -106,8 +118,9 @@ class HominioIndexing {
         }
         // -------------------------------------------
 
-        // Ignore Facki index docs themselves using the helper function
-        if (isFackiIndexDocument(doc.pubKey)) {
+        // FIX: Use renamed helper function
+        // Ignore Index Leaf docs themselves
+        if (isIndexLeafDocument(doc.pubKey)) {
             return false;
         }
 
@@ -141,11 +154,35 @@ class HominioIndexing {
         return false;
     }
 
+    /** Helper to get the LoroMap container for an index leaf's value */
+    private async getIndexValueMap(indexPubKey: string): Promise<LoroMap | null> {
+        const indexDoc = await getLeafDoc(indexPubKey); // Index is a Leaf
+        if (!indexDoc) {
+            console.error(`[HominioIndexing] Failed to load index document: ${indexPubKey}`);
+            return null;
+        }
+        const dataMap = indexDoc.getMap('data');
+        if (!dataMap) {
+            console.error(`[HominioIndexing] Index document ${indexPubKey} has no 'data' map.`);
+            return null;
+        }
+        const valueContainer = dataMap.get('value');
+        if (!(valueContainer instanceof LoroMap)) {
+            console.error(`[HominioIndexing] Index document ${indexPubKey} 'data.value' is not a LoroMap.`);
+            return null;
+        }
+        return valueContainer;
+    }
+
     /**
     * Processes a single document for indexing: loads it, extracts data, and updates relevant index docs.
+    * Accepts pre-fetched index pubkeys for efficiency.
     * Returns an object indicating success and a message.
     */
-    private async processDocumentForIndexing(pubKey: string): Promise<{ success: boolean; message: string }> {
+    private async processDocumentForIndexing(
+        pubKey: string,
+        indexKeys: Record<IndexLeafType, string> // Pass loaded keys
+    ): Promise<{ success: boolean; message: string }> {
         // REMOVED: active job check log
 
         // REMOVED: console.log(`[HominioIndexing] Processing document: ${pubKey}`);
@@ -160,181 +197,117 @@ class HominioIndexing {
                 throw new Error('Failed to load LoroDoc (metadata or content missing)');
             }
 
-            // --- Determine Document Type (using ckaji.klesi) ---
-            const ckajiMap = loroDoc.getMap('ckaji');
-            const docType = (ckajiMap instanceof LoroMap) ? ckajiMap.get('klesi') : undefined;
+            // --- Determine Document Type (using metadata.type) ---
+            const metadataMap = loroDoc.getMap('metadata');
+            // FIX: Read metadata.type instead of ckaji.klesi
+            const docType = (metadataMap instanceof LoroMap) ? metadataMap.get('type') : undefined;
 
             // --- REMOVED Detailed Logging ---
             // REMOVED: console.log(`[HominioIndexing Debug] Processing ${pubKey} - Determined DocType: ${docType || 'undefined'}`);
 
-            if (!docType || typeof docType !== 'string') {
-                console.warn(`[HominioIndexing] Document ${pubKey} ckaji.klesi type is invalid or missing: ${docType}. Skipping indexing.`); // Keep warn
+            if (!docType || typeof docType !== 'string' || !['Leaf', 'Schema', 'Composite'].includes(docType)) {
+                // FIX: Update error message and property name to check for 'Schema'
+                console.warn(`[HominioIndexing] Document ${pubKey} metadata.type is invalid or missing (expected Leaf, Schema, or Composite): ${docType}. Skipping indexing.`);
                 await hominioDB.updateDocIndexingState(pubKey, {
-                    indexingError: 'Invalid or missing ckaji.klesi type',
+                    indexingError: 'Invalid or missing metadata.type',
                     needsReindex: false,
                 });
-                return { success: true, message: 'Skipped indexing due to invalid ckaji.klesi type' };
+                return { success: true, message: 'Skipped indexing due to invalid metadata.type' };
             }
 
-            // --- Get the root 'datni' map ---
-            const rootMap = loroDoc.getMap('datni');
+            // --- Load Index LoroMaps --- 
+            const indexLeavesMap = await this.getIndexValueMap(indexKeys.leaves);
+            const indexSchemasMap = await this.getIndexValueMap(indexKeys.schemas);
+            const indexCompositesMap = await this.getIndexValueMap(indexKeys.composites);
+            const indexCompByCompMap = await this.getIndexValueMap(indexKeys['composites-by-component']);
 
-            // REMOVED: console.log(`[HominioIndexing] Document ${pubKey} identified as type: ${docType}`);
-
-            // --- Load Facki Index Docs ---
-            // REMOVED: console.log(`[HominioIndexing] Loading Facki index docs for type ${docType}`);
-            const fackiSumtiPubKey = await getFackiIndexPubKey('sumti');
-            const fackiSelbriPubKey = await getFackiIndexPubKey('selbri');
-            const fackiBridiPubKey = await getFackiIndexPubKey('bridi');
-            const fackiBridiByCompPubKey = await getFackiIndexPubKey('bridi_by_component');
-
-            if (!fackiSumtiPubKey || !fackiSelbriPubKey || !fackiBridiPubKey || !fackiBridiByCompPubKey) {
-                const missingKeys = [
-                    !fackiSumtiPubKey && 'sumti',
-                    !fackiSelbriPubKey && 'selbri',
-                    !fackiBridiPubKey && 'bridi',
-                    !fackiBridiByCompPubKey && 'bridi_by_component'
-                ].filter(Boolean).join(', ');
-                console.error(`[HominioIndexing] Required Facki index PubKeys not available: ${missingKeys}. Cannot index ${pubKey}.`); // Keep error
-                return { success: false, message: `Missing Facki index PubKeys: ${missingKeys}` };
-            }
-
-            const fackiSumtiDoc = await hominioDB.getLoroDoc(fackiSumtiPubKey);
-            const fackiSelbriDoc = await hominioDB.getLoroDoc(fackiSelbriPubKey);
-            const fackiBridiDoc = await hominioDB.getLoroDoc(fackiBridiPubKey);
-            const fackiBridiByCompDoc = await hominioDB.getLoroDoc(fackiBridiByCompPubKey);
-
-            if (!fackiSumtiDoc || !fackiSelbriDoc || !fackiBridiDoc || !fackiBridiByCompDoc) {
-                const failedToLoad = [
-                    !fackiSumtiDoc && 'sumti',
-                    !fackiSelbriDoc && 'selbri',
-                    !fackiBridiDoc && 'bridi',
-                    !fackiBridiByCompDoc && 'bridi_by_component'
-                ].filter(Boolean).join(', ');
-                console.error(`[HominioIndexing] Required Facki index document(s) failed to load: ${failedToLoad}. Cannot index ${pubKey}.`); // Keep error
-                return { success: false, message: `Failed to load Facki index documents: ${failedToLoad}` };
+            if (!indexLeavesMap || !indexSchemasMap || !indexCompositesMap || !indexCompByCompMap) {
+                throw new Error(`Failed to load one or more index document maps.`);
             }
 
             // --- Extract Data and Update Indices ---
             // REMOVED: console.log(`[HominioIndexing] Extracting data and updating indices for ${pubKey} (${docType})`);
 
             let indexingLogicSuccess = false;
+            let commitRequired = false; // Track if any index doc was modified
+
+            // TODO: Implement removal from old indices if the document type changed? Low priority.
+
             switch (docType) {
-                case 'Sumti': {
-                    fackiSumtiDoc!.getMap('datni').set(pubKey, true);
-                    fackiSumtiDoc!.commit();
-                    // REMOVED: console.log(`[HominioIndexing] Added ${pubKey} to Sumti index.`);
+                case 'Leaf': {
+                    // Add to leaves index
+                    indexLeavesMap.set(pubKey, true);
+                    commitRequired = true;
                     indexingLogicSuccess = true;
                     break;
                 }
-                case 'Selbri': {
-                    // REMOVED: console.log(`[HominioIndexing DEBUG] Adding Selbri ${pubKey} to index doc ${fackiSelbriPubKey}`);
-                    fackiSelbriDoc!.getMap('datni').set(pubKey, true);
-                    fackiSelbriDoc!.commit();
-                    // REMOVED: console.log(`[HominioIndexing] Added ${pubKey} to Selbri index.`);
+                case 'Schema': { // Represents Schema
+                    // Add to schemas index
+                    indexSchemasMap.set(pubKey, true);
+                    commitRequired = true;
                     indexingLogicSuccess = true;
                     break;
                 }
-                case 'Bridi': {
-                    let bridiIndexSuccess = true;
+                case 'Composite': {
+                    // Add to composites index (simple existence)
+                    indexCompositesMap.set(pubKey, true);
+                    commitRequired = true; // Mark commit needed for the simple index
 
-                    // Update FACKI_BRIDI_PUBKEY (existence)
-                    fackiBridiDoc!.getMap('datni').set(pubKey, true);
-                    fackiBridiDoc!.commit();
-                    // REMOVED: console.log(`[HominioIndexing] Added ${pubKey} to Bridi existence index.`);
+                    // --- Update Component Index ---
+                    const compositeData = getDataFromDoc(loroDoc) as CompositeRecord['data'] | undefined;
 
-                    // --- Update FACKI_BRIDI_BY_COMPONENT_PUBKEY ---
-                    const bridiByComponentMap = fackiBridiByCompDoc!.getMap('datni');
-
-                    type BridiDatniSeeded = {
-                        selbri?: string;
-                        sumti?: Record<string, string>;
-                    };
-                    const datniData = rootMap?.toJSON() as BridiDatniSeeded | undefined;
-
-                    if (!datniData) {
-                        console.warn(`[HominioIndexing] Could not get datni data for bridi ${pubKey}`); // Keep warn
-                        bridiIndexSuccess = false;
-                    } else {
-                        const selbriRef = datniData?.selbri;
-                        if (typeof selbriRef !== 'string') {
-                            console.warn(`[HominioIndexing] Invalid or missing selbri string for bridi ${pubKey}:`, selbriRef); // Keep warn
-                            bridiIndexSuccess = false;
-                        }
-
-                        const sumtiRefsData = datniData?.sumti;
-                        if (typeof sumtiRefsData !== 'object' || sumtiRefsData === null) {
-                            console.warn(`[HominioIndexing] Invalid or missing sumti map for bridi ${pubKey}:`, sumtiRefsData); // Keep warn
-                            bridiIndexSuccess = false;
-                        }
-
-                        if (bridiIndexSuccess && typeof selbriRef === 'string' && typeof sumtiRefsData === 'object' && bridiByComponentMap) {
-                            // 1. Index by Selbri
-                            const selbriKey = `selbri:${selbriRef}`;
-                            let selbriListTyped: LoroList<string>;
-                            const potentialSelbriList = bridiByComponentMap.get(selbriKey);
-                            if (potentialSelbriList instanceof LoroList) {
-                                selbriListTyped = potentialSelbriList;
-                            } else {
-                                if (potentialSelbriList !== undefined) {
-                                    // REMOVED: console.warn(`[HominioIndexing] Existing data at ${selbriKey} was not a LoroList. Recreating.`);
-                                }
-                                selbriListTyped = bridiByComponentMap.setContainer(selbriKey, new LoroList<string>());
-                            }
-                            if (!selbriListTyped.toArray().includes(pubKey)) {
-                                selbriListTyped.push(pubKey);
-                                // REMOVED: console.log(`[HominioIndexing] Indexed ${pubKey} by selbri: ${selbriRef}`);
-                            }
-
-                            // 2. Index by Sumti
-                            for (const [place, sumtiRefVal] of Object.entries(sumtiRefsData)) {
-                                if (typeof sumtiRefVal === 'string' && sumtiRefVal) {
-                                    const sumtiKey = `sumti:${sumtiRefVal}`;
-                                    let sumtiListTyped: LoroList<string>;
-                                    const potentialSumtiList = bridiByComponentMap.get(sumtiKey);
-                                    if (potentialSumtiList instanceof LoroList) {
-                                        sumtiListTyped = potentialSumtiList;
-                                    } else {
-                                        if (potentialSumtiList !== undefined) {
-                                            // REMOVED: console.warn(`[HominioIndexing] Existing data at ${sumtiKey} was not a LoroList. Recreating.`);
-                                        }
-                                        sumtiListTyped = bridiByComponentMap.setContainer(sumtiKey, new LoroList<string>());
-                                    }
-                                    if (!sumtiListTyped.toArray().includes(pubKey)) {
-                                        sumtiListTyped.push(pubKey);
-                                        // REMOVED: console.log(`[HominioIndexing] Indexed ${pubKey} by sumti (${place}): ${sumtiRefVal}`);
-                                    }
-
-                                    // 3. NEW: Create composite keys for relationship traversal
-                                    const compositeKey = `selbri:${selbriRef}:${place}:${sumtiRefVal}`;
-                                    let compositeListTyped: LoroList<string>;
-                                    const potentialCompositeList = bridiByComponentMap.get(compositeKey);
-                                    if (potentialCompositeList instanceof LoroList) {
-                                        compositeListTyped = potentialCompositeList;
-                                    } else {
-                                        compositeListTyped = bridiByComponentMap.setContainer(compositeKey, new LoroList<string>());
-                                    }
-                                    if (!compositeListTyped.toArray().includes(pubKey)) {
-                                        compositeListTyped.push(pubKey);
-                                        console.log(`[HominioIndexing] Indexed ${pubKey} by composite key: ${compositeKey}`);
-                                    }
-                                } else {
-                                    // REMOVED: console.warn(`[HominioIndexing] Sumti data at place ${place} for bridi ${pubKey} is not a non-empty string:`, sumtiRefVal);
-                                }
-                            }
-                        } else {
-                            if (bridiIndexSuccess) {
-                                // REMOVED: console.warn(`[HominioIndexing] Could not index components for bridi ${pubKey}: Pre-checks failed`);
-                            }
-                        }
-                    } // End of else block for valid datniData
-
-                    // Commit potentially modified component index *after* processing all components
-                    if (bridiIndexSuccess) {
-                        fackiBridiByCompDoc!.commit(); // Explicit commit for component index
+                    if (!compositeData || !compositeData.schemaId || !compositeData.places) {
+                        console.warn(`[HominioIndexing] Composite ${pubKey} has invalid or missing data (schemaId/places). Cannot update component index.`);
+                        // Mark overall success as true because the simple index was updated, but component index failed.
+                        indexingLogicSuccess = true; // Allow state update, but maybe log specific error?
+                        // Consider adding specific error to indexingState here?
+                        break; // Skip component indexing for this doc
                     }
 
-                    indexingLogicSuccess = bridiIndexSuccess;
+                    // --- TODO: Handle REMOVAL from old component index keys if this is an UPDATE ---
+                    // This requires knowing the *previous* state of compositeData.schemaId and compositeData.places
+                    // For now, we only handle ADDING based on the current state.
+
+                    let componentIndexUpdateSuccess = true;
+                    for (const place in compositeData.places) {
+                        // FIX: Cast place to PlaceKey for indexing
+                        const leafId = compositeData.places[place as PlaceKey];
+                        if (leafId) {
+                            const componentKey = `schema:${compositeData.schemaId}:${place}:${leafId}`;
+                            try {
+                                // FIX: Change let to const
+                                const listContainer = indexCompByCompMap.get(componentKey);
+                                let list: LoroList<string>;
+
+                                if (listContainer instanceof LoroList) {
+                                    list = listContainer as LoroList<string>;
+                                } else {
+                                    // Create list if it doesn't exist
+                                    // FIX: Check correct container type
+                                    const newListContainer = indexCompByCompMap.setContainer(componentKey, new LoroList<string>());
+                                    if (!(newListContainer instanceof LoroList)) {
+                                        throw new Error(`Failed to create LoroList for key ${componentKey}`);
+                                    }
+                                    list = newListContainer;
+                                    commitRequired = true; // Mark commit needed
+                                    console.log(`[HominioIndexing DEBUG] Created new list for key: ${componentKey}`);
+                                }
+
+                                // Add pubKey to list if not present
+                                const currentList = list.toArray();
+                                if (!currentList.includes(pubKey)) {
+                                    list.push(pubKey);
+                                    commitRequired = true; // Mark commit needed
+                                    // console.log(`[HominioIndexing DEBUG] Added ${pubKey} to list for key: ${componentKey}`);
+                                }
+                            } catch (listError) {
+                                console.error(`[HominioIndexing] Error updating component index list for key ${componentKey} (Composite ${pubKey}):`, listError);
+                                componentIndexUpdateSuccess = false; // Mark failure for this specific part
+                            }
+                        }
+                    }
+                    // Overall logic success depends on component index success as well
+                    indexingLogicSuccess = componentIndexUpdateSuccess;
                     break;
                 }
                 default: {
@@ -345,6 +318,27 @@ class HominioIndexing {
             } // --- End Switch ---
 
             success = indexingLogicSuccess;
+
+            // --- Commit Index Documents ---
+            // Only commit if changes were potentially made
+            if (commitRequired) {
+                try {
+                    // It's safer to get the doc instances again before committing
+                    const indexLeavesDoc = await getLeafDoc(indexKeys.leaves);
+                    const indexSchemasDoc = await getLeafDoc(indexKeys.schemas);
+                    const indexCompositesDoc = await getLeafDoc(indexKeys.composites);
+                    const indexCompByCompDoc = await getLeafDoc(indexKeys['composites-by-component']);
+
+                    if (indexLeavesDoc) indexLeavesDoc.commit();
+                    if (indexSchemasDoc) indexSchemasDoc.commit();
+                    if (indexCompositesDoc) indexCompositesDoc.commit();
+                    if (indexCompByCompDoc) indexCompByCompDoc.commit();
+                    // console.log(`[HominioIndexing DEBUG] Committed index documents for changes related to ${pubKey}`);
+                } catch (commitError) {
+                    console.error(`[HominioIndexing] Error committing index documents after processing ${pubKey}:`, commitError);
+                    indexingLogicSuccess = false; // Mark failure if commit fails
+                }
+            }
 
             // --- Finalize: Update Indexing State only on SUCCESS ---
             if (success) {
@@ -373,98 +367,96 @@ class HominioIndexing {
 
         } catch (error: unknown) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error(`[HominioIndexing] Error processing document ${pubKey}:`, errorMessage); // Keep error
-
-            await hominioDB.updateDocIndexingState(pubKey, {
-                indexingError: errorMessage,
-                needsReindex: true
-            });
-
-            // --- Add to backlog on generic error ---
-            await hominioDB.addToIndexingBacklog({
+            console.error(`[HominioIndexing] Error processing document ${pubKey}:`, errorMessage);
+            // FIX: Use correct DB method addToIndexingBacklog
+            // Construct the full item for upsert
+            const backlogItem: IndexingBacklogItem = {
                 pubKey,
-                addedTimestamp: new Date().toISOString(),
-                errorCount: 0,
-                lastError: errorMessage
-            });
-            // ---------------------------------------
-
-            return { success: false, message: `Indexing failed: ${errorMessage}` };
-
+                errorCount: 1, // First error
+                lastError: errorMessage || 'Unknown processing error',
+                addedTimestamp: new Date().toISOString() // Use ISO string as likely expected by schema
+            };
+            await hominioDB.addToIndexingBacklog(backlogItem);
+            success = false; // Ensure success is false on error
         } finally {
-            activeIndexingJobs.delete(pubKey);
-            // REMOVED: console.log(`[HominioIndexing] Finished processing attempt for ${pubKey}`);
+            activeIndexingJobs.delete(pubKey); // Remove from active set regardless of outcome
         }
+
+        // Return success status for backlog handling
+        return { success: success, message: success ? 'Indexed successfully' : 'Indexing failed or added to backlog' };
     }
 
 
-    /**
-     * Processes items from the persistent backlog queue.
-     */
-    private async processBacklogQueue(): Promise<void> {
-        let itemsProcessed = 0;
-        const BATCH_SIZE = 5;
+    /** Processes the indexing backlog queue. */
+    private async processBacklogQueue(indexKeys: Record<IndexLeafType, string> | null): Promise<void> {
+        // FIX: Revert to using getNextFromIndexingBacklog in a loop
+        if (!indexKeys) {
+            console.error("[HominioIndexing] Cannot process backlog: Index keys were not loaded.");
+            return;
+        }
+
+        console.log(`[HominioIndexing] Processing backlog queue in batches...`);
+        let itemsProcessedTotal = 0;
 
         try {
             while (true) {
                 const backlogItems = await hominioDB.getNextFromIndexingBacklog(BATCH_SIZE);
                 if (backlogItems.length === 0) {
-                    // REMOVED: console.log('[HominioIndexing] Backlog queue is empty.');
-                    break;
+                    break; // No more items in backlog
                 }
 
-                // REMOVED: console.log(`[HominioIndexing] Found ${backlogItems.length} items in backlog batch.`);
+                console.log(`[HominioIndexing] Processing batch of ${backlogItems.length} backlog item(s).`);
                 let processedInBatch = 0;
 
                 for (const item of backlogItems) {
-                    if (activeIndexingJobs.has(item.pubKey)) {
-                        // REMOVED: console.log(`[HominioIndexing] Skipping backlog item ${item.pubKey}, already active.`);
-                        continue;
-                    }
-
                     if (item.errorCount >= MAX_BACKLOG_RETRIES) {
-                        console.warn(`[HominioIndexing] Max retries (${MAX_BACKLOG_RETRIES}) reached for ${item.pubKey}. Removing from backlog.`); // Keep warn
+                        console.warn(`[HominioIndexing] Max retries reached for backlog item ${item.pubKey}. Skipping.`);
                         await hominioDB.updateDocIndexingState(item.pubKey, {
-                            indexingError: `Max retries reached: ${item.lastError}`,
-                            needsReindex: false
+                            indexingError: `Max retries reached. Last error: ${item.lastError || 'Unknown'}`,
+                            needsReindex: true, // Keep flag, needs manual intervention
                         });
-                        await hominioDB.removeFromIndexingBacklog(item.pubKey);
+                        await hominioDB.removeFromIndexingBacklog(item.pubKey); // Remove from queue
                         continue;
                     }
 
-                    // REMOVED: console.log(`[HominioIndexing] Retrying backlog item: ${item.pubKey} (Attempt ${item.errorCount + 1})`);
+                    if (activeIndexingJobs.has(item.pubKey)) {
+                        console.log(`[HominioIndexing] Skipping backlog item ${item.pubKey}, already being processed.`);
+                        continue;
+                    }
+                    activeIndexingJobs.add(item.pubKey);
 
-                    const result = await this.processDocumentForIndexing(item.pubKey);
+                    console.log(`[HominioIndexing] Retrying backlog item: ${item.pubKey} (Attempt ${item.errorCount + 1})`);
+                    const result = await this.processDocumentForIndexing(item.pubKey, indexKeys);
                     processedInBatch++;
 
                     if (result.success) {
-                        // REMOVED: console.log(`[HominioIndexing] Successfully processed backlog item ${item.pubKey}. Removing from backlog.`);
                         await hominioDB.removeFromIndexingBacklog(item.pubKey);
+                        console.log(`[HominioIndexing] Successfully processed backlog item ${item.pubKey}. Removed from queue.`);
                     } else {
-                        // REMOVED: console.warn(`[HominioIndexing] Failed to process backlog item ${item.pubKey}. Updating error count.`);
+                        // Increment retry count via DB method
                         const updatedBacklogItem: IndexingBacklogItem = {
                             ...item,
                             errorCount: item.errorCount + 1,
-                            lastError: result.message
+                            lastError: result.message,
+                            // updatedAt: new Date() // Removed
                         };
-                        await hominioDB.addToIndexingBacklog(updatedBacklogItem);
+                        await hominioDB.addToIndexingBacklog(updatedBacklogItem); // Use add which acts as upsert
+                        console.warn(`[HominioIndexing] Failed to process backlog item ${item.pubKey}. Error: ${result.message}`);
                     }
+                    // Active job removal handled in processDocumentForIndexing finally block
                 } // End for loop
-
-                itemsProcessed += processedInBatch;
-
-                if (processedInBatch === 0) {
-                    // REMOVED: console.log("[HominioIndexing] No backlog items processed in this batch (likely active). Breaking loop.");
+                itemsProcessedTotal += processedInBatch;
+                if (processedInBatch < BATCH_SIZE) {
+                    // If we processed less than a full batch, we likely cleared the queue
                     break;
                 }
-
             } // End while loop
 
         } catch (error) {
-            console.error('[HominioIndexing] Error processing backlog queue:', error); // Keep error
+            console.error('[HominioIndexing] Error processing backlog queue:', error);
         }
-        if (itemsProcessed > 0) {
-            console.log(`[HominioIndexing] Processed ${itemsProcessed} items from backlog.`); // Keep summary log
+        if (itemsProcessedTotal > 0) {
+            console.log(`[HominioIndexing] Processed ${itemsProcessedTotal} items from backlog.`);
         }
     }
 

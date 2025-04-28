@@ -8,10 +8,13 @@
 	import { getContext } from 'svelte';
 	import { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
 	import SyncStatusUI from '$lib/components/SyncStatusUI.svelte';
-	import SelbriQueries from '$lib/components/SelbriQueries.svelte';
-	import SumtiQueries from '$lib/components/SumtiQueries.svelte';
+	import SchemaQueries from '$lib/components/SchemaQueries.svelte';
+	import LeafQueries from '$lib/components/LeafQueries.svelte';
 	import QueryEditor from '$lib/components/QueryEditor.svelte';
 	import NodesProps from '$lib/components/NodesProps.svelte';
+	import GraphView from '$lib/components/GraphView.svelte';
+	import IndexQueries from '$lib/components/IndexQueries.svelte';
+	import type { SchemaPlaceTranslation, SchemaLanguageTranslation } from '$db/seeding/schema.data';
 
 	// --- Get Effective User Function from Context ---
 	type GetCurrentUserFn = typeof getMeType;
@@ -27,111 +30,107 @@
 	}
 
 	// Define a more specific type for our query results
-	interface SelbriQueryResult extends QueryResult {
+	interface SchemaQueryResult extends QueryResult {
 		id: string;
 		name?: string;
-		x1?: string;
-		x2?: string;
-		x3?: string;
-		x4?: string;
-		x5?: string;
-		translations?: Record<string, LanguageTranslation>;
-		prompts?: Record<string, string>;
+		places?: {
+			x1?: string;
+			x2?: string;
+			x3?: string;
+			x4?: string;
+			x5?: string;
+		};
+		translations?: Record<string, SchemaLanguageTranslation>;
 	}
 
 	// Define type for bridi/relationship query results
-	interface BridiQueryResult extends QueryResult {
+	interface CompositeQueryResult extends QueryResult {
 		id: string;
-		selbri?: string;
-		x1?: { value: unknown; pubkey: string } | null;
-		x2?: { value: unknown; pubkey: string } | null;
-		x3?: { value: unknown; pubkey: string } | null;
-		x4?: { value: unknown; pubkey: string } | null;
-		x5?: { value: unknown; pubkey: string } | null;
+		schemaId?: string;
+		x1?: { data: unknown; pubkey: string } | null;
+		x2?: { data: unknown; pubkey: string } | null;
+		x3?: { data: unknown; pubkey: string } | null;
+		x4?: { data: unknown; pubkey: string } | null;
+		x5?: { data: unknown; pubkey: string } | null;
 	}
 
-	// Create a query to fetch all Selbri (empty array tells the engine to fetch all)
-	const allSelbriQuery: LoroHqlQuery = {
+	// Create a query to fetch all schemas (empty array tells the engine to fetch all)
+	const allSchemaQuery: LoroHqlQuery = {
 		from: {
-			selbri_pubkeys: [] // Empty array triggers "fetch all" logic in the query engine
+			gismu_pubkeys: []
 		},
 		map: {
 			id: { field: 'doc.pubkey' },
-			name: { field: 'self.datni.cneme' },
-			x1: { field: 'self.datni.sumti.x1' },
-			x2: { field: 'self.datni.sumti.x2' },
-			x3: { field: 'self.datni.sumti.x3' },
-			x4: { field: 'self.datni.sumti.x4' },
-			x5: { field: 'self.datni.sumti.x5' },
-			translations: { field: 'self.datni.fanva' },
-			prompts: { field: 'self.datni.stidi' }
+			name: { field: 'self.data.name' },
+			places: { field: 'self.data.places' },
+			translations: { field: 'self.data.translations' }
 		}
 	};
 
 	// Convert query to a store for reactive processing
-	const selbriQueryStore = readable<LoroHqlQuery>(allSelbriQuery);
+	const schemaQueryStore = readable<LoroHqlQuery>(allSchemaQuery);
 
 	// Create a reactive query store that will update when data changes
-	const selbriReadable = processReactiveQuery(getMe, selbriQueryStore) as Readable<
-		SelbriQueryResult[] | null | undefined
+	const schemaReadable = processReactiveQuery(getMe, schemaQueryStore) as Readable<
+		SchemaQueryResult[] | null | undefined
 	>;
 
-	// Create a function to generate a bridi query filtered by selbri type
-	function createBridiQueryForSelbri(selbriId: string): LoroHqlQuery {
+	// Create a function to generate a composite query filtered by schema type
+	function createCompositeQueryForSchema(schemaId: string): LoroHqlQuery {
 		return {
 			from: {
-				bridi_pubkeys: [] // Empty array fetches all Bridi
+				composite_pubkeys: []
 			},
 			where: [
 				{
-					field: 'self.datni.selbri',
-					condition: { equals: selbriId }
+					field: 'self.data.schemaId',
+					condition: { equals: schemaId }
 				}
 			],
 			map: {
 				id: { field: 'doc.pubkey' },
-				selbri: { field: 'self.datni.selbri' },
+				schemaId: { field: 'self.data.schemaId' },
 				x1: {
 					resolve: {
-						fromField: 'self.datni.sumti.x1',
+						fromField: 'self.data.places.x1',
 						map: {
-							value: { field: 'self.datni' },
+							data: { field: 'self.data' },
 							pubkey: { field: 'doc.pubkey' }
 						}
 					}
 				},
 				x2: {
 					resolve: {
-						fromField: 'self.datni.sumti.x2',
+						fromField: 'self.data.places.x2',
 						map: {
-							value: { field: 'self.datni' },
+							data: { field: 'self.data' },
 							pubkey: { field: 'doc.pubkey' }
 						}
 					}
 				},
 				x3: {
 					resolve: {
-						fromField: 'self.datni.sumti.x3',
+						fromField: 'self.data.places.x3',
 						map: {
-							value: { field: 'self.datni' },
+							data: { field: 'self.data' },
 							pubkey: { field: 'doc.pubkey' }
 						}
 					}
 				},
 				x4: {
 					resolve: {
-						fromField: 'self.datni.sumti.x4',
+						fromField: 'self.data.places.x4',
 						map: {
-							value: { field: 'self.datni' },
+							data: { field: 'self.data' },
 							pubkey: { field: 'doc.pubkey' }
 						}
 					}
 				},
 				x5: {
 					resolve: {
-						fromField: 'self.datni.sumti.x5',
+						fromField: 'self.data.places.x5',
 						map: {
-							value: { field: 'self.datni' },
+							data: { field: 'self.data' },
 							pubkey: { field: 'doc.pubkey' }
 						}
 					}
@@ -140,46 +139,46 @@
 		};
 	}
 
-	// Selected Selbri State
-	let selectedSelbriId = $state<string | null>(null);
+	// Selected Schema State
+	let selectedSchemaId = $state<string | null>(null);
 
-	// New component-level data store for the selected selbri
-	let currentSelectedSelbri = $state<SelbriQueryResult | null>(null);
+	// New component-level data store for the selected schema
+	let currentSelectedSchema = $state<SchemaQueryResult | null>(null);
 
-	// Store for the current bridi query
-	const bridiQueryStore = writable<LoroHqlQuery | null>(null);
+	// Store for the current composite query
+	const compositeQueryStore = writable<LoroHqlQuery | null>(null);
 
-	// Create a reactive query for bridi records
-	const bridiReadable = processReactiveQuery(getMe, bridiQueryStore) as Readable<
-		BridiQueryResult[] | null | undefined
+	// Create a reactive query for composite records
+	const compositeReadable = processReactiveQuery(getMe, compositeQueryStore) as Readable<
+		CompositeQueryResult[] | null | undefined
 	>;
 
-	// Function to handle selbri selection
-	function selectSelbri(id: string) {
-		console.log('Selecting selbri with id:', id);
-		selectedSelbriId = id;
+	// Function to handle schema selection
+	function selectSchema(id: string) {
+		console.log('Selecting schema with id:', id);
+		selectedSchemaId = id;
 
-		// Find the selected selbri directly
-		if ($selbriReadable) {
-			const found = $selbriReadable.find((item) => item.id === id);
+		// Find the selected schema directly
+		if ($schemaReadable) {
+			const found = $schemaReadable.find((item) => item.id === id);
 			if (found) {
-				console.log('Found selbri directly:', found.name);
-				currentSelectedSelbri = found;
+				console.log('Found schema directly:', found.name);
+				currentSelectedSchema = found;
 
-				// Create and set the bridi query for this selbri
-				const bridiQuery = createBridiQueryForSelbri(id);
-				bridiQueryStore.set(bridiQuery);
+				// Create and set the composite query for this schema
+				const compositeQuery = createCompositeQueryForSchema(id);
+				compositeQueryStore.set(compositeQuery);
 			} else {
-				console.log('Selbri not found directly, trying flexible matching');
+				console.log('Schema not found directly, trying flexible matching');
 				// Try flexible matching if exact match fails
-				for (const selbri of $selbriReadable) {
-					if (selbri.id.toLowerCase() === id.toLowerCase()) {
-						console.log('Found selbri with case-insensitive match:', selbri.name);
-						currentSelectedSelbri = selbri;
+				for (const schema of $schemaReadable) {
+					if (schema.id.toLowerCase() === id.toLowerCase()) {
+						console.log('Found schema with case-insensitive match:', schema.name);
+						currentSelectedSchema = schema;
 
-						// Create and set the bridi query for this selbri
-						const bridiQuery = createBridiQueryForSelbri(selbri.id);
-						bridiQueryStore.set(bridiQuery);
+						// Create and set the composite query for this schema
+						const compositeQuery = createCompositeQueryForSchema(schema.id);
+						compositeQueryStore.set(compositeQuery);
 						break;
 					}
 				}
@@ -188,8 +187,8 @@
 	}
 
 	// Helper function to get English name
-	function getEnglishName(selbri: SelbriQueryResult): string {
-		return selbri.translations?.glico?.x1 || selbri.name || 'Unnamed Schema';
+	function getSchemaDisplayInfo(schema: SchemaQueryResult): string {
+		return schema.translations?.en?.places?.x1?.title || schema.name || 'Unnamed Schema';
 	}
 
 	// Helper function to truncate long strings
@@ -199,7 +198,7 @@
 	}
 
 	// Tab state
-	let activeTab = $state('nodes-props'); // Default tab: 'selbri', 'sumti', 'query-editor', 'nodes-props'
+	let activeTab = $state('schema'); // Default tab: 'schema', 'leaf', 'query-editor', 'nodes-props', 'graph-view', 'indices'
 
 	// Function to change active tab
 	function setActiveTab(tab: string) {
@@ -222,20 +221,20 @@
 		<!-- Navigation Tabs -->
 		<nav class="flex px-4">
 			<button
-				class="border-b-2 px-4 py-2 font-medium transition-colors {activeTab === 'selbri'
+				class="border-b-2 px-4 py-2 font-medium transition-colors {activeTab === 'schema'
 					? 'border-indigo-500 text-indigo-600'
 					: 'border-transparent text-gray-500 hover:text-gray-700'}"
-				on:click={() => setActiveTab('selbri')}
+				on:click={() => setActiveTab('schema')}
 			>
-				Selbri
+				Schemata
 			</button>
 			<button
-				class="border-b-2 px-4 py-2 font-medium transition-colors {activeTab === 'sumti'
+				class="border-b-2 px-4 py-2 font-medium transition-colors {activeTab === 'leaf'
 					? 'border-indigo-500 text-indigo-600'
 					: 'border-transparent text-gray-500 hover:text-gray-700'}"
-				on:click={() => setActiveTab('sumti')}
+				on:click={() => setActiveTab('leaf')}
 			>
-				Sumti
+				Leafs
 			</button>
 			<button
 				class="border-b-2 px-4 py-2 font-medium transition-colors {activeTab === 'query-editor'
@@ -253,18 +252,35 @@
 			>
 				Nodes Props
 			</button>
+			<button
+				class="border-b-2 px-4 py-2 font-medium transition-colors {activeTab === 'graph-view'
+					? 'border-indigo-500 text-indigo-600'
+					: 'border-transparent text-gray-500 hover:text-gray-700'}"
+				on:click={() => setActiveTab('graph-view')}
+			>
+				Graph View
+			</button>
+			<!-- Add Indices Tab Button -->
+			<button
+				class="border-b-2 px-4 py-2 font-medium transition-colors {activeTab === 'indices'
+					? 'border-indigo-500 text-indigo-600'
+					: 'border-transparent text-gray-500 hover:text-gray-700'}"
+				on:click={() => setActiveTab('indices')}
+			>
+				Indices
+			</button>
 		</nav>
 	</header>
 
 	<!-- Main Content -->
 	<main class="flex-1 overflow-hidden">
-		{#if activeTab === 'selbri'}
+		{#if activeTab === 'schema'}
 			<div class="h-full">
-				<SelbriQueries />
+				<SchemaQueries />
 			</div>
-		{:else if activeTab === 'sumti'}
+		{:else if activeTab === 'leaf'}
 			<div class="h-full">
-				<SumtiQueries />
+				<LeafQueries />
 			</div>
 		{:else if activeTab === 'query-editor'}
 			<div class="h-full">
@@ -273,6 +289,15 @@
 		{:else if activeTab === 'nodes-props'}
 			<div class="h-full">
 				<NodesProps />
+			</div>
+		{:else if activeTab === 'graph-view'}
+			<div class="h-full">
+				<GraphView />
+			</div>
+			<!-- Add Indices Tab Content -->
+		{:else if activeTab === 'indices'}
+			<div class="h-full">
+				<IndexQueries />
 			</div>
 		{/if}
 	</main>

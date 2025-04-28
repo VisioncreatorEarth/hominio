@@ -6,7 +6,8 @@ import { canWrite, canDelete, type CapabilityUser } from './hominio-caps'; // Im
 import { getContentStorage } from '$lib/KERNEL/hominio-storage';
 import { getMe } from '$lib/KERNEL/hominio-auth'; // Import renamed function
 import { GENESIS_PUBKEY } from '$db/constants'; // <<< Import GENESIS_PUBKEY
-import { updateFackiIndexRegistry, type FackiIndexType } from './facki-indices';
+import { updateIndexLeafRegistry, type IndexLeafType } from './index-registry';
+import { LoroMap } from 'loro-crdt';
 
 // Helper type for API response structure
 type ApiResponse<T> = {
@@ -443,90 +444,119 @@ export class HominioSync {
             return;
         }
         this.setSyncStatus(true);
-        this.setSyncError(null); // Clear previous errors at the start
-
-        const fackiIndexPubKeys = new Set<string>();
+        this.setSyncError(null); // Clear previous errors
 
         try {
-            // --- 0. Ensure Genesis Facki Meta is synced first ---
-            let fackiMetaDoc: Docs | null = null;
-            let fackiMetaSynced = false;
-            try {
-                const metaResult = await hominio.api.docs({ pubKey: GENESIS_PUBKEY }).get();
-                const metaResponse = metaResult as ApiResponse<ServerDocData | null>; // Expect single doc or null/error
+            const indexLeafPubKeys = new Set<string>();
 
-                if (metaResponse.error && metaResponse.error.status !== 404) {
-                    throw new Error(`Server Error fetching Facki Meta: ${metaResponse.error.value?.message ?? `Status ${metaResponse.error.status}`}`);
-                } else if (metaResponse.data) {
-                    if (typeof metaResponse.data !== 'object' || metaResponse.data === null || typeof metaResponse.data.pubKey !== 'string' || typeof metaResponse.data.owner !== 'string') {
-                        throw new Error(`Invalid Facki Meta data format received from server`);
+            // --- Special Case: Get Facki Meta Document First ---
+            if (GENESIS_PUBKEY) {
+                try {
+                    const metaResult = await hominio.api.docs({ pubKey: GENESIS_PUBKEY }).get();
+                    const response = metaResult as ApiResponse<unknown>;
+
+                    if (response.error && response.error.status !== 404) {
+                        throw new Error(`Server error fetching genesis doc: ${response.error.value?.message ?? `Status ${response.error.status}`}`);
                     }
-                    let updatedAtString: string;
-                    if (metaResponse.data.updatedAt instanceof Date) updatedAtString = metaResponse.data.updatedAt.toISOString();
-                    else if (typeof metaResponse.data.updatedAt === 'string') updatedAtString = metaResponse.data.updatedAt;
-                    else updatedAtString = new Date().toISOString();
 
-                    fackiMetaDoc = {
-                        pubKey: metaResponse.data.pubKey,
-                        owner: metaResponse.data.owner,
-                        updatedAt: updatedAtString,
-                        snapshotCid: metaResponse.data.snapshotCid ?? undefined,
-                        updateCids: Array.isArray(metaResponse.data.updateCids) ? metaResponse.data.updateCids : [],
-                    };
-
-                    if (fackiMetaDoc.snapshotCid) {
-                        const contentItems = [{ cid: fackiMetaDoc.snapshotCid, type: 'snapshot' as const, docPubKey: GENESIS_PUBKEY }];
-                        const savedCids = await this.syncContentBatchFromServer(contentItems);
-                        if (savedCids.has(fackiMetaDoc.snapshotCid)) {
-                            await hominioDB.saveSyncedDocument(fackiMetaDoc); // Save metadata after content
-                            fackiMetaSynced = true;
+                    if (!response.error) {
+                        // Get the genesis metadata
+                        const genesisMetadata = response.data as ServerDocData;
+                        if (!genesisMetadata || !genesisMetadata.snapshotCid) {
+                            console.warn('[Pull] Genesis doc exists on server but missing snapshotCid!');
                         } else {
-                            throw new Error(`Failed to sync Facki Meta snapshot content: ${fackiMetaDoc.snapshotCid}`);
+                            // Prepare for content fetch
+                            let fetchedGenesisCid = false;
+
+                            try {
+                                // Use the same pattern as the working example in syncContentBatchFromServer
+                                const contentCid = genesisMetadata.snapshotCid;
+                                // @ts-expect-error Eden Treaty doesn't fully type nested dynamic route GETs
+                                const binaryResponseResult = await hominio.api.content({ cid: contentCid }).binary.get();
+                                const binaryResponse = binaryResponseResult as ApiResponse<{ binaryData: number[] }>;
+
+                                if (binaryResponse.error) {
+                                    throw new Error(`Server error fetching genesis content: ${binaryResponse.error.value?.message ?? `Status ${binaryResponse.error.status}`}`);
+                                }
+
+                                // Store the content locally
+                                if (binaryResponse.data?.binaryData) {
+                                    const binaryData = new Uint8Array(binaryResponse.data.binaryData);
+                                    try {
+                                        await hominioDB.saveRawContent(contentCid, binaryData, { type: 'snapshot', documentPubKey: GENESIS_PUBKEY });
+                                        fetchedGenesisCid = true;
+                                    } catch (saveErr) {
+                                        console.error('[Pull] Error saving genesis content to IndexedDB:', saveErr);
+                                    }
+                                }
+                            } catch (contentErr) {
+                                console.error('[Pull] Error fetching genesis content:', contentErr);
+                            }
+
+                            // Update metadata only if content was fetched
+                            if (fetchedGenesisCid) {
+                                try {
+                                    const processedMetadata: Docs = {
+                                        pubKey: GENESIS_PUBKEY,
+                                        owner: genesisMetadata.owner,
+                                        updatedAt: genesisMetadata.updatedAt instanceof Date ? genesisMetadata.updatedAt.toISOString() : genesisMetadata.updatedAt,
+                                        snapshotCid: genesisMetadata.snapshotCid,
+                                        updateCids: Array.isArray(genesisMetadata.updateCids) ? genesisMetadata.updateCids : [],
+                                    };
+                                    await hominioDB.saveSyncedDocument(processedMetadata);
+                                } catch (saveErr) {
+                                    console.error('[Pull] Error saving genesis metadata to IndexedDB:', saveErr);
+                                }
+                            }
                         }
+                    } else {
+                        console.warn('[Pull] Genesis document not found on server.');
                     }
-                } else {
-                    console.warn(`[Pull] Facki Meta document (${GENESIS_PUBKEY}) not found on server.`); // Keep warning
+                } catch (err) {
+                    console.error('[Pull] Error fetching genesis document:', err);
+                    this.setSyncError(`Genesis doc fetch failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
                 }
 
-            } catch (err) {
-                console.error('[Pull] Failed to sync Facki Meta document:', err); // Keep error
-                this.setSyncError(`Facki Meta sync failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
-                this.setSyncStatus(false);
-                return; // Cannot proceed without Facki Meta
-            }
-
-            // --- Parse Facki Meta to find other index pubkeys ---
-            if (fackiMetaSynced && fackiMetaDoc?.snapshotCid) {
+                // Try to find Genesis locally and extract index pubkeys
                 try {
-                    const fackiLoro = await hominioDB.getLoroDoc(GENESIS_PUBKEY);
-                    if (fackiLoro) {
-                        const datniMap = fackiLoro.getMap('datni');
-                        const indexPubkeys: Partial<Record<FackiIndexType, string>> = {};
-                        const sumtiKey = datniMap.get('sumti') as string | undefined;
-                        const selbriKey = datniMap.get('selbri') as string | undefined;
-                        const bridiKey = datniMap.get('bridi') as string | undefined;
-                        const bridiCompKey = datniMap.get('bridi_by_component') as string | undefined;
+                    const genesisLoro = await hominioDB.getLoroDoc(GENESIS_PUBKEY);
+                    if (genesisLoro) {
+                        const dataMap = genesisLoro.getMap('data');
+                        if (!(dataMap instanceof LoroMap)) {
+                            throw new Error('@genesis data is not a LoroMap');
+                        }
+                        const valueContainer = dataMap.get('value');
+                        if (!(valueContainer instanceof LoroMap)) {
+                            throw new Error('@genesis data.value is not a LoroMap');
+                        }
+                        const indexValueMap = valueContainer;
 
-                        if (sumtiKey) { fackiIndexPubKeys.add(sumtiKey); indexPubkeys.sumti = sumtiKey; }
-                        if (selbriKey) { fackiIndexPubKeys.add(selbriKey); indexPubkeys.selbri = selbriKey; }
-                        if (bridiKey) { fackiIndexPubKeys.add(bridiKey); indexPubkeys.bridi = bridiKey; }
-                        if (bridiCompKey) { fackiIndexPubKeys.add(bridiCompKey); indexPubkeys.bridi_by_component = bridiCompKey; }
+                        const indexPubkeys: Partial<Record<IndexLeafType, string>> = {};
+                        const leafKey = indexValueMap.get('leaves') as string | undefined;
+                        const schemaKey = indexValueMap.get('schemas') as string | undefined;
+                        const compositeKey = indexValueMap.get('composites') as string | undefined;
+                        const compositeCompKey = indexValueMap.get('composites_by_component') as string | undefined;
+
+                        if (leafKey) { indexLeafPubKeys.add(leafKey); indexPubkeys.leaves = leafKey; }
+                        if (schemaKey) { indexLeafPubKeys.add(schemaKey); indexPubkeys.schemas = schemaKey; }
+                        if (compositeKey) { indexLeafPubKeys.add(compositeKey); indexPubkeys.composites = compositeKey; }
+                        if (compositeCompKey) { indexLeafPubKeys.add(compositeCompKey); indexPubkeys['composites-by-component'] = compositeCompKey; }
 
                         if (Object.keys(indexPubkeys).length > 0) {
-                            updateFackiIndexRegistry(indexPubkeys);
+                            updateIndexLeafRegistry(indexPubkeys);
                         } else {
-                            console.warn('[Pull] No valid Facki index keys found in Facki Meta datni map.'); // Keep warning
+                            console.warn('[Pull] No valid Index leaf keys found in local @genesis data.value map.');
                         }
 
                     } else {
-                        console.warn('[Pull] Could not load Facki Meta LoroDoc locally to parse index keys.'); // Keep warning
+                        console.warn('[Pull] Could not load @genesis LoroDoc locally to parse index keys.');
                     }
                 } catch (parseErr) {
-                    console.error('[Pull] Error parsing Facki Meta document locally:', parseErr); // Keep error
+                    console.error('[Pull] Error parsing local @genesis document:', parseErr);
                 }
             }
 
-            // --- 1. Fetch ALL Server Document Metadata (excluding Facki Meta) ---
+            // --- 1. Fetch ALL Server Document Metadata (excluding @genesis) ---
             let allOtherServerDocs: Docs[] = [];
             try {
                 const serverResult = await hominio.api.docs.list.get();
@@ -598,10 +628,10 @@ export class HominioSync {
             };
 
             // Process Facki indices identified earlier
-            for (const fackiPubKey of fackiIndexPubKeys) {
-                const serverDoc = allOtherServerDocs.find(d => d.pubKey === fackiPubKey);
+            for (const indexPubKey of indexLeafPubKeys) {
+                const serverDoc = allOtherServerDocs.find(d => d.pubKey === indexPubKey);
                 if (!serverDoc) {
-                    console.warn(`[Pull] Facki index doc ${fackiPubKey} (from meta) not found in server list.`); // Keep warning
+                    console.warn(`[Pull] Index leaf doc ${indexPubKey} (from meta) not found in server list.`); // Keep warning
                     continue;
                 }
 
@@ -622,7 +652,7 @@ export class HominioSync {
 
             // Process remaining (non-Facki) documents
             for (const serverDoc of allOtherServerDocs) {
-                if (fackiIndexPubKeys.has(serverDoc.pubKey)) continue;
+                if (indexLeafPubKeys.has(serverDoc.pubKey)) continue;
 
                 const localDoc = localDocsMap.get(serverDoc.pubKey);
 
