@@ -4,7 +4,7 @@ import { LoroDoc, LoroMap } from 'loro-crdt';
 import { hashService } from './hash-service';
 import { docIdService } from './docid-service';
 import { getContentStorage, getDocsStorage, initStorage } from './hominio-storage';
-import { canRead, canWrite, canDelete } from './hominio-caps'; // Import central capability functions
+import { canRead, canWrite } from './hominio-caps'; // Removed canDelete
 import type { CapabilityUser } from './hominio-caps'; // Fixed import source
 import type { ValidationRuleStructure } from './hominio-validate';
 
@@ -249,9 +249,66 @@ class HominioDB {
     }
 
     /**
-     * Create a new document
+     * Internal method to persist a NEW document given a prepared LoroDoc.
+     * Assumes pubKey is already generated and LoroDoc is populated.
+     * Handles snapshotting, saving content, saving doc metadata (with indexing state),
+     * caching, and subscribing.
+     * Called by createDocument and potentially by executeMutation.
+     * @private Internal use only.
+     */
+    private async _persistNewDocument(
+        user: CapabilityUser | null,
+        pubKey: string,
+        owner: string, // Explicit owner needed
+        preparedDoc: LoroDoc
+    ): Promise<{ snapshotCid: string }> {
+        const now = new Date().toISOString();
+
+        // --- Snapshot and Save Content --- 
+        const snapshot = preparedDoc.exportSnapshot();
+        const snapshotCid = await hashService.hashSnapshot(snapshot);
+        const contentStorage = getContentStorage();
+        await contentStorage.put(snapshotCid, snapshot, {
+            type: 'snapshot',
+            documentPubKey: pubKey,
+            created: now
+        });
+
+        // --- Create Doc Metadata --- 
+        const newDocMeta: Docs = {
+            pubKey,
+            owner,
+            updatedAt: now,
+            snapshotCid: snapshotCid,
+            updateCids: [],
+            // Add initial indexing state - mark for immediate indexing
+            indexingState: {
+                needsReindex: true,
+                indexingError: null // Start clean
+            }
+        };
+
+        const docsStorage = getDocsStorage();
+        await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(newDocMeta)));
+
+        // Cache the new LoroDoc instance
+        activeLoroDocuments.set(pubKey, preparedDoc);
+        // Subscribe AFTER initial save
+        preparedDoc.subscribe(() => {
+            this._persistLoroUpdateAsync(pubKey, preparedDoc).catch(err => {
+                console.error(`[Loro Subscribe - PersistNew] Failed to persist update for ${pubKey}:`, err);
+            });
+        });
+
+        return { snapshotCid };
+    }
+
+    /**
+     * Create a new document (Public API)
+     * Generates ID, determines owner, creates LoroDoc, populates initial data,
+     * then calls _persistNewDocument.
      * @param options Document creation options
-     * @param initialBridiData Optional data to initialize a bridi document before the first snapshot
+     * @param initialBridiData Optional data to initialize a bridi document
      * @returns PubKey of the created document
      */
     async createDocument(
@@ -260,72 +317,45 @@ class HominioDB {
         initialBridiData?: InitialBridiData
     ): Promise<string> {
         this._setStatus({ creatingDoc: true });
-        this._setError(null); // Clear previous error
+        this._setError(null);
         this._isInitializingDoc = true; // Set flag before creation starts
 
         try {
-            // Determine owner: prioritize options.owner, then user.id, then error
             const owner = options.owner ?? user?.id;
             if (!owner) {
                 throw new Error("Cannot create document: Owner must be specified in options or user must be provided.");
             }
-
             const pubKey = await docIdService.generateDocId();
-            const now = new Date().toISOString();
 
-            const newDocMeta: Docs = {
-                pubKey,
-                owner,
-                updatedAt: now
-            };
+            // --- Create LoroDoc and Populate Initial Data --- 
+            const loroDoc = new LoroDoc();
+            loroDoc.setPeerId(1); // Use default numeric ID
 
-            const loroDoc = await this.getOrCreateLoroDoc(pubKey); // Creates LoroDoc
+            const metadataMap = loroDoc.getMap('metadata');
+            metadataMap.set('type', 'Unknown'); // Default type
+            const dataMap = loroDoc.getMap('data');
 
-            // Get or create top-level ckaji map and set cmene
-            const ckajiMap = loroDoc.getMap('ckaji');
-
-            // Apply initialBridiData if provided - directly creating top-level maps
-            if (initialBridiData) {
-                // Set klesi directly in ckaji
-                ckajiMap.set('klesi', initialBridiData.gismu); // Assuming gismu maps to klesi for Bridi
-
-                // Create top-level datni map
-                const datniMap = loroDoc.getMap('datni');
-                datniMap.set('selbri', initialBridiData.selbriRef);
-                const sumtiMap = datniMap.setContainer('sumti', new LoroMap());
+            if (initialBridiData) { // Example specific population
+                metadataMap.set('type', 'Bridi');
+                dataMap.set('selbri', initialBridiData.selbriRef);
+                const sumtiMap = dataMap.setContainer('sumti', new LoroMap());
                 for (const [place, value] of Object.entries(initialBridiData.sumtiData)) {
                     sumtiMap.set(place, value);
                 }
-            }
-            // --- End Apply Initial Data ---
+            } // Add more specific population logic if needed for other types via this API
 
-            // Snapshotting and initial save logic 
-            const snapshot = loroDoc.export({ mode: 'snapshot' }); // Snapshot NOW includes initial data
-            const snapshotCid = await hashService.hashSnapshot(snapshot);
-            const contentStorage = getContentStorage();
-            await contentStorage.put(snapshotCid, snapshot, {
-                type: 'snapshot',
-                documentPubKey: pubKey,
-                created: now
-            });
+            // --- Persist using the internal method --- 
+            await this._persistNewDocument(user, pubKey, owner, loroDoc);
 
-            newDocMeta.localState = { snapshotCid: snapshotCid };
-            newDocMeta.snapshotCid = snapshotCid;
-
-            const docsStorage = getDocsStorage();
-            await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(newDocMeta)));
-
-            // Explicitly trigger reactivity after metadata is saved
             triggerDocChangeNotification();
-
             return pubKey;
         } catch (err) {
             console.error('Error creating document:', err);
             this._setError(`Failed to create document: ${err instanceof Error ? err.message : String(err)}`);
-            throw err; // Re-throw error
+            throw err;
         } finally {
             this._setStatus({ creatingDoc: false });
-            this._isInitializingDoc = false; // Clear flag
+            this._isInitializingDoc = false;
         }
     }
 
@@ -415,33 +445,78 @@ class HominioDB {
     }
 
     /**
-     * Update a document in storage
-     * @param pubKey Document public key
-     * @param mutationFn Function that mutates the document
-     * @returns CID of the update
+     * Update a document in storage - MODIFIED FOR MUTATION ENGINE
+     * This version is simplified as the mutation engine handles LoroDoc manipulation.
+     * It primarily focuses on persisting the changes prepared by the mutation engine.
+     * @param user The user performing the update.
+     * @param pubKey Document public key.
+     * @param updatedLoroDoc The LoroDoc instance with updates already applied (from mutation engine).
+     * @returns The CID of the new snapshot created.
+     * @throws Error if persistence fails or document not found.
      */
     async updateDocument(
         user: CapabilityUser | null,
         pubKey: string,
-        mutationFn: (doc: LoroDoc) => void
-    ): Promise<string> {
+        updatedLoroDoc: LoroDoc // Receive the updated doc directly
+        // removed mutationFn
+    ): Promise<string> { // Return snapshot CID
         this._setError(null);
         try {
             const docMeta = await this.getDocument(pubKey);
             if (!docMeta) {
                 throw new Error(`Document ${pubKey} not found for update.`);
             }
-            if (!canWrite(user, docMeta)) {
-                throw new Error('Permission denied: Cannot write to this document');
-            }
+            // Permission check is done in hominio-mutate before calling this
+            // if (!canWrite(user, docMeta)) {
+            //     throw new Error('Permission denied: Cannot write to this document');
+            // }
 
-            const loroDoc = await this.getOrCreateLoroDoc(pubKey, docMeta.snapshotCid);
+            // 1. Export New Snapshot from the provided doc
+            // Assuming updates are consolidated into a snapshot by the mutation engine flow
+            const snapshotBytes = updatedLoroDoc.exportSnapshot();
+            const snapshotCid = await hashService.hashSnapshot(snapshotBytes);
 
-            // Apply User's Mutation
-            mutationFn(loroDoc);
+            // 2. Save New Content
+            const contentStorage = getContentStorage();
+            await contentStorage.put(snapshotCid, snapshotBytes, {
+                type: CONTENT_TYPE_SNAPSHOT,
+                documentPubKey: pubKey,
+                createdAt: new Date().toISOString()
+            });
 
-            loroDoc.commit();
-            return pubKey;
+            // 3. Update Docs Registry
+            const updatedDocMeta: Docs = {
+                ...docMeta,
+                snapshotCid: snapshotCid, // Update to the new snapshot
+                updatedAt: new Date().toISOString(),
+                updateCids: [], // Clear old update CIDs
+                localState: undefined, // Clear local state as new snapshot is canonical
+                // Update indexing state - mark for re-indexing
+                indexingState: {
+                    ...(docMeta.indexingState || {}), // Preserve existing state like errors
+                    needsReindex: true,
+                    lastIndexedTimestamp: undefined, // Clear last indexed time
+                    lastIndexedSnapshotCid: undefined,
+                    lastIndexedUpdateCidsHash: undefined
+                    // Optionally clear indexingError: null,
+                }
+            };
+            const docsStorage = getDocsStorage();
+            await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDocMeta)));
+
+            // Update cached LoroDoc instance if necessary
+            activeLoroDocuments.set(pubKey, updatedLoroDoc);
+            // Ensure subscription is active (safe to call subscribe again)
+            updatedLoroDoc.subscribe(() => {
+                this._persistLoroUpdateAsync(pubKey, updatedLoroDoc).catch(err => {
+                    console.error(`[Loro Subscribe - Update] Failed to persist update for ${pubKey}:`, err);
+                });
+            });
+
+            triggerDocChangeNotification();
+
+            return snapshotCid; // Return the new snapshot CID
+
         } catch (err) {
             console.error(`Error updating document ${pubKey}:`, err);
             this._setError(`Failed to update document: ${err instanceof Error ? err.message : String(err)}`);
@@ -890,41 +965,47 @@ class HominioDB {
     public get lastError(): string | null { return this._lastError; }
 
     /**
-     * Delete a document
-     * @param pubKey Document public key
-     * @returns True if successful, otherwise throws an error
+     * Delete a document - NO CHANGE NEEDED FOR INDEXING STATE
+     * Assumes hominio-mutate handles permissions and dependency checks.
+     * @param user The user performing the deletion (still needed for potential audit/future rules).
+     * @param pubKey Document public key.
+     * @returns True if successful, otherwise throws an error.
      */
     async deleteDocument(
-        user: CapabilityUser | null,
+        user: CapabilityUser | null, // Keep user for context
         pubKey: string
     ): Promise<boolean> {
         this._setError(null); // Clear error
         try {
             const doc = await this.getDocument(pubKey); // Fetch directly
 
-            if (!doc) { // Check if doc exists
-                throw new Error(`Document ${pubKey} not found for deletion`);
+            if (!doc) {
+                // Allow deleting non-existent docs gracefully?
+                console.warn(`[deleteDocument] Document ${pubKey} not found, assuming deletion successful.`);
+                return true;
             }
 
-            // *** Capability Check ***
-            if (!canDelete(user, doc)) { // Added user argument to canDelete
-                throw new Error('Permission denied: Cannot delete this document');
-            }
-            // *** End Capability Check ***
+            // Permission check is done in hominio-mutate before calling this
+            // if (!canDelete(user, doc)) {
+            //     throw new Error('Permission denied: Cannot delete this document');
+            // }
 
             // Close and cleanup any active LoroDoc instance
             if (activeLoroDocuments.has(pubKey)) {
+                // TODO: Does LoroDoc need explicit closing/cleanup?
                 activeLoroDocuments.delete(pubKey);
             }
 
             // Delete from local storage
             const docsStorage = getDocsStorage();
-            await docsStorage.delete(pubKey);
+            const deleted = await docsStorage.delete(pubKey);
 
-            // Explicitly trigger reactivity *after* deletion
-            docChangeNotifier.update(n => n + 1);
+            // TODO: Optionally garbage collect associated content CIDs?
+            // This is complex - requires tracking CID references.
 
-            return true;
+            triggerDocChangeNotification();
+
+            return deleted; // Return success based on storage deletion
         } catch (err) {
             console.error(`Error deleting document ${pubKey}:`, err);
             this._setError(`Failed to delete document: ${err instanceof Error ? err.message : String(err)}`);
@@ -1307,6 +1388,7 @@ class HominioDB {
 
     /**
      * Updates ONLY the indexingState part of a document's metadata in the local registry.
+     * NO CHANGE NEEDED as it already handles indexingState updates.
      * @param pubKey The public key of the document.
      * @param stateUpdate An object containing the indexingState fields to update.
      */
@@ -1320,27 +1402,13 @@ class HominioDB {
                 console.warn(`[updateDocIndexingState] Document ${pubKey} not found. Cannot update indexing state.`);
                 return;
             }
-
-            // Merge the update with the existing state
             const newIndexingState = { ...currentDoc.indexingState, ...stateUpdate };
-
-            // Create the updated document metadata, ensuring not to modify other fields
             const updatedDocData: Docs = {
                 ...currentDoc,
                 indexingState: newIndexingState,
-                // IMPORTANT: Do NOT update updatedAt here unless specifically intended by the caller
-                // Indexing state changes shouldn't necessarily mark the doc as updated for sync purposes.
             };
-
-            // Persist updated metadata
             const docsStorage = getDocsStorage();
             await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDocData)));
-
-            // Trigger notifier? Maybe not for just indexing state?
-            // Let's assume for now that changes relevant to queries will come from
-            // the index documents themselves changing, not just this metadata.
-            // docChangeNotifier.update(n => n + 1); 
-
         } catch (err) {
             console.error(`[updateDocIndexingState] Failed for doc ${pubKey}:`, err);
             // Don't throw, just log the error. The indexer should handle its own errors.

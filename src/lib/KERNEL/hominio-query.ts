@@ -1,19 +1,17 @@
-import { type LoroDoc, LoroMap, LoroText, LoroList } from 'loro-crdt';
+import { LoroDoc } from 'loro-crdt';
 import {
     getLeafDoc,
     getSchemaDoc,
     getCompositeDoc,
     findCompositeDocsBySchemaAndPlace,
     getDataFromDoc,
-    checkLeafExists,
-    checkSchemaExists
 } from './loro-engine';
 import { canRead, type CapabilityUser } from '$lib/KERNEL/hominio-caps';
-import { docChangeNotifier } from '$lib/KERNEL/hominio-db';
+import { docChangeNotifier, hominioDB } from '$lib/KERNEL/hominio-db';
 import { readable, type Readable, get } from 'svelte/store';
 import { authClient, type getMe as getMeType } from '$lib/KERNEL/hominio-auth';
 import { browser } from '$app/environment';
-import { getIndexLeafPubKey, isIndexLeafDocument } from './index-registry';
+import { getIndexLeafPubKey } from './index-registry';
 
 // FIX: Export PlaceKey
 export type PlaceKey = 'x1' | 'x2' | 'x3' | 'x4' | 'x5';
@@ -21,73 +19,138 @@ export type PlaceKey = 'x1' | 'x2' | 'x3' | 'x4' | 'x5';
 // Refined: Defines how to get a value for an output property
 interface LoroHqlMapValue {
     field?: string;      // Option 1: Direct field access (e.g., "self.metadata.type", "self.data.value")
-    traverse?: LoroHqlTraverse; // Option 2: Traverse relationship
-    resolve?: LoroHqlResolve;
-
-    // Target selection (used *only* inside traverse.map)
-    place?: PlaceKey;  // Specifies the target node's place in the Composite
-
-    // Action on target node (used *only* inside traverse.map, requires 'place')
-    map?: LoroHqlMap;
+    variable?: string; // Option 2: Reference a variable from context
+    literal?: unknown; // Option 3: Use a literal value
 }
 
-// Defines the output structure
-interface LoroHqlMap {
-    [outputKey: string]: LoroHqlMapValue;
-}
+// Defines the output structure (used in select step)
+// interface LoroHqlMap {
+//     [outputKey: string]: LoroHqlMapValue;
+// }
 
 // Filter condition
-interface LoroHqlCondition {
-    equals?: unknown;
-    in?: unknown[];
-}
+// interface LoroHqlCondition { ... }
 
 // Top-level filter for starting nodes
-interface LoroHqlWhereClause {
-    field: string; // Path on the starting node (e.g., "self.metadata.type")
-    condition: LoroHqlCondition;
-}
+// interface LoroHqlWhereClause { ... }
 
 // Filter applied to related nodes during traversal
-interface LoroHqlWhereRelatedClause {
-    place: PlaceKey; // Which related node place to filter
-    field: string;     // Path on the related node (e.g., "self.data.type")
-    condition: LoroHqlCondition;
-}
+// interface LoroHqlWhereRelatedClause { ... }
 
 // Defines a traversal step
-interface LoroHqlTraverse {
-    composite_where: {
-        schemaId: string | '*';
-        place: PlaceKey | '*';
-    };
-    return?: 'array' | 'first';
-    where_related?: LoroHqlWhereRelatedClause[];
-    map: LoroHqlMap;
-}
+// interface LoroHqlTraverse { ... } // REMOVED
 
 // Resolve definition
-interface LoroHqlResolve {
-    fromField: string; // Path in the current node containing the pubkey(s)
-    targetType?: 'leaf' | 'gismu';
-    map: LoroHqlMap;   // Map to apply to the RESOLVED document(s)
-}
+// interface LoroHqlResolve { ... } // REMOVED
 
 // Top-level Query Structure
-export interface LoroHqlQuery {
-    from: {
-        leaf?: string[];          // Renamed from leaf_pubkeys
-        schema?: string[];        // Renamed from gismu_pubkeys
-        composite?: string[];     // Renamed from composite_pubkeys
-    };
-    map: LoroHqlMap;
-    where?: LoroHqlWhereClause[];
+// interface LoroHqlQuery { ... }
+
+// --- NEW Steps-Based Query Engine Types ---
+
+// --- Utility Types ---
+// Define QueryContext to hold variables between steps
+export type QueryContext = Record<string, unknown>;
+
+// Define StepResultItem for arrays produced by find/get steps
+export interface StepResultItem {
+    _sourceKey?: unknown; // Key linking back to the source (e.g., pubkey from 'from', or index in source array)
+    variables: Record<string, unknown>; // Extracted variables for this item
+    // primaryResult?: unknown; // Optional: The main document or composite link object itself?
 }
+
+// Define possible step actions
+type HqlStepAction = 'find' | 'get' | 'select' | 'setVar'; // Added setVar for initial inputs
+
+// Base interface for a query step
+interface LoroHqlStepBase {
+    action: HqlStepAction;
+    // Optional: Name to store the result(s) of this step for later reference in the context
+    resultVariable?: string;
+}
+
+// Step to set initial variables from literals
+interface LoroHqlSetVarStep extends LoroHqlStepBase {
+    action: 'setVar';
+    variables: {
+        [varName: string]: { literal: unknown }; // Define variables with literal values
+    };
+    resultVariable?: undefined; // setVar doesn't produce a primary output array
+}
+
+// Find composites/links based on schema and place values (potentially variables)
+interface LoroHqlFindStep extends LoroHqlStepBase {
+    action: 'find';
+    target: {
+        schema: string | { variable: string }; // Schema pubkey (literal or variable reference)
+        // Specific places to match (can be literals or variables)
+        x1?: string | { variable: string };
+        x2?: string | { variable: string };
+        x3?: string | { variable: string };
+        x4?: string | { variable: string };
+        x5?: string | { variable: string };
+        // OR generic place matching
+        place?: '*'; // Indicate wildcard place
+        value?: string | { variable: string }; // The value (e.g., leaf pubkey) to find in the wildcard place
+        // OR index matching
+        // index?: string; // Name of an index
+        // indexKey?: string | { variable: string };
+    };
+    // Define variables to extract from the found composite(s)
+    variables?: { // Made optional
+        [varName: string]: { source: 'link.x1' | 'link.x2' | 'link.x3' | 'link.x4' | 'link.x5' | 'link.pubkey' | 'link.schemaId' };
+    };
+    return?: 'first' | 'array'; // How many composites to process
+}
+
+// Get details from specific documents (identified by variables)
+interface LoroHqlGetStep extends LoroHqlStepBase {
+    action: 'get';
+    from: { variable: string, sourceKey?: string, targetDocType?: 'Leaf' | 'Schema' | 'Composite' } // Add targetDocType
+    | { pubkey: string | string[] }
+    | { type: 'Leaf' | 'Schema' | 'Composite' }; // Allow getting by variable, direct pubkey(s), or all of type
+    // Define fields to extract into the step's result (and potentially new variables)
+    fields: {
+        [outputName: string]: { field: string }; // e.g., { field: 'self.data.value' } or { field: 'doc.pubkey' }
+    };
+    // Optionally define new variables based on the extracted fields
+    variables?: {
+        [varName: string]: { source: string }; // e.g., { source: 'result.value' } or { source: 'result.id' }
+    };
+    return?: 'first' | 'array'; // Handle multiple inputs/outputs
+}
+
+// Select and structure the final output from context variables
+interface LoroHqlSelectStep extends LoroHqlStepBase {
+    action: 'select';
+    // Define how to combine variables from context into the final result structure
+    // Requires careful design for joining/mapping results from different steps.
+    select: {
+        [outputKey: string]: LoroHqlMapValue; // Use LoroHqlMapValue which includes variable/literal
+    };
+    // Explicitly define how to group/correlate results if needed
+    // Option 1: Group by a variable value
+    groupBy?: string; // Variable name (e.g., 'taskVar')
+    // Option 2: Define explicit join conditions
+    // join?: { on: string; sources: string[]; type: 'inner' | 'left' }; // More complex
+    resultVariable?: undefined; // Select is terminal
+}
+
+// Union type for any step
+type LoroHqlStep = LoroHqlSetVarStep | LoroHqlFindStep | LoroHqlGetStep | LoroHqlSelectStep; // Added LoroHqlSetVarStep
+
+// Redefined top-level query using steps
+export interface LoroHqlQueryExtended {
+    steps: LoroHqlStep[];
+}
+
+// --- END NEW Steps-Based Query Engine Types ---
 
 // Result type
 export type QueryResult = Record<string, unknown>;
-type TraversalResult = QueryResult[] | QueryResult | unknown | null;
+// type TraversalResult = QueryResult[] | QueryResult | unknown | null; // REMOVED unused old type
 
+// Minimal session type needed for reactive query
 type MinimalSession = {
     data?: {
         user?: {
@@ -99,232 +162,39 @@ type MinimalSession = {
 // --- Query Engine Implementation ---
 
 /**
- * Main function to execute a LORO_HQL map-based query.
+ * Selects a field value from a LoroDoc or a plain JS object based on a path string.
+ * Paths like "doc.pubkey" require the pubkey to be passed explicitly.
+ * Paths like "self.data..." or "self.metadata..." operate on the doc/object.
+ * Paths like "link.x1" operate on a composite link object.
+ * Paths like "result.fieldName" operate on an intermediate result object.
  */
-export async function executeQuery(
-    query: LoroHqlQuery,
-    user: CapabilityUser | null = null
-): Promise<QueryResult[]> {
-    const results: QueryResult[] = [];
+function selectFieldValue(
+    source: LoroDoc | Record<string, unknown> | null | undefined,
+    fieldPath: string,
+    docPubKey?: string // Optional: Needed for "doc.pubkey"
+): unknown {
+    if (!source) return undefined;
 
-    // 1. Determine Starting Nodes & Process
-    let startLeafPubkeys = query.from.leaf;
-    let startGismuPubkeys = query.from.schema; // Renamed internal variable for clarity
-    let startCompositePubkeys = query.from.composite;
-
-    // --- Handling Fetch All (Leaf) ---
-    if (startLeafPubkeys && Array.isArray(startLeafPubkeys) && startLeafPubkeys.length === 0) {
-        try {
-            const indexPubKey = await getIndexLeafPubKey('leaves');
-            if (!indexPubKey) {
-                console.error('[Query Engine] Cannot fetch all Leaves: Index pubkey for leaves not available.');
-            } else {
-                const indexDoc = await getLeafDoc(indexPubKey);
-                if (!indexDoc) {
-                    console.warn(`[Query Engine] Index document for leaves (${indexPubKey}) could not be loaded.`);
-                } else {
-                    // FIX: Correctly parse the index Leaf structure (data: { type:'LoroMap', value: LoroMap }) 
-                    const dataMap = indexDoc.getMap('data');
-                    if (!(dataMap instanceof LoroMap)) {
-                        console.warn('[Query Engine] Leaves Index document data container is not a LoroMap.');
-                    } else {
-                        const valueContainer = dataMap.get('value');
-                        if (!(valueContainer instanceof LoroMap)) {
-                            console.warn('[Query Engine] Leaves Index document data.value is not a LoroMap.');
-                        } else {
-                            // Successfully found the value map, get its keys
-                            startLeafPubkeys = Object.keys(valueContainer.toJSON());
-                            console.log(`[Query Engine] Fetched ${startLeafPubkeys?.length ?? 0} Leaf keys from index:`, startLeafPubkeys);
-                        }
-                    }
-                }
-            }
-        } catch (error) {
-            console.error('[Query Engine] Error fetching all Leaves from index:', error);
-        }
-        // Ensure startLeafPubkeys is always an array if it was initially empty array
-        if (startLeafPubkeys && Array.isArray(startLeafPubkeys) && startLeafPubkeys.length === 0 && query.from.leaf?.length === 0) {
-            startLeafPubkeys = []; // Keep it as empty array if fetch failed
-        }
-    } else if (startLeafPubkeys === undefined) {
-        startLeafPubkeys = [];
-    }
-
-    // --- Handling Fetch All (Schema/Gismu) ---
-    if (startGismuPubkeys && Array.isArray(startGismuPubkeys) && startGismuPubkeys.length === 0) {
-        try {
-            const indexPubKey = await getIndexLeafPubKey('schemas');
-            if (!indexPubKey) {
-                console.error('[Query Engine] Cannot fetch all Schemas: Index pubkey for schemas not available.');
-            } else {
-                const indexDoc = await getLeafDoc(indexPubKey);
-                if (!indexDoc) {
-                    console.warn(`[Query Engine] Index document for schemas (${indexPubKey}) could not be loaded.`);
-                } else {
-                    // FIX: Correctly parse the index Leaf structure
-                    const dataMap = indexDoc.getMap('data');
-                    if (!(dataMap instanceof LoroMap)) {
-                        console.warn('[Query Engine] Schemas Index document data container is not a LoroMap.');
-                    } else {
-                        const valueContainer = dataMap.get('value');
-                        if (!(valueContainer instanceof LoroMap)) {
-                            console.warn('[Query Engine] Schemas Index document data.value is not a LoroMap.');
-                        } else {
-                            startGismuPubkeys = Object.keys(valueContainer.toJSON());
-                            console.log(`[Query Engine] Fetched ${startGismuPubkeys.length} Schema keys from index.`);
-                        }
-                    }
-                }
-            }
-        } catch (error) {
-            console.error('[Query Engine] Error fetching all Schemas from index:', error);
-        }
-        // Ensure startGismuPubkeys is always an array if it was initially empty array
-        if (startGismuPubkeys && Array.isArray(startGismuPubkeys) && startGismuPubkeys.length === 0 && query.from.schema?.length === 0) {
-            startGismuPubkeys = [];
-        }
-    } else if (startGismuPubkeys === undefined) {
-        startGismuPubkeys = [];
-    }
-
-    // --- Handling Fetch All (Composite) ---
-    if (startCompositePubkeys && Array.isArray(startCompositePubkeys) && startCompositePubkeys.length === 0) {
-        try {
-            const indexPubKey = await getIndexLeafPubKey('composites');
-            if (!indexPubKey) {
-                console.error('[Query Engine] Cannot fetch all Composites: Index pubkey for composites not available.');
-            } else {
-                const indexDoc = await getLeafDoc(indexPubKey);
-                if (!indexDoc) {
-                    console.warn(`[Query Engine] Index document for composites (${indexPubKey}) could not be loaded.`);
-                } else {
-                    // FIX: Correctly parse the index Leaf structure
-                    const dataMap = indexDoc.getMap('data');
-                    if (!(dataMap instanceof LoroMap)) {
-                        console.warn('[Query Engine] Composites Index document data container is not a LoroMap.');
-                    } else {
-                        const valueContainer = dataMap.get('value');
-                        if (!(valueContainer instanceof LoroMap)) {
-                            console.warn('[Query Engine] Composites Index document data.value is not a LoroMap.');
-                        } else {
-                            startCompositePubkeys = Object.keys(valueContainer.toJSON());
-                            console.log(`[Query Engine] Fetched ${startCompositePubkeys.length} Composite keys from index.`);
-                        }
-                    }
-                }
-            }
-        } catch (error) {
-            console.error('[Query Engine] Error fetching all Composites from index:', error);
-        }
-        // Ensure startCompositePubkeys is always an array if it was initially empty array
-        if (startCompositePubkeys && Array.isArray(startCompositePubkeys) && startCompositePubkeys.length === 0 && query.from.composite?.length === 0) {
-            startCompositePubkeys = [];
-        }
-    } else if (startCompositePubkeys === undefined) {
-        startCompositePubkeys = [];
-    }
-
-    // FIX: Update check message
-    if (startLeafPubkeys.length === 0 && startGismuPubkeys.length === 0 && startCompositePubkeys.length === 0) {
-        console.warn('[Query Engine] No starting keys provided in "from" and failed to fetch keys from index (or index is empty).');
-        return [];
-    }
-
-    // Process Leaf Starting Nodes
-    for (const pubkey of startLeafPubkeys) {
-        if (!isIndexLeafDocument(pubkey)) {
-            const exists = await checkLeafExists(pubkey);
-            if (!exists) {
-                console.log(`[Query Engine] Skipping Leaf ${pubkey}, does not exist in index.`);
-                continue;
-            }
-        }
-        const docMeta = await import('$lib/KERNEL/hominio-db').then(m => m.hominioDB.getDocument(pubkey));
-        if (docMeta && user && !canRead(user, docMeta)) continue;
-        const startDoc = await getLeafDoc(pubkey);
-        console.log(`[Query Engine Debug] Processing Leaf ${pubkey}. startDoc loaded: ${!!startDoc}`);
-        if (!startDoc) {
-            console.warn(`[Query Engine] Failed to load Leaf doc for existing pubkey: ${pubkey}`);
-            continue;
-        }
-        if (query.where && !evaluateWhereClauses(startDoc, query.where, pubkey)) continue;
-        const nodeResult = await processMap(startDoc, query.map, pubkey, user);
-        results.push(nodeResult);
-    }
-
-    // Process Schema (Gismu) Starting Nodes
-    for (const pubkey of startGismuPubkeys) {
-        if (!isIndexLeafDocument(pubkey)) {
-            const exists = await checkSchemaExists(pubkey);
-            if (!exists) {
-                console.log(`[Query Engine] Skipping Schema ${pubkey}, does not exist in index.`);
-                continue;
-            }
-        }
-        const docMeta = await import('$lib/KERNEL/hominio-db').then(m => m.hominioDB.getDocument(pubkey));
-        if (docMeta && user && !canRead(user, docMeta)) continue;
-        const startDoc = await getSchemaDoc(pubkey);
-        if (!startDoc) continue;
-        if (query.where && !evaluateWhereClauses(startDoc, query.where, pubkey)) continue;
-        const nodeResult = await processMap(startDoc, query.map, pubkey, user);
-        results.push(nodeResult);
-    }
-
-    // Process Composite Starting Nodes
-    for (const pubkey of startCompositePubkeys) {
-        let docMeta;
-        try {
-            docMeta = await import('$lib/KERNEL/hominio-db').then(m => m.hominioDB.getDocument(pubkey));
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        } catch (_e) { continue; }
-        if (docMeta && user && !canRead(user, docMeta)) continue;
-        const startDoc = await getCompositeDoc(pubkey);
-        if (!startDoc) continue;
-        if (query.where && !evaluateWhereClauses(startDoc, query.where, pubkey)) continue;
-        try {
-            const nodeResult = await processMap(startDoc, query.map, pubkey, user);
-            results.push(nodeResult);
-        } catch (mapError) { console.error(`[Query Engine] Error processing map for Composite ${pubkey}:`, mapError); continue; }
-    }
-
-    return results;
-}
-
-/**
- * Processes a `map` object for a given LoroDoc.
- */
-async function processMap(
-    currentDoc: LoroDoc,
-    mapDefinition: LoroHqlMap,
-    docPubKey: string,
-    user: CapabilityUser | null
-): Promise<QueryResult> {
-    const result: QueryResult = {};
-    const mapEntries = Object.entries(mapDefinition);
-
-    for (const [outputKey, valueDefinition] of mapEntries) {
-        if (valueDefinition.field) {
-            result[outputKey] = selectFieldValue(currentDoc, valueDefinition.field, docPubKey);
-        } else if (valueDefinition.traverse) {
-            let traverseResult: TraversalResult = await processTraversal(currentDoc, valueDefinition.traverse, docPubKey, user);
-            if (valueDefinition.traverse.return === 'first' && traverseResult && typeof traverseResult === 'object' && !Array.isArray(traverseResult) && Object.keys(traverseResult).length === 1) {
-                traverseResult = Object.values(traverseResult)[0];
-            }
-            result[outputKey] = traverseResult;
-        } else if (valueDefinition.resolve) {
-            result[outputKey] = await processResolve(currentDoc, valueDefinition.resolve, user);
-        }
-    }
-    return result;
-}
-
-/**
- * Selects a field value from a LoroDoc based on a path string (e.g., "self.metadata.type").
- */
-function selectFieldValue(doc: LoroDoc, fieldPath: string, docPubKey: string): unknown {
     if (fieldPath === 'doc.pubkey') return docPubKey;
-    if (!fieldPath || !fieldPath.startsWith('self.')) {
-        console.warn(`Invalid field path: "${fieldPath}". Must start with "self." or be "doc.pubkey".`);
+
+    // Handle direct access on non-LoroDoc objects (like intermediate results or composite links)
+    if (!(source instanceof LoroDoc)) {
+        const pathParts = fieldPath.split('.');
+        let currentValue: unknown = source;
+        for (const part of pathParts) {
+            if (currentValue === undefined || currentValue === null) return undefined;
+            if (typeof currentValue === 'object' && currentValue !== null) {
+                currentValue = (currentValue as Record<string, unknown>)[part];
+            } else {
+                return undefined; // Cannot access property on non-object
+            }
+        }
+        return currentValue;
+    }
+
+    // Handle LoroDoc access
+    if (!fieldPath.startsWith('self.')) {
+        console.warn(`[selectFieldValue] Invalid field path for LoroDoc: "${fieldPath}". Must start with "self." or be "doc.pubkey".`);
         return undefined;
     }
 
@@ -333,24 +203,27 @@ function selectFieldValue(doc: LoroDoc, fieldPath: string, docPubKey: string): u
     let relativePath: string;
 
     if (path.startsWith('metadata.')) {
-        baseObject = doc.getMap('metadata')?.toJSON();
+        baseObject = source.getMap('metadata')?.toJSON();
         relativePath = path.substring(9);
     } else if (path.startsWith('data.')) {
-        baseObject = getDataFromDoc(doc);
+        baseObject = getDataFromDoc(source); // Assumes getDataFromDoc handles Loro types correctly
         relativePath = path.substring(5);
     } else if (path === 'metadata') {
-        baseObject = doc.getMap('metadata')?.toJSON();
+        baseObject = source.getMap('metadata')?.toJSON();
         relativePath = '';
     } else if (path === 'data') {
-        baseObject = getDataFromDoc(doc);
+        baseObject = getDataFromDoc(source);
         relativePath = '';
     } else {
-        baseObject = doc.getMap('metadata')?.toJSON();
+        // Default to accessing metadata if no prefix?
+        console.warn(`[selectFieldValue] Ambiguous path for LoroDoc: "${fieldPath}". Assuming metadata access.`);
+        baseObject = source.getMap('metadata')?.toJSON();
         relativePath = path;
     }
 
-    if (!relativePath) {
-        if (path === 'data') return baseObject;
+    if (baseObject === undefined || baseObject === null) return undefined;
+
+    if (!relativePath) { // Path was just 'self.metadata' or 'self.data'
         return baseObject;
     }
 
@@ -360,339 +233,572 @@ function selectFieldValue(doc: LoroDoc, fieldPath: string, docPubKey: string): u
     for (const part of pathParts) {
         if (currentValue === undefined || currentValue === null) return undefined;
 
-        if (typeof currentValue === 'object' && currentValue !== null && 'type' in currentValue && 'value' in currentValue && path.startsWith('data.')) {
-            if (part === 'type' || part === 'value') {
-                currentValue = (currentValue as Record<string, unknown>)[part];
-                continue;
-            }
-            if (typeof (currentValue as { value: unknown }).value === 'object' && (currentValue as { value: unknown }).value !== null) {
-                currentValue = ((currentValue as { value: Record<string, unknown> }).value)[part];
-                continue;
-            }
-        }
-
+        // Handle nested access within plain JS objects returned by toJSON() or getDataFromDoc()
         if (typeof currentValue === 'object' && currentValue !== null) {
             currentValue = (currentValue as Record<string, unknown>)[part];
-        } else if (currentValue instanceof LoroMap) {
-            currentValue = currentValue.get(part);
-        } else if (currentValue instanceof LoroList) {
-            const index = parseInt(part, 10);
-            if (!isNaN(index) && index >= 0) {
-                // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                try { currentValue = currentValue.get(index) as unknown; } catch (_e) { return undefined; }
-            } else { return undefined; }
-        } else if (currentValue instanceof LoroText) {
-            return undefined;
         } else {
-            return undefined;
+            return undefined; // Cannot access property on primitive
         }
-    }
-
-    if (currentValue instanceof LoroText) return currentValue.toString();
-    if (currentValue instanceof LoroMap || currentValue instanceof LoroList) {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        try { return currentValue.toJSON(); } catch (_e) { return undefined; }
     }
 
     return currentValue;
 }
 
-/**
- * Processes a 'traverse' instruction starting from the sourceDoc.
- */
-async function processTraversal(
-    sourceDoc: LoroDoc,
-    traverseDefinition: LoroHqlTraverse,
-    sourcePubKey: string,
+// Helper to resolve a variable reference or return a literal
+function resolveValue(value: string | { variable: string } | undefined, context: QueryContext): string | undefined {
+    if (typeof value === 'object' && value !== null && 'variable' in value && value.variable) {
+        const resolved = context[value.variable];
+        return typeof resolved === 'string' ? resolved : undefined;
+    } else if (typeof value === 'string') {
+        return value;
+    }
+    return undefined; // Return undefined if value is undefined or invalid format
+}
+
+// Helper function for processing a find step
+async function processFindStep(
+    step: LoroHqlFindStep,
+    context: QueryContext
+): Promise<QueryContext> {
+    console.log(`[Query Engine] Processing FIND step: Target=${JSON.stringify(step.target)}`);
+    const updatedContext = { ...context };
+    const stepResults: StepResultItem[] = [];
+
+    const schemaId = resolveValue(step.target.schema, context);
+    if (!schemaId) {
+        throw new Error(`Find step failed: Schema ID is required and could not be resolved.`);
+    }
+
+    let foundComposites: { pubkey: string; doc: LoroDoc }[] = [];
+
+    // --- Determine Find Strategy --- 
+    if (step.target.place === '*' && step.target.value) {
+        // Wildcard place find (potentially slow)
+        console.warn("[Query Engine] Find step using wildcard place is not optimized yet.");
+        const targetValue = resolveValue(step.target.value, context);
+        if (!targetValue) throw new Error("Find step failed: Value required for wildcard place find.");
+        // TODO: Implement wildcard find (e.g., iterate all composites or use a dedicated index)
+    } else if (step.target.x1 || step.target.x2 || step.target.x3 || step.target.x4 || step.target.x5) {
+        // Specific place find
+        const placeKey = (Object.keys(step.target).find(k => k.startsWith('x') && step.target[k as PlaceKey]) as PlaceKey | undefined);
+        const placeValue = placeKey ? resolveValue(step.target[placeKey], context) : undefined;
+        if (placeKey && placeValue) {
+            console.log(`[Query Engine] Finding composites by schema '${schemaId}' and place '${placeKey}'='${placeValue}'`);
+            foundComposites = await findCompositeDocsBySchemaAndPlace(schemaId, placeKey, placeValue);
+        } else {
+            // A place key (x1-x5) was specified in the query, but its value couldn't be resolved.
+            // This implies an intentional filter for a specific place that resolved to undefined/null.
+            // So, we should find nothing in this case.
+            console.warn(`[Query Engine] Find step specified place '${placeKey}' but value resolved to undefined/null. Finding 0 items.`);
+            foundComposites = [];
+        }
+
+    } else {
+        // --- Find by schema only (IMPLEMENTED) --- 
+        console.log(`[Query Engine] Finding all composites with schema '${schemaId}'...`);
+        const compositesIndexKey = await getIndexLeafPubKey('composites');
+        if (!compositesIndexKey) {
+            throw new Error("Find step failed: Could not find pubkey for 'composites' index leaf.");
+        }
+        const indexDoc = await getLeafDoc(compositesIndexKey);
+        if (!indexDoc) {
+            throw new Error(`Find step failed: Could not load 'composites' index document (${compositesIndexKey}).`);
+        }
+        const indexData = getDataFromDoc(indexDoc) as { value: Record<string, true> } | undefined;
+        if (!indexData || typeof indexData.value !== 'object' || indexData.value === null) {
+            throw new Error(`Find step failed: 'composites' index document (${compositesIndexKey}) has invalid data format. Expected object with a 'value' map.`);
+        }
+
+        const allCompositePubKeys = Object.keys(indexData.value);
+        console.log(`[Query Engine] Found ${allCompositePubKeys.length} total composites in index. Filtering by schema...`);
+        const matchingComposites: { pubkey: string; doc: LoroDoc }[] = [];
+
+        for (const compPubKey of allCompositePubKeys) {
+            try {
+                const compDoc = await hominioDB.getLoroDoc(compPubKey);
+                if (!compDoc) {
+                    console.warn(`[Query Engine] Find by schema: Could not load composite doc ${compPubKey}. Skipping.`);
+                    continue;
+                }
+                const compData = getDataFromDoc(compDoc) as { schemaId: string; places: Record<PlaceKey, string> } | undefined;
+                if (compData?.schemaId === schemaId) {
+                    matchingComposites.push({ pubkey: compPubKey, doc: compDoc });
+                }
+            } catch (loadError) {
+                console.warn(`[Query Engine] Find by schema: Error loading composite doc ${compPubKey}:`, loadError);
+            }
+        }
+        foundComposites = matchingComposites;
+        console.log(`[Query Engine] Found ${foundComposites.length} composites matching schema '${schemaId}'.`);
+    }
+
+    // --- Extract Variables --- 
+    for (const composite of foundComposites) {
+        const compositePubKey = composite.pubkey;
+        const compositeData = getDataFromDoc(composite.doc) as { schemaId: string; places: Record<PlaceKey, string> } | undefined;
+        if (!compositeData) continue;
+
+        const extractedVars: Record<string, unknown> = {};
+        if (step.variables) {
+            for (const [varName, sourceDef] of Object.entries(step.variables)) {
+                if (sourceDef.source === 'link.pubkey') {
+                    extractedVars[varName] = compositePubKey;
+                } else if (sourceDef.source === 'link.schemaId') {
+                    extractedVars[varName] = compositeData.schemaId;
+                } else if (sourceDef.source.startsWith('link.x')) {
+                    const place = sourceDef.source.substring(5) as PlaceKey;
+                    extractedVars[varName] = compositeData.places?.[place];
+                }
+            }
+        }
+        stepResults.push({ _sourceKey: compositePubKey, variables: extractedVars });
+
+        // Also add extracted variables directly to the main context, potentially prefixed?
+        // This makes them easily accessible for subsequent steps without knowing the resultVariable.
+        // Needs careful design to avoid clashes and handle arrays.
+        // Example: updatedContext[`${step.resultVariable ?? 'find'}_${compositePubKey}_${varName}`] = extractedVars[varName];
+        // For now, rely on processing stepResults in the 'select' step.
+    }
+
+    if (step.resultVariable) {
+        updatedContext[step.resultVariable] = step.return === 'first' ? (stepResults[0] ?? null) : stepResults;
+    }
+
+    console.log(`[Query Engine] FIND step finished. Found ${stepResults.length} items.`);
+    return updatedContext;
+}
+
+// Helper function for processing a get step
+async function processGetStep(
+    step: LoroHqlGetStep,
+    context: QueryContext,
     user: CapabilityUser | null
-): Promise<QueryResult[] | QueryResult | null> {
-    if (!sourcePubKey) return traverseDefinition.return === 'first' ? null : [];
+): Promise<QueryContext> {
+    console.log(`[Query Engine] Processing GET step: From=${JSON.stringify(step.from)}`);
+    const updatedContext = { ...context };
+    const stepResults: StepResultItem[] = [];
+    let pubKeysToFetch: string[] = [];
+    let sourceType: 'Leaf' | 'Schema' | 'Composite' | null = null;
 
-    const compositeWhere = traverseDefinition.composite_where;
-    console.log(`[Query Traversal] Starting from source Leaf/Schema: ${sourcePubKey}, Composite schemaId: ${compositeWhere.schemaId}, source place: ${compositeWhere.place}`);
+    // --- Determine PubKeys to Fetch --- 
+    if ('variable' in step.from) {
+        const sourceData = context[step.from.variable];
+        const sourceKey = step.from.sourceKey; // Get the optional sourceKey
+        console.log(`[Query Engine] GET step: Fetching from variable '${step.from.variable}'${sourceKey ? ` using sourceKey '${sourceKey}'` : ''}`);
 
-    let compositeMatches: { pubkey: string; doc: LoroDoc }[] = [];
-    const schemaWildcard = compositeWhere.schemaId === '*';
-    const placeWildcard = compositeWhere.place === '*';
-    const sourcePlaceInComposite = compositeWhere.place;
+        // FIX: Type check sourceData more carefully and use sourceKey if provided
+        if (Array.isArray(sourceData)) {
+            pubKeysToFetch = sourceData
+                .map(item => {
+                    if (typeof item !== 'object' || item === null) return null; // Skip non-objects
 
-    // [Logging Point 1: Before finding composites]
-    console.log(`[Query Traversal Detail] Finding composites for source ${sourcePubKey} (Schema: ${compositeWhere.schemaId}, Place: ${sourcePlaceInComposite})`);
+                    let pubkey: string | undefined | null = null;
 
-    if (schemaWildcard) {
-        console.warn(`[Query Engine] Traversing with Composite schemaId wildcard (place: ${sourcePlaceInComposite}) from ${sourcePubKey}. This may be slow.`);
-        try {
-            // 1. Get the 'composites' index pubkey
-            const indexPubKey = await getIndexLeafPubKey('composites');
-            console.log(`[Query Traversal Wildcard Debug] Index PubKey for 'composites': ${indexPubKey}`); // DEBUG LOG 1
-            if (indexPubKey) {
-                // 2. Get the 'composites' index Leaf document
-                const indexDoc = await getLeafDoc(indexPubKey);
-                if (indexDoc) {
-                    // 3. Extract all composite pubkeys from the index Leaf's data.value
-                    // FIX: Correctly read the { type: 'LoroMap', value: LoroMap } structure
-                    const indexDocData = getDataFromDoc(indexDoc) as { type: string, value?: Record<string, unknown> } | undefined;
-                    let allCompositePubkeys: string[] = [];
-                    if (indexDocData && indexDocData.type === 'LoroMap' && indexDocData.value) {
-                        allCompositePubkeys = Object.keys(indexDocData.value);
-                    } else {
-                        console.warn(`[Query Traversal Wildcard Debug] Index doc ${indexPubKey} data structure unexpected:`, indexDocData);
+                    // 1. If sourceKey is provided, prioritize extracting from item.variables[sourceKey]
+                    if (sourceKey && 'variables' in item && typeof item.variables === 'object' && item.variables !== null) {
+                        const potentialPubkey = (item.variables as Record<string, unknown>)[sourceKey];
+                        if (typeof potentialPubkey === 'string') {
+                            pubkey = potentialPubkey;
+                        }
                     }
 
-                    console.log(`[Query Traversal Wildcard Debug] Found ${allCompositePubkeys.length} total composite keys in index:`, allCompositePubkeys); // DEBUG LOG 2
+                    // 2. If pubkey still not found, try previous logic (item.variables.pubkey or item.pubkey)
+                    if (!pubkey) {
+                        if ('variables' in item && typeof item.variables === 'object' && item.variables !== null && typeof (item.variables as Record<string, unknown>).pubkey === 'string') {
+                            pubkey = (item.variables as { pubkey: string }).pubkey;
+                        } else if (typeof (item as Record<string, unknown>)?.pubkey === 'string') {
+                            pubkey = (item as { pubkey: string }).pubkey;
+                        } else if (typeof item === 'string') { // Check if item itself is a pubkey string
+                            pubkey = item;
+                        }
+                    }
 
-                    // 4. Loop through every composite pubkey found
-                    for (const compositePubKey of allCompositePubkeys) {
-                        console.log(`[Query Traversal Wildcard Debug] Checking Composite PubKey: ${compositePubKey}`); // DEBUG LOG 3
-                        const compositeDoc = await getCompositeDoc(compositePubKey);
-                        if (compositeDoc) {
-                            // 5. Get data from the actual composite document
-                            const compositeData = getDataFromDoc(compositeDoc) as { schemaId: string; places: Record<string, string> } | undefined;
-                            console.log(`[Query Traversal Wildcard Debug]   - Extracted places:`, compositeData?.places); // DEBUG LOG 4
-                            if (compositeData?.places) {
-                                // 6. Check if the sourcePubKey matches any place (since place='*')
-                                if (placeWildcard) {
-                                    const placesToCheck: PlaceKey[] = ['x1', 'x2', 'x3', 'x4', 'x5'];
-                                    for (const place of placesToCheck) {
-                                        const placeValue = compositeData.places[place];
-                                        console.log(`[Query Traversal Wildcard Debug]   - Comparing place '${place}' value '${placeValue}' === '${sourcePubKey}'`); // DEBUG LOG 5
-                                        // 7. Compare the Leaf ID in the place with the sourcePubKey
-                                        if (placeValue === sourcePubKey) {
-                                            console.log(`[Query Traversal Wildcard Debug]   - MATCH FOUND for place ${place}!`);
-                                            compositeMatches.push({ pubkey: compositePubKey, doc: compositeDoc });
-                                            break; // Found a match, move to next composite
-                                        }
-                                    }
-                                } else {
-                                    if (compositeData.places[sourcePlaceInComposite] === sourcePubKey) {
-                                        compositeMatches.push({ pubkey: compositePubKey, doc: compositeDoc });
-                                    }
-                                }
+                    return pubkey;
+                })
+                .filter((pubkey): pubkey is string => typeof pubkey === 'string' && pubkey !== ''); // Ensure not null/empty
+
+        } else if (typeof sourceData === 'object' && sourceData !== null) {
+            let pubkey: string | undefined | null = null;
+            // Similar logic for single object case
+            if (sourceKey && 'variables' in sourceData && typeof sourceData.variables === 'object' && sourceData.variables !== null) {
+                const potentialPubkey = (sourceData.variables as Record<string, unknown>)[sourceKey];
+                if (typeof potentialPubkey === 'string') {
+                    pubkey = potentialPubkey;
+                }
+            }
+            if (!pubkey) {
+                if ('variables' in sourceData && typeof sourceData.variables === 'object' && sourceData.variables !== null && typeof (sourceData.variables as Record<string, unknown>).pubkey === 'string') {
+                    pubkey = (sourceData.variables as { pubkey: string }).pubkey;
+                } else if (typeof (sourceData as Record<string, unknown>)?.pubkey === 'string') {
+                    pubkey = (sourceData as { pubkey: string }).pubkey;
+                } else if (typeof sourceData === 'string') {
+                    pubkey = sourceData;
+                }
+            }
+
+            if (typeof pubkey === 'string' && pubkey !== '') {
+                pubKeysToFetch = [pubkey];
+            } else {
+                console.warn(`[Query Engine] GET step: Variable '${step.from.variable}' contains single object without identifiable pubkey${sourceKey ? ` using sourceKey '${sourceKey}'` : ''}:`, sourceData);
+            }
+        } else if (typeof sourceData === 'string') { // Check if sourceData itself is a pubkey
+            pubKeysToFetch = [sourceData];
+        } else {
+            console.warn(`[Query Engine] GET step: Variable '${step.from.variable}' contains unexpected data type:`, sourceData);
+        }
+    } else if ('pubkey' in step.from) {
+        pubKeysToFetch = Array.isArray(step.from.pubkey) ? step.from.pubkey : [step.from.pubkey];
+    } else if ('type' in step.from) {
+        // FIX: Remove unimplemented getAllDocsOfType logic
+        sourceType = step.from.type;
+        console.error(`[Query Engine] GET step 'by type' (${sourceType}) is not implemented. Use FIND steps with index lookups instead.`);
+        throw new Error(`Get step failed: Cannot fetch all docs of type ${sourceType}. Feature not implemented.`);
+        // try {
+        //     pubKeysToFetch = await getAllDocsOfType(sourceType);
+        // } catch (e) { throw new Error(`Get step failed: Could not fetch all docs of type ${sourceType}. ${e}`); }
+    }
+
+    if (pubKeysToFetch.length === 0) {
+        console.log("[Query Engine] GET step: No pubkeys to fetch.");
+        if (step.resultVariable) updatedContext[step.resultVariable] = step.return === 'first' ? null : []; // Set to null or empty array
+        return updatedContext;
+    }
+
+    // --- Fetch Documents and Extract Data --- 
+    for (const pubKey of pubKeysToFetch) {
+        if (!pubKey) continue; // Skip null/empty pubkeys
+        let doc: LoroDoc | null = null;
+        try {
+            // Determine document type if not explicitly given
+            // Use targetDocType from the step definition if available
+            const docType = sourceType ?? ('targetDocType' in step.from ? step.from.targetDocType : null);
+
+            if (!docType) {
+                // TODO: Could potentially try fetching metadata here to determine type, but adds overhead.
+                console.error(`[Query Engine] GET step: Document type cannot be determined for pubkey ${pubKey}. Specify type in 'from.type' or 'from.targetDocType'.`);
+                throw new Error(`Cannot determine document type for GET operation on pubkey ${pubKey}`);
+            }
+
+            console.log(`[Query Engine] GET step: Fetching pubkey ${pubKey} as type ${docType}`); // Log determined type
+
+            // Fetch based on type
+            if (docType === 'Leaf') doc = await getLeafDoc(pubKey);
+            else if (docType === 'Schema') doc = await getSchemaDoc(pubKey);
+            else if (docType === 'Composite') doc = await getCompositeDoc(pubKey);
+            else {
+                console.warn(`[Query Engine] GET step: Unsupported document type ${docType} for pubkey ${pubKey}`);
+                continue; // Skip unsupported types
+            }
+
+            if (!doc) {
+                console.warn(`[Query Engine] GET step: Failed to load doc for pubkey ${pubKey} (type: ${docType})`);
+                continue; // Skip if doc fetch fails
+            }
+
+            // Permission Check (Requires fetching metadata - potential optimization needed)
+            const docMeta = await import('$lib/KERNEL/hominio-db').then(m => m.hominioDB.getDocument(pubKey));
+            if (docMeta && !canRead(user, docMeta)) {
+                console.log(`[Query Engine] GET step: Permission denied for ${pubKey}.`);
+                continue; // Skip documents user cannot read
+            }
+
+            // Extract fields
+            const extractedFields: QueryResult = {};
+            for (const [outputName, fieldDef] of Object.entries(step.fields)) {
+                extractedFields[outputName] = selectFieldValue(doc, fieldDef.field, pubKey);
+            }
+
+            // Extract variables
+            const extractedVars: Record<string, unknown> = {};
+            if (step.variables) {
+                for (const [varName, sourceDef] of Object.entries(step.variables)) {
+                    // Assuming source like 'result.fieldName' refers to extractedFields
+                    if (sourceDef.source.startsWith('result.')) {
+                        const fieldName = sourceDef.source.substring(7);
+                        extractedVars[varName] = extractedFields[fieldName];
+                    } else {
+                        // Allow selecting directly from doc as well?
+                        extractedVars[varName] = selectFieldValue(doc, sourceDef.source, pubKey);
+                    }
+                }
+            }
+
+            // Combine fields and variables for the step result item
+            // Store under _sourceKey for potential correlation later
+            stepResults.push({ _sourceKey: pubKey, variables: { ...extractedFields, ...extractedVars } });
+
+        } catch (err) {
+            console.error(`[Query Engine] GET step: Error processing pubkey ${pubKey}:`, err);
+            // Optionally skip or halt based on error strategy
+        }
+    }
+
+    if (step.resultVariable) {
+        updatedContext[step.resultVariable] = step.return === 'first' ? (stepResults[0] ?? null) : stepResults;
+    }
+    console.log(`[Query Engine] GET step finished. Processed ${stepResults.length} items.`);
+    return updatedContext;
+}
+
+// Helper function for processing a select step
+async function processSelectStep(
+    step: LoroHqlSelectStep,
+    context: QueryContext // Use defined type
+    // REMOVED unused _user parameter
+): Promise<QueryResult[]> {
+    console.log(`[Query Engine] Processing SELECT step: GroupBy=${step.groupBy}, Select=${JSON.stringify(step.select)}`);
+    const finalResults: QueryResult[] = [];
+
+    if (!step.groupBy) {
+        // Simple select - assumes context holds a single result object or requires iterating a specific variable?
+        console.warn("Simple SELECT step (no groupBy) needs clear definition on what context variable to use.");
+        // Example: Assume a single result object in context under a known key like 'finalData'?
+        // Or iterate over the result of the *last* step that set resultVariable?
+        // For now, return context as a single item for debugging.
+        return [context as QueryResult];
+    }
+
+    // --- Grouping Logic --- 
+    const groupByVar = step.groupBy;
+    // Find the context variable that contains the array defining the groups
+    // This needs a clear rule - e.g., assume it's the resultVariable of the first step?
+    // Or maybe the step explicitly names the sourceVariable?
+
+    // Find a context entry that is an array of StepResultItem
+    let sourceArray: StepResultItem[] | null = null; // Use defined type
+    let sourceVarName: string | null = null;
+    for (const [key, value] of Object.entries(context)) {
+        // Check if it's an array of potential StepResultItems
+        if (Array.isArray(value) && value.length > 0 && typeof value[0] === 'object' && value[0] !== null && 'variables' in value[0]) {
+            const potentialSourceArray = value as StepResultItem[]; // Tentative cast
+            // Check if items in this array actually have the groupBy variable
+            if (potentialSourceArray.some(item => typeof item === 'object' && item !== null && 'variables' in item && groupByVar in item.variables)) {
+                sourceArray = potentialSourceArray;
+                sourceVarName = key;
+                break;
+            }
+        }
+    }
+
+
+    if (!sourceArray || !sourceVarName) {
+        console.error(`[Query Engine] SELECT step failed: Could not find source array in context containing groupBy variable '${groupByVar}'. Context:`, JSON.stringify(context));
+        return [];
+    }
+    console.log(`[Query Engine] SELECT: Grouping based on variable '${groupByVar}' found in context.'${sourceVarName}'.`);
+
+    // Build groups Map<groupKey, correlatedContext>
+    const groupedData = new Map<unknown, QueryContext>(); // Use defined type
+
+    // 1. Initialize groups from the source array
+    for (const item of sourceArray) {
+        // Ensure item is a valid StepResultItem before accessing variables
+        if (typeof item !== 'object' || item === null || !('variables' in item)) continue;
+
+        const groupKey = item.variables[groupByVar];
+        if (groupKey === undefined) continue; // Skip items without the group key
+
+        if (!groupedData.has(groupKey)) {
+            groupedData.set(groupKey, {}); // Initialize group context
+        }
+        const groupContext = groupedData.get(groupKey)!;
+        // Add variables from this source item to the group context, prefixed with sourceVarName
+        for (const [varName, varValue] of Object.entries(item.variables)) {
+            groupContext[`${sourceVarName}_${varName}`] = varValue;
+            // Also add the groupBy variable without prefix for easy access
+            if (varName === groupByVar) {
+                groupContext[varName] = varValue;
+            }
+        }
+        // Store the raw source item itself? Might be useful but increases context size.
+        // groupContext[sourceVarName] = item; 
+    }
+
+    // 2. Correlate data from OTHER context arrays and FLATTEN relevant fields
+    // Find potential data arrays in the context (hardcoded for now, needs generalization)
+    const statusDetailsArray = context['statusDetails'] as StepResultItem[] | undefined;
+    const entityNameLinksArray = context['entityNameLinks'] as StepResultItem[] | undefined;
+    const nameDetailsArray = context['nameDetails'] as StepResultItem[] | undefined;
+
+    // --- Log the content of the arrays being searched --- 
+    console.log(`[Query Engine] SELECT Correlate: statusDetailsArray content:`, JSON.stringify(statusDetailsArray));
+    console.log(`[Query Engine] SELECT Correlate: nameDetailsArray content:`, JSON.stringify(nameDetailsArray));
+    // --------------------------------------------------
+
+    // Iterate through each initialized group
+    for (const [groupKey, groupContext] of groupedData.entries()) {
+        console.log(`[Query Engine] SELECT Correlate: Processing groupKey (taskVar): ${groupKey}`); // Log group key
+
+        // --- Correlate Status --- 
+        const targetStatusLeafVar = groupContext[`${sourceVarName}_statusLeafVar`];
+        console.log(`[Query Engine] SELECT Correlate: Target statusLeafVar: ${targetStatusLeafVar}`); // Log target status leaf
+        if (statusDetailsArray && targetStatusLeafVar) { // Check target exists
+            const statusItem = statusDetailsArray.find(item =>
+                item._sourceKey === targetStatusLeafVar
+            );
+            console.log(`[Query Engine] SELECT Correlate: Found statusItem by _sourceKey: ${JSON.stringify(statusItem?.variables)}`); // Log found status item
+            if (statusItem && statusItem.variables?.statusValue !== undefined) {
+                groupContext['status'] = statusItem.variables.statusValue; // Flatten directly
+                console.log(`[Query Engine] SELECT Correlate: Flattened status: ${groupContext['status']}`); // Log flattened value
+            } else {
+                console.log(`[Query Engine] SELECT Correlate: Could not flatten status.`);
+            }
+        } else {
+            console.log(`[Query Engine] SELECT Correlate: Skipping status (missing statusDetailsArray or targetStatusLeafVar)`);
+        }
+
+        // --- Correlate Name (Multi-step) --- 
+        console.log(`[Query Engine] SELECT Correlate: Finding entityLink for groupKey: ${groupKey}`);
+        if (entityNameLinksArray && nameDetailsArray) {
+            // a) Find the entityNameLink for this groupKey (taskVar)
+            const entityLinkItem = entityNameLinksArray.find(item =>
+                item.variables?.entityVar === groupKey
+            );
+            console.log(`[Query Engine] SELECT Correlate: Found entityLinkItem: ${JSON.stringify(entityLinkItem?.variables)}`); // Log found link item
+            if (entityLinkItem && entityLinkItem.variables?.nameLeafVar) {
+                const targetNameLeafVar = entityLinkItem.variables.nameLeafVar;
+                console.log(`[Query Engine] SELECT Correlate: Target nameLeafVar: ${targetNameLeafVar}`); // Log target name leaf
+                // b) Find the nameDetail using the nameLeafVar from the link
+                const nameItem = nameDetailsArray.find(item =>
+                    item._sourceKey === targetNameLeafVar
+                );
+                console.log(`[Query Engine] SELECT Correlate: Found nameItem by _sourceKey: ${JSON.stringify(nameItem?.variables)}`); // Log found name item
+                if (nameItem && nameItem.variables?.nameValue !== undefined) {
+                    groupContext['name'] = nameItem.variables.nameValue; // Flatten directly
+                    console.log(`[Query Engine] SELECT Correlate: Flattened name: ${groupContext['name']}`); // Log flattened value
+                } else {
+                    console.log(`[Query Engine] SELECT Correlate: Could not flatten name.`);
+                }
+            } else {
+                console.log(`[Query Engine] SELECT Correlate: Skipping name correlation step b (missing entityLinkItem or targetNameLeafVar)`);
+            }
+        } else {
+            console.log(`[Query Engine] SELECT Correlate: Skipping name correlation (missing entityNameLinksArray or nameDetailsArray)`);
+        }
+
+        // TODO: Generalize this correlation logic beyond hardcoded variable names
+    }
+
+
+    // 3. Construct final results from grouped and flattened data
+    for (const [groupKey, groupContext] of groupedData.entries()) {
+        const resultItem: QueryResult = {};
+        console.log(`[Query Engine] SELECT: Processing group key:`, groupKey);
+        // console.log(`[Query Engine] SELECT: Group context:`, groupContext);
+
+        for (const [outputKey, valueDef] of Object.entries(step.select)) {
+            if (typeof valueDef === 'object' && valueDef !== null) {
+                // Resolve variable: Now expects flattened names like 'status', 'name', or prefixed like 'taskStatusLinks_statusLeafVar'
+                if ('variable' in valueDef && typeof valueDef.variable === 'string') {
+                    const varName = valueDef.variable;
+                    // Direct access on the potentially flattened groupContext
+                    resultItem[outputKey] = groupContext[varName];
+                } else if ('literal' in valueDef) {
+                    resultItem[outputKey] = valueDef.literal;
+                } else if ('field' in valueDef && typeof valueDef.field === 'string') {
+                    // Field access remains difficult without storing the original documents in context.
+                    console.warn(`[Query Engine] SELECT: Direct 'field' usage in select step remains problematic.`);
+                    // const sourceItem = groupContext[sourceVarName!] as StepResultItem | undefined; 
+                    // ... lookup logic ...
+                } else {
+                    console.warn(`[Query Engine] SELECT: Unsupported value definition for key '${outputKey}':`, valueDef);
+                }
+            } else {
+                console.warn(`[Query Engine] SELECT: Invalid value definition for key '${outputKey}':`, valueDef);
+            }
+        }
+        finalResults.push(resultItem);
+    }
+
+    console.log(`[Query Engine] SELECT step finished. Produced ${finalResults.length} results.`);
+    return finalResults;
+}
+
+
+/**
+ * Main function to execute a LORO_HQL steps-based query.
+ */
+export async function executeQuery(
+    query: LoroHqlQueryExtended, // Only accept the new steps-based format
+    user: CapabilityUser | null = null
+): Promise<QueryResult[]> {
+    console.log(`[Query Engine] Executing STEPS-based query`);
+    let context: QueryContext = {}; // Use defined type
+    let finalResults: QueryResult[] = [];
+
+    // Check if the query object and steps array are valid
+    if (!query || typeof query !== 'object' || !Array.isArray(query.steps)) {
+        console.error("[Query Engine] Invalid query format provided. Expected LoroHqlQueryExtended with a steps array.", query);
+        throw new Error("Invalid query format: Expected object with a steps array.");
+    }
+
+    try {
+        for (const step of query.steps) {
+            console.log(`[Query Engine] --- Starting Step: ${step.action} ---`);
+            // Use a temporary context for the step to potentially isolate errors?
+            // Or modify context directly and rely on overall try/catch?
+            // For simplicity, modify context directly for now.
+
+            switch (step.action) {
+                case 'setVar': { // Handle setting initial variables - Add braces for scope
+                    // FIX: Type assertion for step and check literal definition
+                    const setVarStep = step as LoroHqlSetVarStep;
+                    if (setVarStep.variables && typeof setVarStep.variables === 'object') {
+                        for (const [varName, varDef] of Object.entries(setVarStep.variables)) {
+                            // Check if varDef has the literal property
+                            if (typeof varDef === 'object' && varDef !== null && 'literal' in varDef) {
+                                context[varName] = varDef.literal;
+                            } else {
+                                console.warn(`[Query Engine] SetVar step: Invalid definition for variable '${varName}'. Missing 'literal'.`);
                             }
                         }
                     }
-                }
-            }
-        } catch (error) { console.error('[Query Engine Wildcard] Error fetching all Composites:', error); }
-    } else {
-        if (placeWildcard) {
-            console.error(`[Query Engine] Wildcard for 'place' is only supported when 'schemaId' is also a wildcard ('*').`);
-            compositeMatches = [];
-        } else {
-            compositeMatches = await findCompositeDocsBySchemaAndPlace(
-                compositeWhere.schemaId,
-                sourcePlaceInComposite as PlaceKey,
-                sourcePubKey
-            );
-        }
-    }
-
-    // [Logging Point 2: After finding composites]
-    console.log(`[Query Traversal Detail] Found ${compositeMatches.length} composite matches for source ${sourcePubKey}.`);
-
-    const results: QueryResult[] = [];
-    if (compositeMatches.length === 0) {
-        console.log(`[Query Traversal] No composite matches found for source ${sourcePubKey}.`); // Kept original log
-    }
-
-    for (const { pubkey: compositePubKey, doc: compositeDoc } of compositeMatches) {
-        // [Logging Point 3: Processing a composite match]
-        console.log(`[Query Traversal Detail] Processing composite match: ${compositePubKey}`);
-        const compositeData = getDataFromDoc(compositeDoc) as { schemaId: string; places: Record<string, string> } | undefined;
-        if (!compositeData) {
-            console.warn(`[Query Traversal Detail] Skipping composite ${compositePubKey}: Failed to get data.`);
-            continue;
-        }
-
-        if (traverseDefinition.where_related) {
-            // [Logging Point 4: Evaluating where_related]
-            console.log(`[Query Traversal Detail] Evaluating where_related filters for composite ${compositePubKey}`);
-            let passesAllFilters = true;
-            for (const relatedFilter of traverseDefinition.where_related) {
-                const targetNodePubkey = compositeData.places[relatedFilter.place];
-                if (!targetNodePubkey) {
-                    console.log(`[Query Traversal Detail] Filter failed: Target node key not found at place '${relatedFilter.place}'.`);
-                    passesAllFilters = false; break;
-                }
-                const targetNodeDoc = await getLeafDoc(targetNodePubkey);
-                if (!targetNodeDoc) {
-                    console.log(`[Query Traversal Detail] Filter failed: Could not load target node doc ${targetNodePubkey}.`);
-                    passesAllFilters = false; break;
-                }
-                const passesSingle = evaluateSingleWhere(targetNodeDoc, relatedFilter.field, relatedFilter.condition, targetNodePubkey);
-                console.log(`[Query Traversal Detail]   - Filter on place '${relatedFilter.place}' (node ${targetNodePubkey}, field '${relatedFilter.field}'): ${passesSingle}`);
-                if (!passesSingle) {
-                    passesAllFilters = false;
+                    console.log("[Query Engine] SetVar step completed. Context:", context);
                     break;
                 }
-            }
-            if (!passesAllFilters) {
-                console.log(`[Query Traversal Detail] Skipping composite ${compositePubKey} due to where_related filter.`);
-                continue;
-            }
-        }
-
-        const relatedNodeResult: QueryResult = {};
-        const mapEntries = Object.entries(traverseDefinition.map);
-
-        // [Logging Point 5: Processing map entries for a composite]
-        console.log(`[Query Traversal Detail] Processing map entries for composite ${compositePubKey}`);
-        for (const [outputKey, valueDefinition] of mapEntries) {
-            console.log(`[Query Traversal Detail]   - Mapping output key: "${outputKey}"`);
-            let isCompositeField = false;
-            if (valueDefinition.field && (valueDefinition.field === 'doc.pubkey' || valueDefinition.field.startsWith('self.'))) {
-                isCompositeField = true;
-            }
-
-            let entryResult: unknown = undefined; // Variable to hold result before assignment
-
-            if (isCompositeField && valueDefinition.field) {
-                console.log(`[Query Traversal Detail]     - Type: Composite Field ('${valueDefinition.field}')`);
-                entryResult = selectFieldValue(compositeDoc, valueDefinition.field, compositePubKey);
-            } else if (valueDefinition.resolve) {
-                console.log(`[Query Traversal Detail]     - Type: Resolve (from composite ${compositePubKey})`);
-                entryResult = await processResolve(compositeDoc, valueDefinition.resolve, user);
-            } else {
-                if (!valueDefinition.place) {
-                    console.warn(`[Query Traversal Detail]     - MISSING 'place' for key "${outputKey}". Skipping.`); continue;
-                }
-                const targetNodePubkey = compositeData.places[valueDefinition.place];
-                console.log(`[Query Traversal Detail]     - Target Node PubKey (from place '${valueDefinition.place}'): ${targetNodePubkey}`);
-                if (!targetNodePubkey) { relatedNodeResult[outputKey] = null; continue; }
-                const targetNodeDoc = await getLeafDoc(targetNodePubkey);
-                if (!targetNodeDoc) {
-                    console.warn(`[Query Traversal Detail]     - Failed to load target node doc ${targetNodePubkey}. Setting null.`);
-                    relatedNodeResult[outputKey] = null; continue;
-                }
-
-                if (valueDefinition.field) {
-                    console.log(`[Query Traversal Detail]     - Type: Target Field ('${valueDefinition.field}' on ${targetNodePubkey})`);
-                    entryResult = selectFieldValue(targetNodeDoc, valueDefinition.field, targetNodePubkey);
-                } else if (valueDefinition.map) {
-                    console.log(`[Query Traversal Detail]     - Type: Target Map (on ${targetNodePubkey})`);
-                    entryResult = await processMap(targetNodeDoc, valueDefinition.map, targetNodePubkey, user);
-                } else if (valueDefinition.traverse) {
-                    console.log(`[Query Traversal Detail]     - Type: Target Traverse (from ${targetNodePubkey})`);
-                    entryResult = await processTraversal(targetNodeDoc, valueDefinition.traverse, targetNodePubkey, user);
+                case 'find':
+                    context = await processFindStep(step as LoroHqlFindStep, context);
+                    break;
+                case 'get':
+                    context = await processGetStep(step as LoroHqlGetStep, context, user);
+                    break;
+                case 'select':
+                    finalResults = await processSelectStep(step as LoroHqlSelectStep, context);
+                    // Select is considered terminal for now
+                    console.log("[Query Engine] Select step completed. Final results generated.");
+                    // Optional: break or return immediately after select?
+                    return finalResults; // Assuming select is always last for now
+                default: {
+                    const unknownAction = (step as LoroHqlStepBase)?.action ?? 'unknown';
+                    console.error(`[Query Engine] Unsupported step action encountered: ${unknownAction}`);
+                    throw new Error(`Unsupported step action: ${unknownAction}`);
                 }
             }
-            // [Logging Point 6: Result for a map entry]
-            console.log(`[Query Traversal Detail]     - Result for "${outputKey}":`, entryResult);
-            relatedNodeResult[outputKey] = entryResult;
-        }
+            console.log(`[Query Engine] --- Finished Step: ${step.action}. Context Keys:`, Object.keys(context)); // Log context keys for brevity
 
-        if (Object.keys(relatedNodeResult).length > 0) {
-            // [Logging Point 7: Pushing result for a composite]
-            console.log(`[Query Traversal Detail] Pushing result for composite ${compositePubKey}:`, relatedNodeResult);
-            results.push(relatedNodeResult);
-            if (traverseDefinition.return === 'first') break;
-        } else {
-            console.log(`[Query Traversal Detail] No data mapped for composite ${compositePubKey}. Skipping.`);
         }
+        console.log(`[Query Engine] STEPS execution finished. No terminal 'select' step found? Returning empty results.`);
+        // If loop finishes without a select step, what should happen?
+        return finalResults; // Might be empty if no select step ran
+
+    } catch (error) {
+        console.error("[Query Engine] Error during STEPS execution:", error);
+        // Return empty array on error
+        return [];
     }
-
-    // [Logging Point 8: Final result of traversal]
-    const finalResult = traverseDefinition.return === 'first' ? (results.length > 0 ? results[0] : null) : results;
-    console.log(`[Query Traversal Detail] Final traversal result for source ${sourcePubKey}:`, finalResult);
-    return finalResult;
 }
 
-/**
- * Evaluates multiple top-level where clauses against a document.
- */
-function evaluateWhereClauses(doc: LoroDoc, clauses: LoroHqlWhereClause[], docPubKey: string): boolean {
-    for (const clause of clauses) {
-        if (!evaluateSingleWhere(doc, clause.field, clause.condition, docPubKey)) return false;
-    }
-    return true;
-}
-
-/**
- * Evaluates a single filter condition against a document.
- */
-function evaluateSingleWhere(
-    doc: LoroDoc,
-    fieldPath: string,
-    condition: LoroHqlCondition,
-    docPubKey: string
-): boolean {
-    const actualValue = selectFieldValue(doc, fieldPath, docPubKey);
-    if (condition.equals !== undefined && actualValue !== condition.equals) return false;
-    if (condition.in !== undefined && (!Array.isArray(condition.in) || !condition.in.includes(actualValue))) return false;
-    return true;
-}
-
-/**
- * Processes a 'resolve' instruction.
- */
-async function processResolve(
-    sourceDoc: LoroDoc,
-    resolveDefinition: LoroHqlResolve,
-    user: CapabilityUser | null
-): Promise<QueryResult | null> {
-    // [Logging Point 9: Starting Resolve]
-    console.log(`[Query Resolve Detail] Starting resolve. FromField: '${resolveDefinition.fromField}'`);
-    const targetPubKey = selectFieldValue(sourceDoc, resolveDefinition.fromField, "") as string | undefined; // Note: PubKey not relevant here
-    console.log(`[Query Resolve Detail]   - Extracted target PubKey: ${targetPubKey}`);
-    if (!targetPubKey) {
-        console.log(`[Query Resolve Detail]   - No target PubKey found. Returning null.`);
-        return null;
-    }
-
-    const targetType = resolveDefinition.targetType ?? 'leaf';
-    let targetDoc: LoroDoc | null = null;
-    let docMeta: Awaited<ReturnType<typeof import('$lib/KERNEL/hominio-db')['hominioDB']['getDocument']>> | null = null;
-
-    // [Logging Point 10: Checking existence and fetching doc]
-    console.log(`[Query Resolve Detail]   - Checking existence and fetching doc for ${targetPubKey} (type: ${targetType})`);
-    try {
-        let exists = false;
-        if (targetType === 'gismu') {
-            exists = await checkSchemaExists(targetPubKey);
-        } else {
-            exists = await checkLeafExists(targetPubKey);
-        }
-        console.log(`[Query Resolve Detail]     - Exists in index: ${exists}`);
-        if (!exists) return null;
-
-        if (targetType === 'gismu') {
-            targetDoc = await getSchemaDoc(targetPubKey);
-        } else {
-            targetDoc = await getLeafDoc(targetPubKey);
-        }
-        console.log(`[Query Resolve Detail]     - Loaded doc: ${!!targetDoc}`);
-        if (!targetDoc) return null;
-
-        docMeta = await import('$lib/KERNEL/hominio-db').then(m => m.hominioDB.getDocument(targetPubKey));
-        console.log(`[Query Resolve Detail]     - Loaded docMeta: ${!!docMeta}`);
-        if (!docMeta) return null;
-
-    } catch (error) { console.error(`[Query Resolve Detail] Error fetching ${targetPubKey} (type: ${targetType}):`, error); return null; }
-
-    if (user) {
-        const canUserRead = canRead(user, docMeta);
-        console.log(`[Query Resolve Detail]   - Read permission check for user: ${canUserRead}`);
-        if (!canUserRead) return null;
-    } else {
-        console.log(`[Query Resolve Detail]   - No user provided, skipping read permission check.`);
-    }
-
-
-    // [Logging Point 11: Processing map for resolved doc]
-    console.log(`[Query Resolve Detail]   - Processing map for resolved doc ${targetPubKey}`);
-    try {
-        const resolvedResult = await processMap(targetDoc, resolveDefinition.map, targetPubKey, user);
-        console.log(`[Query Resolve Detail]   - Map result for ${targetPubKey}:`, resolvedResult);
-        return resolvedResult;
-    } catch (error) { console.error(`[Query Resolve Detail] Error processing map for ${targetPubKey}:`, error); return null; }
-}
+// --- Removed Old Helper Functions ---
 
 /**
  * Creates a reactive query.
+ * TODO: Update this function to work reliably with the new LoroHqlQueryExtended format.
+ * The current implementation might work if executeQuery handles the new format,
+ * but the queryDefinitionStore type needs to be updated.
  */
 export function processReactiveQuery(
     getCurrentUserFn: typeof getMeType,
-    queryDefinitionStore: Readable<LoroHqlQuery | null>
+    queryDefinitionStore: Readable<LoroHqlQueryExtended | null> // Updated to expect only new format
 ): Readable<QueryResult[] | null | undefined> {
     if (!browser) {
         // --- Server-Side Rendering (SSR) Handling --- 
@@ -716,58 +822,98 @@ export function processReactiveQuery(
 
         const triggerDebouncedQuery = () => {
             const currentQueryDefinition = get(queryDefinitionStore);
+            // Ensure we only proceed if the definition is valid (has steps)
+            if (!currentQueryDefinition || !Array.isArray(currentQueryDefinition.steps)) {
+                console.log("[Reactive Query] Skipping execution: Query definition is null or invalid.");
+                if (debounceTimer) clearTimeout(debounceTimer); debounceTimer = null;
+                if (currentResults !== undefined && currentResults !== null && currentResults.length > 0) {
+                    set([]);
+                    currentResults = [];
+                } else if (currentResults === undefined) {
+                    set([]); // Set to empty array if loading was interrupted by invalid query
+                    currentResults = [];
+                }
+                lastQueryDefinitionString = JSON.stringify(currentQueryDefinition); // Still update last string
+                return;
+            }
+
             const queryDefString = JSON.stringify(currentQueryDefinition);
             const queryChanged = lastQueryDefinitionString !== queryDefString;
             lastQueryDefinitionString = queryDefString;
 
-            if (!currentQueryDefinition) {
-                if (debounceTimer) clearTimeout(debounceTimer);
-                if (currentResults && currentResults.length > 0) { set([]); currentResults = []; }
-                else if (currentResults === undefined || currentResults === null) { set([]); currentResults = []; }
-                return;
-            }
+            // if (!currentQueryDefinition) { // Check moved above
+            //     if (debounceTimer) clearTimeout(debounceTimer);
+            //     if (currentResults && currentResults.length > 0) { set([]); currentResults = []; }
+            //     else if (currentResults === undefined || currentResults === null) { set([]); currentResults = []; }
+            //     return;
+            // }
             if (!queryChanged && currentResults !== undefined) return;
             if (debounceTimer) clearTimeout(debounceTimer);
-            if (currentResults === undefined || queryChanged) { set(undefined); currentResults = undefined; }
+            if (currentResults === undefined || queryChanged) {
+                console.log("[Reactive Query] Setting state to undefined (loading)"); // Changed log message
+                set(undefined);
+                currentResults = undefined;
+            }
 
             debounceTimer = setTimeout(async () => {
                 const currentUser = getCurrentUserFn();
                 const latestQueryDefinition = get(queryDefinitionStore);
                 const latestQueryDefString = JSON.stringify(latestQueryDefinition);
 
-                if (!latestQueryDefinition || latestQueryDefString !== lastQueryDefinitionString) return;
+                // Re-validate query before execution
+                if (!latestQueryDefinition || !Array.isArray(latestQueryDefinition.steps) || latestQueryDefString !== lastQueryDefinitionString) {
+                    console.log("[Reactive Query Debounced] Skipping execution: Query became null, invalid, or stale.");
+                    return;
+                }
 
+                console.log("[Reactive Query Debounced] Executing query:", latestQueryDefString);
                 try {
+                    // Set to undefined only if not already undefined (prevents flicker if query is fast)
                     if (currentResults !== undefined) set(undefined);
                     currentResults = undefined;
+
                     const results = await executeQuery(latestQueryDefinition, currentUser);
-                    if (JSON.stringify(get(queryDefinitionStore)) !== lastQueryDefinitionString) return;
+
+                    // Check if query changed *again* during async execution
+                    if (JSON.stringify(get(queryDefinitionStore)) !== lastQueryDefinitionString) {
+                        console.log("[Reactive Query Debounced] Query became stale during execution, ignoring results.");
+                        return;
+                    }
+                    console.log("[Reactive Query Debounced] Setting results:", results);
                     set(results);
                     currentResults = results;
                 } catch (error) {
                     console.error("[LoroHQL Reactive] Error:", error);
-                    if (JSON.stringify(get(queryDefinitionStore)) !== lastQueryDefinitionString) return;
-                    set(null);
-                    currentResults = null;
+                    // Check staleness before setting error state
+                    if (JSON.stringify(get(queryDefinitionStore)) === lastQueryDefinitionString) {
+                        console.log("[Reactive Query Debounced] Setting state to null (error)");
+                        set(null);
+                        currentResults = null;
+                    } else {
+                        console.log("[Reactive Query Debounced] Query became stale during error, ignoring error state.");
+                    }
                 }
             }, DEBOUNCE_MS);
         };
 
         const unsubscribeQueryDef = queryDefinitionStore.subscribe(newQueryDef => {
             const newQueryDefString = JSON.stringify(newQueryDef);
+            // Trigger if query changes OR if results are still undefined (initial load)
             if (lastQueryDefinitionString !== newQueryDefString || currentResults === undefined) {
                 triggerDebouncedQuery();
             }
         });
 
         const unsubscribeNotifier = docChangeNotifier.subscribe(() => {
+            console.log("[Reactive Query] docChangeNotifier triggered.");
             triggerDebouncedQuery();
         });
 
         const sessionStore = authClient.useSession();
-        const unsubscribeSession = sessionStore.subscribe((session: MinimalSession) => {
+        const unsubscribeSession = sessionStore.subscribe((session: MinimalSession) => { // Use defined type
             const currentSessionState = JSON.stringify(session?.data?.user?.id ?? null);
             if (lastSessionState !== null && lastSessionState !== currentSessionState) {
+                console.log("[Reactive Query] Session changed.");
                 triggerDebouncedQuery();
             }
             lastSessionState = currentSessionState;
@@ -776,16 +922,27 @@ export function processReactiveQuery(
         const initialSessionData = get(sessionStore);
         lastSessionState = JSON.stringify(initialSessionData?.data?.user?.id ?? null);
         lastQueryDefinitionString = JSON.stringify(get(queryDefinitionStore));
-        currentResults = undefined;
+        currentResults = undefined; // Start in loading state
 
-        if (get(queryDefinitionStore)) { triggerDebouncedQuery(); } else { set([]); currentResults = []; }
+        // Trigger initial query execution if valid
+        if (get(queryDefinitionStore) && Array.isArray(get(queryDefinitionStore)?.steps)) {
+            console.log("[Reactive Query] Triggering initial query execution.");
+            triggerDebouncedQuery();
+        } else {
+            console.log("[Reactive Query] Initial query is invalid, setting state to empty array.");
+            set([]); // Set empty array if initial query is invalid
+            currentResults = [];
+        }
 
-        // Restore: Add the missing cleanup function
         return () => {
+            console.log("[Reactive Query] Cleanup.");
             unsubscribeQueryDef();
             unsubscribeNotifier();
             unsubscribeSession();
             if (debounceTimer) clearTimeout(debounceTimer);
         };
     });
-} 
+}
+
+// Defined once earlier now
+// type MinimalSession = { ... } 

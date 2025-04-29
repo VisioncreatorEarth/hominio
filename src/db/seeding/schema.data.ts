@@ -46,55 +46,6 @@ export interface SchemaRecord {
 // Renamed from initialSelbri
 export const initialSchemas: SchemaRecord[] = [
     {
-        pubkey: '@schema/zukte', // Updated pubkey
-        metadata: { type: 'Schema' },
-        data: {
-            schemaId: '@schema/zukte', // Self-reference
-            name: 'zukte', // from cneme
-            places: { x1: 'rutni', x2: 'tutci/carna', x3: 'jidni/fanmo' }, // from sumti
-            translations: { // from fanva and stidi
-                en: {
-                    purpose: 'Represents volitional action towards a specific goal. Connects an agent, their method, and their aim.',
-                    prompt: `
-*Details:*
-    - x1: Must be capable of intention (person, group, AI, company).
-    - x2: Can be an action, a tool, a strategy, a resource, or even a concept representing the means.
-    - x3: The intended outcome or state the agent x1 aims to achieve through means x2.
-*Usage Examples:*
-    1. Simple Action: 'zukte(@person1, @method_agile, @purpose_build_website)' -> Person1 uses Agile methodology for the purpose of building the website.
-    2. Tool Usage: 'zukte(@coder_bot, @tool_compiler, @purpose_check_code)' -> The coder bot uses the compiler tool for the purpose of checking the code.
-    3. Abstract Means: 'zukte(@marketing_team, @strategy_social_media, @purpose_increase_engagement)' -> The marketing team employs the social media strategy for the purpose of increasing engagement.
-    4. Omitted Purpose: 'zukte(@researcher, @method_experiment)' -> The researcher employs the experimental method (purpose implied or unknown).
-                    `,
-                    places: {
-                        x1: { title: 'agent', description: 'volitional entity (agent/person/organization)' },
-                        x2: { title: 'means/action', description: 'method/process' },
-                        x3: { title: 'purpose/goal', description: 'objective/desired outcome' }
-                    }
-                },
-                de: {
-                    purpose: 'Repräsentiert willentliche Handlung auf ein spezifisches Ziel hin. Verbindet einen Akteur, seine Methode und sein Ziel.',
-                    prompt: `
-*Details:*
-    - x1: Muss fähig zur Absicht sein (Person, Gruppe, KI, Firma).
-    - x2: Kann eine Aktion, ein Werkzeug, eine Strategie, eine Ressource oder sogar ein Konzept sein, das die Mittel darstellt.
-    - x3: Das beabsichtigte Ergebnis oder der Zustand, den der Akteur x1 durch Mittel x2 erreichen möchte.
-*Anwendungsbeispiele:*
-    1. Einfache Aktion: 'zukte(@person1, @method_agile, @purpose_build_website)' -> Person1 nutzt die Agile-Methodik zum Zweck des Website-Baus.
-    2. Werkzeugnutzung: 'zukte(@coder_bot, @tool_compiler, @purpose_check_code)' -> Der Coder-Bot nutzt das Compiler-Werkzeug zum Zweck der Code-Überprüfung.
-    3. Abstrakte Mittel: 'zukte(@marketing_team, @strategy_social_media, @purpose_increase_engagement)' -> Das Marketingteam setzt die Social-Media-Strategie zum Zweck der Engagement-Steigerung ein.
-    4. Fehlender Zweck: 'zukte(@researcher, @method_experiment)' -> Der Forscher setzt die experimentelle Methode ein (Zweck impliziert oder unbekannt).
-                    `,
-                    places: {
-                        x1: { title: 'Akteur', description: 'Akteur/Handelnder/Organisation' },
-                        x2: { title: 'Mittel/Aktion', description: 'Methode/Prozess' },
-                        x3: { title: 'Zweck/Ziel', description: 'Ergebnis' }
-                    }
-                }
-            }
-        }
-    },
-    {
         pubkey: '@schema/gunka', // Updated pubkey
         metadata: { type: 'Schema' },
         data: {
@@ -138,51 +89,6 @@ export const initialSchemas: SchemaRecord[] = [
                         x1: { title: 'Arbeiter', description: 'Bearbeiter' },
                         x2: { title: 'Aktivität/Aufgabe', description: '' }, // Note: German description was empty
                         x3: { title: 'Ziel/Projekt', description: 'Zweck' }
-                    }
-                }
-            }
-        }
-    },
-    {
-        pubkey: '@schema/ckaji', // Updated pubkey
-        metadata: { type: 'Schema' },
-        data: {
-            schemaId: '@schema/ckaji',
-            name: 'ckaji',
-            places: { x1: 'selci\'a', x2: 'selckaji' },
-            translations: {
-                en: {
-                    purpose: 'Assigns a property or characteristic to an entity. Fundamental for description.',
-                    prompt: `
-*Details:*
-    - x1: The thing being described (object, person, concept, event).
-    - x2: The property, attribute, quality, or state being assigned to x1. Can be a concept or a value.
-*Usage Examples:*
-    1. Simple Property: 'ckaji(@task1, @status_inprogress)' -> Task 1 has the property 'in-progress status'.
-    2. Intrinsic Quality: 'ckaji(@sky, @color_blue)' -> The sky has the quality 'blue color'. (Assuming @color_blue exists)
-    3. Linking Name: 'ckaji(@person1, @person1_name)' -> Person 1 has the property 'Name: Alice'. (Connects entity to its name node)
-    4. Abstract Concept: 'ckaji(@philosophy_stoicism, @trait_resilience)' -> The philosophy of Stoicism has the characteristic 'resilience'.
-                    `,
-                    places: {
-                        x1: { title: 'entity', description: 'object/concept being characterized' },
-                        x2: { title: 'property/characteristic', description: 'value concept or attribute' }
-                    }
-                },
-                de: {
-                    purpose: 'Weist einer Entität eine Eigenschaft oder ein Merkmal zu. Grundlegend für Beschreibungen.',
-                    prompt: `
-*Details:*
-    - x1: Das zu beschreibende Ding (Objekt, Person, Konzept, Ereignis).
-    - x2: Die Eigenschaft, das Attribut, die Qualität oder der Zustand, der x1 zugewiesen wird. Kann ein Konzept oder ein Wert sein.
-*Anwendungsbeispiele:*
-    1. Einfache Eigenschaft: 'ckaji(@task1, @status_inprogress)' -> Aufgabe 1 hat die Eigenschaft 'Status: in Bearbeitung'.
-    2. Intrinsische Qualität: 'ckaji(@sky, @color_blue)' -> Der Himmel hat die Qualität 'Farbe: blau'. (Angenommen @color_blue existiert)
-    3. Namen verknüpfen: 'ckaji(@person1, @person1_name)' -> Person 1 hat die Eigenschaft 'Name: Alice'. (Verbindet Entität mit ihrem Namensknoten)
-    4. Abstraktes Konzept: 'ckaji(@philosophy_stoicism, @trait_resilience)' -> Die Philosophie des Stoizismus hat das Merkmal 'Resilienz'.
-                    `,
-                    places: {
-                        x1: { title: 'Entität', description: 'Objekt/Konzept' },
-                        x2: { title: 'Eigenschaft/Merkmal', description: 'Attribut' }
                     }
                 }
             }
@@ -263,6 +169,47 @@ export const initialSchemas: SchemaRecord[] = [
                     places: {
                         x1: { title: 'Entität die benannt wird', description: '' },
                         x2: { title: 'Namens-Leaf', description: '(Leaf, der den Namenstext enthält)' }
+                    }
+                }
+            }
+        }
+    },
+    {
+        pubkey: '@schema/tcini',
+        metadata: { type: 'Schema' },
+        data: {
+            schemaId: '@schema/tcini',
+            name: 'tcini',
+            places: { x1: 'selcia', x2: 'seltcini' }, // Corrected Lojban place strings
+            translations: {
+                en: {
+                    purpose: 'Represents the condition or state of an entity.',
+                    prompt: `
+*Details:*
+    - x1: The entity whose state is being described (e.g., task, project).
+    - x2: The Leaf representing the specific condition or status (e.g., @status_inprogress, @status_completed).
+*Usage Examples:*
+    1. Task Status: 'tcini(@task1, @status_inprogress)' -> Task 1 has the status 'in-progress'.
+    2. Project Condition: 'tcini(@project_alpha, @status_active)' -> Project Alpha has the condition 'active'.
+                    `,
+                    places: {
+                        x1: { title: 'entity', description: 'The item whose state is described.' },
+                        x2: { title: 'condition/status', description: 'The Leaf representing the state.' }
+                    }
+                },
+                de: {
+                    purpose: 'Repräsentiert den Zustand oder Status einer Entität.',
+                    prompt: `
+*Details:*
+    - x1: Die Entität, deren Zustand beschrieben wird (z. B. Aufgabe, Projekt).
+    - x2: Das Leaf, das den spezifischen Zustand oder Status repräsentiert (z. B. @status_inprogress, @status_completed).
+*Anwendungsbeispiele:*
+    1. Aufgabenstatus: 'tcini(@task1, @status_inprogress)' -> Aufgabe 1 hat den Status 'in Bearbeitung'.
+    2. Projektzustand: 'tcini(@project_alpha, @status_active)' -> Projekt Alpha hat den Zustand 'aktiv'.
+                    `,
+                    places: {
+                        x1: { title: 'Entität', description: 'Das Element, dessen Zustand beschrieben wird.' },
+                        x2: { title: 'Zustand/Status', description: 'Das Leaf, das den Zustand repräsentiert.' }
                     }
                 }
             }

@@ -14,6 +14,7 @@
 	import NodesProps from '$lib/components/NodesProps.svelte';
 	import GraphView from '$lib/components/GraphView.svelte';
 	import IndexQueries from '$lib/components/IndexQueries.svelte';
+	import Todos from '$lib/components/Todos.svelte';
 	import type { SchemaPlaceTranslation, SchemaLanguageTranslation } from '$db/seeding/schema.data';
 
 	// --- Get Effective User Function from Context ---
@@ -57,7 +58,7 @@
 	// Create a query to fetch all schemas (empty array tells the engine to fetch all)
 	const allSchemaQuery: LoroHqlQuery = {
 		from: {
-			gismu_pubkeys: []
+			schema: []
 		},
 		map: {
 			id: { field: 'doc.pubkey' },
@@ -79,7 +80,7 @@
 	function createCompositeQueryForSchema(schemaId: string): LoroHqlQuery {
 		return {
 			from: {
-				composite_pubkeys: []
+				composite: []
 			},
 			where: [
 				{
@@ -198,7 +199,7 @@
 	}
 
 	// Tab state
-	let activeTab = $state('schema'); // Default tab: 'schema', 'leaf', 'query-editor', 'nodes-props', 'graph-view', 'indices'
+	let activeTab = $state('schema'); // Default tab: 'schema', 'leaf', 'query-editor', 'nodes-props', 'graph-view', 'indices', 'todos'
 
 	// Function to change active tab
 	function setActiveTab(tab: string) {
@@ -269,6 +270,15 @@
 			>
 				Indices
 			</button>
+			<!-- Add Todos Tab Button -->
+			<button
+				class="border-b-2 px-4 py-2 font-medium transition-colors {activeTab === 'todos'
+					? 'border-indigo-500 text-indigo-600'
+					: 'border-transparent text-gray-500 hover:text-gray-700'}"
+				on:click={() => setActiveTab('todos')}
+			>
+				Todos
+			</button>
 		</nav>
 	</header>
 
@@ -298,6 +308,11 @@
 		{:else if activeTab === 'indices'}
 			<div class="h-full">
 				<IndexQueries />
+			</div>
+			<!-- Add Todos Tab Content -->
+		{:else if activeTab === 'todos'}
+			<div class="h-full">
+				<Todos />
 			</div>
 		{/if}
 	</main>

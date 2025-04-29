@@ -7,9 +7,8 @@
 	import { readable, type Readable, writable } from 'svelte/store';
 	import { getContext } from 'svelte';
 	import { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
-	import { hominioMutate } from '$lib/KERNEL/hominio-mutate';
-	import type { SchemaPlaceTranslation, SchemaLanguageTranslation } from '$db/seeding/schema.data';
-	import type { LeafValue } from '$db/seeding/leaf.data'; // Import LeafValue for type checking
+	import type { SchemaLanguageTranslation } from '$db/seeding/schema.data';
+	import type { LeafValue } from '$db/seeding/leaf.data';
 
 	// --- Get Effective User Function from Context ---
 	type GetCurrentUserFn = typeof getMeType;
@@ -27,7 +26,7 @@
 			x4?: string;
 			x5?: string;
 		};
-		translations?: Record<string, SchemaLanguageTranslation>; // data.translations
+		translations?: Record<string, SchemaLanguageTranslation>;
 	}
 
 	// FIX: Rename type and update fields
@@ -186,49 +185,6 @@
 	let isCreatingPrenu = false;
 	let creationMessage = '';
 	const PRENU_SCHEMA_ID = '@schema/prenu'; // Define constant for clarity
-
-	// Function to create a random person (check createPrenuWithName implementation if needed)
-	async function createRandomPrenu() {
-		isCreatingPrenu = true;
-		creationMessage = '';
-
-		try {
-			const currentUser = getMe();
-			if (!currentUser) {
-				throw new Error('User not authenticated');
-			}
-
-			const names = ['Alice', 'Bob', 'Charlie', 'David', 'Eve', 'Frank', 'Grace', 'Heidi'];
-			const randomName =
-				names[Math.floor(Math.random() * names.length)] + ' ' + Math.floor(Math.random() * 1000);
-
-			const result = await hominioMutate.createPrenuWithName(randomName, currentUser);
-
-			if (result.success) {
-				creationMessage = `Successfully created person: "${randomName}" with ID: ${result.prenuId}`;
-				console.log('Created person:', result);
-			} else {
-				throw new Error('Failed to create person');
-			}
-		} catch (error) {
-			console.error('Error creating random person:', error);
-			creationMessage = `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
-		} finally {
-			isCreatingPrenu = false;
-		}
-	}
-
-	// FIX: Helper to display Leaf value in the Composite list (No longer needed here, but keep for now if other parts might use it later?)
-	function displayLeafValue(leafData: LeafValue | null): string {
-		if (!leafData) return '(empty)';
-		if (leafData.type === 'LoroText') return leafData.value;
-		if (leafData.type === 'Concept') return '(Concept)';
-		if (leafData.type === 'LoroMap')
-			return '(Map: ' + Object.keys(leafData.value).length + ' keys)';
-		if (leafData.type === 'LoroList') return '(List: ' + leafData.value.length + ' items)';
-		// Add other types as needed
-		return '(Unknown Leaf Type)';
-	}
 </script>
 
 <!-- FIX: Adjust grid columns for 3 columns: Sidebar, Main Content, Debug Aside - make right wider -->
@@ -274,22 +230,6 @@
 					<h1 class="text-2xl font-bold text-gray-800">
 						{selectedSchema.name}
 					</h1>
-
-					<!-- Add Create Prenu Button -->
-					<!-- FIX: Use constant for ID check -->
-					{#if selectedSchema.id === PRENU_SCHEMA_ID}
-						<button
-							on:click={createRandomPrenu}
-							disabled={isCreatingPrenu}
-							class="rounded bg-green-500 px-4 py-2 text-sm font-medium text-white hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-50"
-						>
-							{#if isCreatingPrenu}
-								Creating...
-							{:else}
-								Create Random Person
-							{/if}
-						</button>
-					{/if}
 				</div>
 				<p class="mb-3 text-sm text-gray-500">
 					<code class="rounded bg-gray-200 px-1 text-xs">{selectedSchema.id}</code>

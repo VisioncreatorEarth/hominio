@@ -70,49 +70,20 @@ const staticLeaves: LeafRecord[] = [
         data: { type: 'Concept' }
     },
 
-    // Property Type Concepts
+    // Property Type Concepts - Keep only @prop_status and @prop_name for now
     {
         pubkey: '@prop_status',
         metadata: { type: 'Leaf' },
         data: { type: 'Concept' }
     },
     {
-        pubkey: '@prop_skill',
-        metadata: { type: 'Leaf' },
-        data: { type: 'Concept' }
-    },
-    {
-        pubkey: '@prop_priority',
-        metadata: { type: 'Leaf' },
-        data: { type: 'Concept' }
-    },
-    {
-        pubkey: '@prop_tag',
-        metadata: { type: 'Leaf' },
-        data: { type: 'Concept' }
-    },
-    {
-        pubkey: '@prop_purpose',
-        metadata: { type: 'Leaf' },
-        data: { type: 'Concept' }
-    },
-    {
-        pubkey: '@prop_leader',
-        metadata: { type: 'Leaf' },
-        data: { type: 'Concept' }
-    },
-    {
-        pubkey: '@prop_deadline',
-        metadata: { type: 'Leaf' },
-        data: { type: 'Concept' }
-    },
-    {
-        pubkey: '@prop_name',
+        pubkey: '@prop_name', // Keep for cneme
         metadata: { type: 'Leaf' },
         data: { type: 'Concept' }
     },
 
     // Property Value Concepts (now use LoroText)
+    // Keep Status values
     {
         pubkey: '@status_inprogress',
         metadata: { type: 'Leaf' },
@@ -128,88 +99,11 @@ const staticLeaves: LeafRecord[] = [
         metadata: { type: 'Leaf' },
         data: { type: 'LoroText', value: 'completed' }
     },
-    {
-        pubkey: '@skill_design',
-        metadata: { type: 'Leaf' },
-        data: { type: 'LoroText', value: 'design' }
-    },
-    {
-        pubkey: '@skill_dev',
-        metadata: { type: 'Leaf' },
-        data: { type: 'LoroText', value: 'development' }
-    },
-    {
-        pubkey: '@skill_test',
-        metadata: { type: 'Leaf' },
-        data: { type: 'LoroText', value: 'testing' }
-    },
-    {
-        pubkey: '@priority_high',
-        metadata: { type: 'Leaf' },
-        data: { type: 'LoroText', value: 'high' }
-    },
-    {
-        pubkey: '@priority_medium',
-        metadata: { type: 'Leaf' },
-        data: { type: 'LoroText', value: 'medium' }
-    },
-    {
-        pubkey: '@priority_none',
-        metadata: { type: 'Leaf' },
-        data: { type: 'LoroText', value: 'none' }
-    },
-    {
-        pubkey: '@tag_frontend',
-        metadata: { type: 'Leaf' },
-        data: { type: 'LoroText', value: 'frontend' }
-    },
-    {
-        pubkey: '@tag_qa',
-        metadata: { type: 'Leaf' },
-        data: { type: 'LoroText', value: 'qa' }
-    },
+    // Keep purpose_build_website as it's used in project name leaf
     {
         pubkey: '@purpose_build_website',
         metadata: { type: 'Leaf' },
         data: { type: 'LoroText', value: 'Build website' }
-    },
-    {
-        pubkey: '@deadline_2024_12_31',
-        metadata: { type: 'Leaf' },
-        data: { type: 'LoroText', value: '2024-12-31' }
-    },
-
-    // Method concepts
-    {
-        pubkey: '@method_agile',
-        metadata: { type: 'Leaf' },
-        data: { type: 'LoroText', value: 'Agile methodology' }
-    },
-    {
-        pubkey: '@method_waterfall',
-        metadata: { type: 'Leaf' },
-        data: { type: 'LoroText', value: 'Waterfall methodology' }
-    },
-    {
-        pubkey: '@method_kanban',
-        metadata: { type: 'Leaf' },
-        data: { type: 'LoroText', value: 'Kanban system' }
-    },
-    {
-        pubkey: '@method_scrum',
-        metadata: { type: 'Leaf' },
-        data: { type: 'LoroText', value: 'Scrum framework' }
-    },
-    // Generic means
-    {
-        pubkey: '@means_tasks',
-        metadata: { type: 'Leaf' },
-        data: { type: 'Concept' }
-    },
-    {
-        pubkey: '@means_work',
-        metadata: { type: 'Leaf' },
-        data: { type: 'Concept' }
     },
 
     // --- Name Leaves for Entities (formerly Name Sumti) ---
@@ -251,7 +145,7 @@ const staticLeaves: LeafRecord[] = [
 ];
 
 // --- Dynamic Prompt Leaves ---
-const documentationPath = resolve(__dirname, '../documentation');
+const documentationPath = resolve(__dirname, '../../../DOCUMENTATION');
 const promptLeafRecords: LeafRecord[] = []; // Renamed from promptSumtiRecords
 
 try {

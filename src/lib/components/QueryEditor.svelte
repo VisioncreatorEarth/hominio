@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { processReactiveQuery, type LoroHqlQuery } from '$lib/KERNEL/hominio-query';
+	import { processReactiveQuery, type LoroHqlQueryExtended } from '$lib/KERNEL/hominio-query';
 	import { writable } from 'svelte/store';
 	import { getContext } from 'svelte';
 	import { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
@@ -10,12 +10,12 @@
 
 	// Current query and editor state
 	let queryText = writable(
-		'{\n  "from": {\n    "bridi_pubkeys": []\n  },\n  "map": {\n    "id": { "field": "doc.pubkey" },\n    "selbri": { "field": "self.datni.selbri" }\n  }\n}'
+		'{\n  "steps": [\n    {\n      "action": "find",\n      "target": {\n        "schema": "YOUR_TCINI_SCHEMA_PUBKEY"\n      },\n      "variables": {\n        "taskVar": { "source": "link.x1" },\n        "statusLeafVar": { "source": "link.x2" }\n      },\n      "resultVariable": "taskStatusLinks",\n      "return": "array"\n    },\n    {\n      "action": "find",\n      "target": {\n        "schema": "YOUR_CNEME_SCHEMA_PUBKEY"\n      },\n      "variables": {\n        "entityVar": { "source": "link.x1" },\n        "nameLeafVar": { "source": "link.x2" }\n      },\n      "resultVariable": "entityNameLinks",\n      "return": "array"\n    },\n    {\n      "action": "select",\n      "groupBy": "taskVar",\n      "select": {\n        "taskId": { "variable": "taskVar" },\n        "statusLeafId": { "variable": "taskStatusLinks_statusLeafVar" }\n      }\n    }\n  ]\n}'
 	);
 	let queryError = writable<string | null>(null);
 
-	// Current query store
-	const queryStore = writable<LoroHqlQuery | null>(null);
+	// Current query store - Use new type
+	const queryStore = writable<LoroHqlQueryExtended | null>(null);
 
 	// Results store
 	const resultsStore = processReactiveQuery(getMe, queryStore);
@@ -23,11 +23,16 @@
 	// Function to run the query from the editor
 	function runCustomQuery() {
 		try {
-			const query = JSON.parse($queryText);
+			const query: LoroHqlQueryExtended = JSON.parse($queryText); // Use new type
+			// Basic validation for steps format
+			if (!query || !Array.isArray(query.steps)) {
+				throw new Error("Invalid query format: Must be an object with a 'steps' array.");
+			}
 			queryError.set(null);
 			queryStore.set(query);
 		} catch (e) {
 			queryError.set(e instanceof Error ? e.message : String(e));
+			queryStore.set(null); // Clear query on parse error
 		}
 	}
 
@@ -81,9 +86,11 @@
 					</div>
 				{:else}
 					<div class="space-y-4">
-						{#each $resultsStore as result (result.id)}
+						{#each $resultsStore as result (result.id ?? JSON.stringify(result))}
 							<div class="rounded border border-gray-200 bg-white p-3">
-								<h4 class="mb-2 font-medium text-black">{truncate(result.id, 24)}</h4>
+								<h4 class="mb-2 font-medium text-black">
+									{truncate(result.id ?? result.taskId ?? 'Unknown', 24)}
+								</h4>
 								<pre
 									class="max-h-48 overflow-auto rounded bg-gray-50 p-2 text-xs text-black">{JSON.stringify(
 										result,

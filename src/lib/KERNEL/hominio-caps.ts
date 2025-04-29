@@ -13,7 +13,8 @@ export interface CapabilityUser {
 export enum HominioAbility {
     READ = 'read',
     WRITE = 'write', // Encompasses create, update, delete for now
-    DELETE = 'delete' // Add DELETE capability
+    DELETE = 'delete',
+    CREATE = 'create' // Add CREATE capability
 }
 
 // --- Core Check Function --- UPDATED SIGNATURE & LOGIC
@@ -23,39 +24,43 @@ export enum HominioAbility {
  * This function centralizes the core access control logic.
  *
  * @param user The user object (must contain the 'id' field) or null.
- * @param ability The desired ability (e.g., HominioAbility.READ).
- * @param doc The target document object (must contain the 'owner' field).
+ * @param ability The desired ability (e.g., HominioAbility.READ, HominioAbility.CREATE).
+ * @param doc The target document object (must contain the 'owner' field) or null for CREATE check.
  * @returns True if the action is permitted, false otherwise.
  */
 export function can(
     user: CapabilityUser | null, // <<< UPDATED: Accept user
     ability: HominioAbility,
-    doc: Pick<Docs, 'owner'>
+    doc: Pick<Docs, 'owner'> | null // <<< UPDATED: Allow null for CREATE
 ): boolean {
 
     // --- REMOVED Internal session fetching ---
     // --- REMOVED Offline Check --- 
 
     // --- Simplified Online Logic --- 
-    const targetOwner = doc.owner;
+    const targetOwner = doc?.owner;
     const userId = user?.id; // Use passed-in user
 
     const isOwner = !!userId && targetOwner === userId;
     const isGenesis = targetOwner === GENESIS_HOMINIO;
 
     switch (ability) {
+        case HominioAbility.CREATE:
+            // Create allowed if the user is authenticated (has an ID)
+            return !!userId;
+
         case HominioAbility.READ:
             // Read allowed if owner OR if it's a genesis doc
-            return isOwner || isGenesis;
+            return !!doc && (isOwner || isGenesis);
 
         case HominioAbility.WRITE:
             // Write allowed if owner. Offline placeholder check is removed.
             // <<< TEMPORARY DEBUG: Allow write to genesis docs >>>
-            return isOwner || isGenesis;
+            return !!doc && (isOwner || isGenesis);
 
         case HominioAbility.DELETE:
             // Delete only allowed if owner (genesis docs shouldn't be deleted)
-            return isOwner;
+            return !!doc && isOwner;
 
         default:
             console.warn(`Unknown ability check: ${ability}`);
@@ -84,4 +89,11 @@ export function canWrite(user: CapabilityUser | null, doc: Pick<Docs, 'owner'>):
  */
 export function canDelete(user: CapabilityUser | null, doc: Pick<Docs, 'owner'>): boolean { // <<< ADD user
     return can(user, HominioAbility.DELETE, doc); // <<< Pass user
+}
+
+/**
+ * Convenience helper to check if a user can create a document.
+ */
+export function canCreate(user: CapabilityUser | null): boolean {
+    return can(user, HominioAbility.CREATE, null); // Pass null for doc
 }
