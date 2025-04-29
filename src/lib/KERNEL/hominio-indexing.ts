@@ -1,7 +1,11 @@
 import { type LoroDoc, LoroMap, LoroList } from 'loro-crdt';
-import { hominioDB, /* docChangeNotifier, */ type Docs, type IndexingBacklogItem } from './hominio-db';
+import {
+    hominioDB,
+    /* docChangeNotifier, */ type Docs,
+    type IndexingBacklogItem,
+    triggerDocChangeNotification
+} from './hominio-db';
 import { hashService } from './hash-service';
-import { browser } from '$app/environment';
 import { getIndexLeafPubKey, isIndexLeafDocument, type IndexLeafType } from './index-registry';
 import { getDataFromDoc, getLeafDoc } from './loro-engine';
 import type { CompositeRecord } from '../../db/seeding/composite.data';
@@ -24,32 +28,16 @@ class HominioIndexing {
     // private debounceTimer: NodeJS.Timeout | null = null; // Removed debounce logic
     private unsubscribeNotifier: (() => void) | null = null;
 
-    constructor() {
-        if (browser) {
-            // Defer initialization steps that depend on other modules
-            // setTimeout(() => {
-            //     console.log('[HominioIndexing] Initializing...'); // Keep basic init log
-            //     // --- DISABLE AUTO-INDEXING ---
-            //     // this.unsubscribeNotifier = docChangeNotifier.subscribe(() => {
-            //     //     this.triggerDebouncedCycle();
-            //     // });
-            //     // --- END DISABLE ---
-            //     // Trigger initial check / backlog processing on startup - REMOVED, now manual trigger
-            //     // this.startIndexingCycle(true); // Pass flag to indicate initial run
-            // }, 500); // Small delay after app start
-        }
-    }
-
-    // REMOVED: triggerDebouncedCycle method
 
     /** Starts the indexing process if not already running. */
     public async startIndexingCycle(/* isInitialRun = false */): Promise<void> { // Remove unused parameter
+        console.log(`[HominioIndexing] startIndexingCycle called. isIndexing: ${this.isIndexing}`); // DEBUG
         if (this.isIndexing) {
             console.warn('[HominioIndexing] Cycle already in progress, skipping manual trigger.'); // Keep warning
             return;
         }
         this.isIndexing = true;
-        console.log(`[HominioIndexing] Starting manual indexing cycle...`); // Simplified log
+        let notificationNeeded = false; // Flag to track if notification should be sent
 
         let indexKeys: Record<IndexLeafType, string> | null = null; // Store keys here
         try {
@@ -88,22 +76,31 @@ class HominioIndexing {
                     }
                 }
             }
-            console.log(`[HominioIndexing] Identified ${docsToIndex.length} documents requiring indexing.`); // Keep summary log
-
             // 3. Process identified documents (concurrently?)
             for (const pubKey of docsToIndex) {
-                await this.processDocumentForIndexing(pubKey, indexKeys);
+                const result = await this.processDocumentForIndexing(pubKey, indexKeys);
+                if (result.success) {
+                    notificationNeeded = true; // Mark notification needed if successful
+                }
             }
 
             // 4. Process backlog queue
-            // REMOVED: console.log('[HominioIndexing] Processing backlog queue...');
-            await this.processBacklogQueue(indexKeys);
+            const backlogProcessed = await this.processBacklogQueue(indexKeys);
+            if (backlogProcessed) {
+                notificationNeeded = true; // Mark notification needed if backlog items were processed
+            }
 
         } catch (error) {
             console.error('[HominioIndexing] Error during indexing cycle:', error); // Keep critical error
         } finally {
             this.isIndexing = false;
-            console.log('[HominioIndexing] Manual indexing cycle finished.'); // Simplified log
+            // Trigger notification ONLY if needed, AFTER the lock is released
+            if (notificationNeeded) {
+                console.log('[HominioIndexing] Indexing cycle complete, triggering notification.'); // DEBUG
+                triggerDocChangeNotification();
+            } else {
+                console.log('[HominioIndexing] Indexing cycle complete, no changes detected, skipping notification.'); // DEBUG
+            }
         }
     }
 
@@ -242,10 +239,24 @@ class HominioIndexing {
                     break;
                 }
                 case 'Schema': { // Represents Schema
-                    // Add to schemas index
-                    indexSchemasMap.set(pubKey, true);
-                    commitRequired = true;
-                    indexingLogicSuccess = true;
+                    // <<< CHANGE: Index by Name >>>
+                    const schemaData = getDataFromDoc(loroDoc) as { name?: string } | undefined;
+                    const schemaName = schemaData?.name;
+
+                    if (schemaName && typeof schemaName === 'string' && schemaName.trim().length > 0) {
+                        // TODO: Handle removal of potential old name entry if the name changed.
+                        // For now, we just set the new name. Potential for stale entries if names change frequently.
+                        indexSchemasMap.set(schemaName, pubKey); // Use name as key, pubKey as value
+                        commitRequired = true;
+                        indexingLogicSuccess = true;
+                        console.log(`[HominioIndexing] Indexed schema: '${schemaName}' -> ${pubKey}`); // DEBUG
+                    } else {
+                        console.warn(`[HominioIndexing] Schema ${pubKey} has missing or invalid 'name' in data. Cannot add to name-based index.`);
+                        // Decide if this should be an error or just skip indexing by name
+                        // For now, let's consider it a success for indexing state, but log the warning.
+                        indexingLogicSuccess = true; // Allow state update, but it won't be in the name index
+                    }
+                    // <<< END CHANGE >>>
                     break;
                 }
                 case 'Composite': {
@@ -290,7 +301,7 @@ class HominioIndexing {
                                     }
                                     list = newListContainer;
                                     commitRequired = true; // Mark commit needed
-                                    console.log(`[HominioIndexing DEBUG] Created new list for key: ${componentKey}`);
+                                    // REMOVED: console.log(`[HominioIndexing DEBUG] Created new list for key: ${componentKey}`);
                                 }
 
                                 // Add pubKey to list if not present
@@ -355,6 +366,11 @@ class HominioIndexing {
                         needsReindex: false, // Clear reindex flag
                     });
                     await hominioDB.removeFromIndexingBacklog(pubKey);
+
+                    // <<< Notify AFTER successful indexing and state update >>>
+                    // REMOVED: console.log(`[HominioIndexing processDocumentForIndexing] Successfully processed ${pubKey}, triggering notification.`); // DEBUG
+                    // REMOVED: triggerDocChangeNotification();
+                    // <<< END Notify >>>
                 } else {
                     console.error(`[HominioIndexing] CRITICAL: Could not retrieve metadata for ${pubKey} after processing.`); // Keep critical error
                     throw new Error(`Metadata missing for ${pubKey} after successful processing.`);
@@ -388,15 +404,16 @@ class HominioIndexing {
 
 
     /** Processes the indexing backlog queue. */
-    private async processBacklogQueue(indexKeys: Record<IndexLeafType, string> | null): Promise<void> {
+    private async processBacklogQueue(indexKeys: Record<IndexLeafType, string> | null): Promise<boolean> {
         // FIX: Revert to using getNextFromIndexingBacklog in a loop
         if (!indexKeys) {
             console.error("[HominioIndexing] Cannot process backlog: Index keys were not loaded.");
-            return;
+            return false;
         }
 
-        console.log(`[HominioIndexing] Processing backlog queue in batches...`);
+        // REMOVED: console.log(`[HominioIndexing] Processing backlog queue in batches...`);
         let itemsProcessedTotal = 0;
+        let processedAnySuccessfully = false; // Track if any item was successfully processed for notification
 
         try {
             while (true) {
@@ -405,7 +422,7 @@ class HominioIndexing {
                     break; // No more items in backlog
                 }
 
-                console.log(`[HominioIndexing] Processing batch of ${backlogItems.length} backlog item(s).`);
+                // REMOVED: console.log(`[HominioIndexing] Processing batch of ${backlogItems.length} backlog item(s).`);
                 let processedInBatch = 0;
 
                 for (const item of backlogItems) {
@@ -432,6 +449,11 @@ class HominioIndexing {
                     if (result.success) {
                         await hominioDB.removeFromIndexingBacklog(item.pubKey);
                         console.log(`[HominioIndexing] Successfully processed backlog item ${item.pubKey}. Removed from queue.`);
+                        // <<< Notify AFTER successful backlog processing >>>
+                        // REMOVED: console.log(`[HominioIndexing processBacklogQueue] Successfully processed ${item.pubKey}, triggering notification.`); // DEBUG
+                        // REMOVED: triggerDocChangeNotification();
+                        // <<< END Notify >>>
+                        processedAnySuccessfully = true; // Mark success for notification
                     } else {
                         // Increment retry count via DB method
                         const updatedBacklogItem: IndexingBacklogItem = {
@@ -458,6 +480,7 @@ class HominioIndexing {
         if (itemsProcessedTotal > 0) {
             console.log(`[HominioIndexing] Processed ${itemsProcessedTotal} items from backlog.`);
         }
+        return processedAnySuccessfully; // Return whether any item was successfully processed
     }
 
     /** Cleans up resources, like unsubscribing from notifiers. */

@@ -1,9 +1,5 @@
 <script lang="ts">
-	import {
-		processReactiveQuery,
-		type LoroHqlQuery,
-		type QueryResult
-	} from '$lib/KERNEL/hominio-query';
+	import { processReactiveQuery, type QueryResult } from '$lib/KERNEL/hominio-query';
 	import { readable, type Readable, derived, writable } from 'svelte/store';
 	import { getContext } from 'svelte';
 	import { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
@@ -11,11 +7,9 @@
 	import SchemaQueries from '$lib/components/SchemaQueries.svelte';
 	import LeafQueries from '$lib/components/LeafQueries.svelte';
 	import QueryEditor from '$lib/components/QueryEditor.svelte';
-	import NodesProps from '$lib/components/NodesProps.svelte';
-	import GraphView from '$lib/components/GraphView.svelte';
 	import IndexQueries from '$lib/components/IndexQueries.svelte';
 	import Todos from '$lib/components/Todos.svelte';
-	import type { SchemaPlaceTranslation, SchemaLanguageTranslation } from '$db/seeding/schema.data';
+	import type { SchemaLanguageTranslation } from '$db/seeding/schema.data';
 
 	// --- Get Effective User Function from Context ---
 	type GetCurrentUserFn = typeof getMeType;
@@ -245,22 +239,7 @@
 			>
 				Query Editor
 			</button>
-			<button
-				class="border-b-2 px-4 py-2 font-medium transition-colors {activeTab === 'nodes-props'
-					? 'border-indigo-500 text-indigo-600'
-					: 'border-transparent text-gray-500 hover:text-gray-700'}"
-				on:click={() => setActiveTab('nodes-props')}
-			>
-				Nodes Props
-			</button>
-			<button
-				class="border-b-2 px-4 py-2 font-medium transition-colors {activeTab === 'graph-view'
-					? 'border-indigo-500 text-indigo-600'
-					: 'border-transparent text-gray-500 hover:text-gray-700'}"
-				on:click={() => setActiveTab('graph-view')}
-			>
-				Graph View
-			</button>
+
 			<!-- Add Indices Tab Button -->
 			<button
 				class="border-b-2 px-4 py-2 font-medium transition-colors {activeTab === 'indices'
@@ -296,15 +275,6 @@
 			<div class="h-full">
 				<QueryEditor />
 			</div>
-		{:else if activeTab === 'nodes-props'}
-			<div class="h-full">
-				<NodesProps />
-			</div>
-		{:else if activeTab === 'graph-view'}
-			<div class="h-full">
-				<GraphView />
-			</div>
-			<!-- Add Indices Tab Content -->
 		{:else if activeTab === 'indices'}
 			<div class="h-full">
 				<IndexQueries />

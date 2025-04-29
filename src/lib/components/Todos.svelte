@@ -117,8 +117,9 @@
 	// --- Constants ---
 	const TCINI_SCHEMA_ID = '0xf4f64c16a96daf1d2b91269fe82946b21b7d1faa728ff20ed86a6c18dabc4943';
 	const CNEME_SCHEMA_ID = '0xe936b2fc03557057b6c021a0c8e17d21312b7446ca11a46bc0d61d3bcd150a96';
-	const STATUS_NOT_STARTED_ID = '@status_notstarted';
-	const STATUS_COMPLETED_ID = '@status_completed';
+	const STATUS_NOT_STARTED_ID =
+		'0x3b302f86a7873b6533959d80c53efec82ce28ea3fd540da3ed90dd26cac76bde';
+	const STATUS_COMPLETED_ID = '0xe3110ac83fd5ef52cf91873b8a94ef6662cd03d5eb433d51922942e834d63c66';
 
 	// --- Helper Functions ---
 	// Remove unused triggerIndexing function
@@ -191,6 +192,7 @@
 			if (result.status === 'success') {
 				console.log('Todo added successfully:', result.generatedPubKeys);
 				newTodoText = '';
+				// REMOVED: Trigger indexing call
 			} else {
 				console.error('Failed to add todo:', result.message, result.errorDetails);
 				mutationError = `Failed to add todo: ${result.message}`;
@@ -250,6 +252,7 @@
 				throw new Error(result.message);
 			}
 			console.log('Todo status toggled successfully.');
+			// REMOVED: Trigger indexing call
 		} catch (err: unknown) {
 			console.error('Failed to toggle todo status:', err);
 			mutationError = err instanceof Error ? err.message : 'Failed to update todo status.';
@@ -295,6 +298,7 @@
 				throw new Error(result.message);
 			}
 			console.log('Todo deleted successfully.');
+			// REMOVED: Trigger indexing call
 		} catch (err: unknown) {
 			console.error('Failed to delete todo:', err);
 			mutationError = err instanceof Error ? err.message : 'Failed to delete todo.';
@@ -344,7 +348,7 @@
 </script>
 
 <div class="flex h-full flex-col overflow-hidden bg-white p-4">
-	<h2 class="mb-4 text-xl font-semibold text-gray-800">Simple Todos (Local - Refactored)</h2>
+	<h2 class="mb-4 text-xl font-semibold text-gray-800">Simple Todos</h2>
 
 	<!-- Add Todo Input -->
 	<form class="mb-4 flex items-center gap-2" on:submit|preventDefault={addTodo}>

@@ -4,9 +4,10 @@ import { LoroDoc, LoroMap } from 'loro-crdt';
 import { hashService } from './hash-service';
 import { docIdService } from './docid-service';
 import { getContentStorage, getDocsStorage, initStorage } from './hominio-storage';
-import { canRead, canWrite } from './hominio-caps'; // Removed canDelete
+import { canRead, canWrite } from './hominio-caps'; // Removed canDelete import
 import type { CapabilityUser } from './hominio-caps'; // Fixed import source
 import type { ValidationRuleStructure } from './hominio-validate';
+// REMOVED: import { hominioIndexing } from './hominio-indexing'; // <<< Import indexing service >>>
 
 // --- Reactivity Notifier ---
 // Simple store that increments when any tracked document changes.
@@ -513,8 +514,6 @@ class HominioDB {
                 });
             });
 
-            triggerDocChangeNotification();
-
             return snapshotCid; // Return the new snapshot CID
 
         } catch (err) {
@@ -587,9 +586,6 @@ class HominioDB {
             // Save updated document metadata
             const docsStorage = getDocsStorage();
             await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDoc))); // Use pubKey directly
-
-            // Explicitly trigger reactivity *after* metadata is saved
-            // docChangeNotifier.update(n => n + 1);
 
             return snapshotCid;
         } catch (err) {
@@ -677,9 +673,6 @@ class HominioDB {
             // Save updated document metadata
             const docsStorage = getDocsStorage();
             await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDoc)));
-
-            // Explicitly trigger reactivity *after* metadata is saved
-            // docChangeNotifier.update(n => n + 1);
 
         } catch (err) {
             console.error(`Error clearing local changes for ${pubKey}:`, err);
@@ -878,9 +871,6 @@ class HominioDB {
             const docsStorage = getDocsStorage();
             await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(newDoc)));
 
-            // Explicitly trigger reactivity *after* metadata is saved
-            // docChangeNotifier.update(n => n + 1);
-
             return { pubKey, snapshotCid };
         } catch (err) {
             console.error('Error importing content:', err);
@@ -945,7 +935,8 @@ class HominioDB {
 
         // Trigger notifier when loading/creating state changes to false (completed operation)
         if ((wasLoading && !this._isLoading) || (wasCreating && !this._isCreatingDoc)) {
-            docChangeNotifier.update(n => n + 1);
+            // REMOVED: Don't trigger based on loading/creating state
+            // REMOVED: docChangeNotifier.update(n => n + 1);
         }
     }
 
@@ -1000,10 +991,16 @@ class HominioDB {
             const docsStorage = getDocsStorage();
             const deleted = await docsStorage.delete(pubKey);
 
-            // TODO: Optionally garbage collect associated content CIDs?
             // This is complex - requires tracking CID references.
 
-            triggerDocChangeNotification();
+            // REMOVED: triggerDocChangeNotification(); // Don't notify immediately on delete
+
+            // <<< Trigger indexing asynchronously AFTER deleting metadata >>>
+            // REMOVED: console.log(`[HominioDB deleteDocument] Triggering indexing after deleting doc ${pubKey}...`); // DEBUG
+            // REMOVED: hominioIndexing.startIndexingCycle().catch(err => {
+            // REMOVED:    console.error('[HominioDB deleteDocument] Error triggering indexing:', err);
+            // REMOVED: });
+            // <<< END Trigger >>>
 
             return deleted; // Return success based on storage deletion
         } catch (err) {
@@ -1035,6 +1032,12 @@ class HominioDB {
 
             for (const item of allItems) {
                 try {
+                    // <<< FIX: Explicitly skip the internal indexing backlog key >>>
+                    if (item.key === INDEXING_BACKLOG_KEY) {
+                        continue; // Skip this internal key
+                    }
+                    // <<< END FIX >>>
+
                     if (item.key && item.value) { // Ensure key and value exist
                         const data = await docsStorage.get(item.key); // Re-fetch ensures we have Uint8Array
                         if (data) {
@@ -1139,9 +1142,30 @@ class HominioDB {
             loroDoc.import(snapshotData);
             loroDoc.setPeerId(1); // Set a default peer ID
 
+            // <<< ADDED: Apply incremental updates >>>
+            if (docMetadata.updateCids && docMetadata.updateCids.length > 0) {
+                // REMOVED: console.log(`[getLoroDoc] Applying ${docMetadata.updateCids.length} updates for ${pubKey}...`);
+                for (const updateCid of docMetadata.updateCids) {
+                    try {
+                        const updateData = await contentStorage.get(updateCid);
+                        if (updateData) {
+                            loroDoc.import(updateData);
+                            // REMOVED: console.log(`[getLoroDoc] Applied update ${updateCid}`);
+                        } else {
+                            console.warn(`[getLoroDoc] Update content not found for CID ${updateCid} (doc ${pubKey})`);
+                        }
+                    } catch (updateImportErr) {
+                        console.error(`[getLoroDoc] Error importing update ${updateCid} for ${pubKey}:`, updateImportErr);
+                        // Decide whether to continue or fail if an update fails?
+                        // For now, log and continue.
+                    }
+                }
+                // REMOVED: console.log(`[getLoroDoc] Finished applying updates for ${pubKey}.`);
+            }
+            // <<< END ADDED >>>
+
             // Add subscribe to changes
             loroDoc.subscribe(() => {
-                console.log(`[Loro Subscribe Callback] Triggered for pubKey: ${pubKey}`);
                 // Check if there are changes that need persisting
                 // This is called when the document changes in-memory
                 this._persistLoroUpdateAsync(pubKey, loroDoc).catch(err => {
@@ -1210,12 +1234,10 @@ class HominioDB {
                 // Persist updated metadata
                 const docsStorage = getDocsStorage();
                 await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDocData)));
-                // Always trigger the notifier after updates
-                docChangeNotifier.update((n) => n + 1);
+                // REMOVED: docChangeNotifier.update((n) => n + 1); // Don't notify here
             } else {
-
-                // Trigger notification even if no new updates to ensure UI refreshes
-                docChangeNotifier.update((n) => n + 1);
+                // REMOVED: Trigger notification even if no new updates
+                // REMOVED: docChangeNotifier.update((n) => n + 1);
             }
 
             return updateCid; // Return the CID regardless of whether metadata was updated
@@ -1234,60 +1256,44 @@ class HominioDB {
             return; // Skip persistence if called during createDocument
         }
 
-        const isFacki = pubKey.startsWith('@facki_');
-        if (isFacki) {
-            console.log(`[HominioDB _persistLoroUpdateAsync] START for Facki: ${pubKey}`);
-        }
+        // REMOVED: Facki logging start
 
-        const docsStorage = getDocsStorage();
-        // <<< REMOVED Log: Fetching Metadata >>>
-        const docMetaDataBytes = await docsStorage.get(pubKey);
-        const docMeta: Docs | null = docMetaDataBytes ? JSON.parse(new TextDecoder().decode(docMetaDataBytes)) : null;
-        if (!docMeta) {
-            console.error(`Cannot persist update for non-existent document: ${pubKey}`); // Keep Error
-            return;
-        }
+        try {
+            // 1. Export Incremental Updates
+            // REMOVED: Log: Exporting Snapshot
+            // FIX: Use the correct export syntax based on Loro documentation
+            const updateBytes = loroDoc.export({ mode: "update" }); // Export changes since last import/snapshot/commit
 
-        // 1. Export Snapshot
-        // <<< REMOVED Log: Exporting Snapshot >>>
-        const snapshotBytes = loroDoc.exportSnapshot();
-        const snapshotCid = await hashService.hashSnapshot(snapshotBytes);
+            // 2. Check if there are actual updates to persist
+            if (updateBytes && updateBytes.length > 0) {
+                // REMOVED: Log: Saving Content
+                // REMOVED: Log: Content Saved
 
-        // 2. Save Content
-        // <<< REMOVED Log: Saving Content >>>
-        const contentStorage = getContentStorage();
+                // 3. Persist the incremental update using the dedicated method
+                // This method handles hashing, saving content, and updating metadata (localState.updateCids)
+                // It also triggers the docChangeNotifier internally.
+                // REMOVED: Log: Updating Metadata
+                await this.persistLoroUpdate(pubKey, updateBytes);
+                // REMOVED: console.log persistence log
+            } else {
+                // REMOVED: console.log("No updates to persist for", pubKey);
+            }
 
-        // Save content with minimal metadata known by hominio-db
-        await contentStorage.put(snapshotCid, snapshotBytes, {
-            type: CONTENT_TYPE_SNAPSHOT,
-            createdAt: new Date().toISOString()
-        });
+            // REMOVED: Redundant snapshot persistence logic
+            // REMOVED: snapshotBytes calculation
+            // REMOVED: snapshotCid calculation
+            // REMOVED: contentStorage.put for snapshot
+            // REMOVED: updatedDocMeta creation for snapshot
+            // REMOVED: docsStorage.put for snapshot metadata
 
-        // <<< REMOVED Log: Content Saved >>>
+            // REMOVED: Redundant triggerDocChangeNotification() call (handled within persistLoroUpdate if updates occurred)
+            // REMOVED: Snapshot details logging
 
-        // 3. Update Docs Registry
-        const updatedDocMeta: Docs = {
-            ...docMeta,
-            snapshotCid: snapshotCid,
-            updatedAt: new Date().toISOString(),
-            updateCids: [], // Clear update CIDs as they are now part of the snapshot
-            localState: undefined // Clear local state as snapshot is persisted
-        };
-
-        // <<< REMOVED Log: Updating Metadata >>>
-        await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDocMeta)));
-
-        // REMOVED: console.log(`[HominioDB] Persisted snapshot for ${pubKey}. CID: ${snapshotCid}`);
-
-        // 4. Trigger notification AFTER successful persistence
-        triggerDocChangeNotification();
-
-        // <<< REMOVED Log: Snapshot details >>>
-
-        // REMOVED: Redundant put and logs
-
-        if (isFacki) {
-            console.log(`[HominioDB _persistLoroUpdateAsync] END for Facki: ${pubKey} (New CID: ${snapshotCid.substring(0, 10)}...)`);
+        } catch (err) {
+            console.error(`[HominioDB _persistLoroUpdateAsync] Error processing update for ${pubKey}:`, err);
+            // Consider how to handle errors - maybe add to a failed queue?
+        } finally {
+            // REMOVED: Facki logging end
         }
     }
     // -------------------------
@@ -1375,9 +1381,12 @@ class HominioDB {
             const docsStorage = getDocsStorage();
             await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(mergedDoc)));
 
-            // Trigger reactivity after saving document
-            // REMOVED: docChangeNotifier.update(n => n + 1);
-            // The main sync loop should trigger the notification once at the end.
+            // <<< Trigger indexing asynchronously AFTER saving synced metadata >>>
+            // REMOVED: console.log(`[HominioDB saveSyncedDocument] Triggering indexing for synced doc ${pubKey}...`); // DEBUG
+            // REMOVED: hominioIndexing.startIndexingCycle().catch(err => {
+            // REMOVED:     console.error('[HominioDB saveSyncedDocument] Error triggering indexing:', err);
+            // REMOVED: });
+            // <<< END Trigger >>>
 
         } catch (err) {
             console.error(`[saveSyncedDocument] Error processing doc ${pubKey}:`, err);

@@ -87,7 +87,6 @@ export async function executeMutation(
 
     // --- Phase 1: Prepare & Validate (In Memory) --- 
     try {
-        console.log("[Mutation Engine] Starting Phase 1: Preparation & Validation");
 
         for (const op of request.mutations) {
             const placeholder = op.placeholder;
@@ -116,7 +115,6 @@ export async function executeMutation(
 
             switch (op.operation) {
                 case 'create': {
-                    console.log(`[Mutation Engine] Preparing CREATE: Type=${op.type}, Placeholder=${placeholder}`);
                     // Permission Check
                     if (!canCreate(user)) throw new Error('Permission denied: User cannot create documents.');
 
@@ -228,7 +226,6 @@ export async function executeMutation(
                 }
                 case 'update': {
                     const targetPubKey = op.targetPubKey;
-                    console.log(`[Mutation Engine] Preparing UPDATE: Target=${targetPubKey}`);
 
                     // 1. Permission Check
                     const docMeta = await hominioDB.getDocument(targetPubKey);
@@ -270,7 +267,6 @@ export async function executeMutation(
                 }
                 case 'delete': {
                     const targetPubKey = op.targetPubKey;
-                    console.log(`[Mutation Engine] Preparing DELETE: Target=${targetPubKey}`);
 
                     // 1. Permission Check
                     const docMeta = await hominioDB.getDocument(targetPubKey);
@@ -304,7 +300,6 @@ export async function executeMutation(
             }
         }
 
-        console.log("[Mutation Engine] Phase 1 Completed Successfully.");
 
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
@@ -314,7 +309,6 @@ export async function executeMutation(
 
     // --- Phase 2: Commit (Persistent Storage) --- 
     try {
-        console.log("[Mutation Engine] Starting Phase 2: Persistence");
         let requiresNotification = false;
 
         // NOTE: No DB transaction wrapper here as hominio-db uses IndexedDB directly.
@@ -322,20 +316,17 @@ export async function executeMutation(
 
         // 1. Process Deletes first
         for (const pubKeyToDelete of deletesToPersist) {
-            console.log(`[Mutation Engine] Persisting DELETE: ${pubKeyToDelete}`);
             await hominioDB.deleteDocument(user, pubKeyToDelete);
             requiresNotification = true;
         }
 
         // 2. Generate Final Keys for ALL Creations
         const tempToFinalKeyMap: Record<string, string> = {}; // Map tempKey -> finalPubKey
-        console.log("[Mutation Engine] Generating final keys...");
         for (const [tempKey, { isNew, placeholder }] of updatesToPersist.entries()) {
             // Generate final key ONLY for new documents
             if (isNew) {
                 const finalPubKey = await docIdService.generateDocId();
                 tempToFinalKeyMap[tempKey] = finalPubKey;
-                console.log(`  - Mapping Temp Key ${tempKey} -> Final Key ${finalPubKey}`);
                 // If there was an original placeholder, update the map for the return value
                 if (placeholder && placeholderToTempKey[placeholder] === tempKey) {
                     finalGeneratedPubKeys[placeholder] = finalPubKey;
@@ -344,7 +335,6 @@ export async function executeMutation(
         }
 
         // 3. Update LoroDocs with Final Keys BEFORE Persistence
-        console.log("[Mutation Engine] Updating LoroDocs with final keys...");
         for (const [key, { doc, isNew }] of updatesToPersist.entries()) { // Iterate using tempKey/targetKey `key`
             if (deletesToPersist.has(key) || !isNew) continue; // Only update newly created docs internal refs
 
@@ -358,7 +348,6 @@ export async function executeMutation(
             // Update self-referencing schemaId
             if (docType === 'Schema') {
                 dataMap.set('schemaId', finalKeyForUpdate);
-                console.log(`  - Updated Schema ${key} self-ref to final key ${finalKeyForUpdate}`);
             }
 
             // Update references within Composite places
@@ -372,7 +361,6 @@ export async function executeMutation(
                         if (typeof currentVal === 'string' && tempToFinalKeyMap[currentVal]) {
                             const finalRefKey = tempToFinalKeyMap[currentVal];
                             placesMap.set(place, finalRefKey);
-                            console.log(`  - Updated Composite ${key} place ${place} ref ${currentVal} to final key ${finalRefKey}`);
                         }
                     }
                 }
@@ -380,7 +368,7 @@ export async function executeMutation(
         }
 
         // 4. Persist Creates/Updates
-        for (const [key, { doc, isNew, owner, placeholder }] of updatesToPersist.entries()) {
+        for (const [key, { doc, isNew, owner }] of updatesToPersist.entries()) {
             if (deletesToPersist.has(key)) continue;
 
             if (isNew) {
@@ -390,8 +378,6 @@ export async function executeMutation(
                     // This check ensures we generated a key for every new item
                     throw new Error(`Consistency Error: Final key not generated for temp key ${key}`);
                 }
-                const logPlaceholder = placeholder ? `${placeholder} (${key})` : `(${key})`;
-                console.log(`[Mutation Engine] Persisting CREATE: ${logPlaceholder} -> ${finalPubKey}`);
                 if (!owner) {
                     // This should have been caught in Phase 1, but double-check
                     throw new Error(`Consistency Error: Owner missing for new document with temp key ${key}`);
@@ -411,7 +397,6 @@ export async function executeMutation(
                 requiresNotification = true;
             } else {
                 // Update existing doc (key is the actual targetPubKey)
-                console.log(`[Mutation Engine] Persisting UPDATE: ${key}`);
                 // Ensure refs in updated docs are also using final keys if needed
                 // (The update logic in step 3 handles this)
                 await hominioDB.updateDocument(user, key, doc);
@@ -419,19 +404,23 @@ export async function executeMutation(
             }
         }
 
-        console.log("[Mutation Engine] Phase 2 Persistence Completed.");
 
         // --- Post-Commit --- 
         if (requiresNotification) {
             triggerDocChangeNotification();
         }
         // === Trigger Indexing After Successful Commit ===
-        console.log("[Mutation Engine] Triggering indexing cycle after successful mutation...");
-        // We don't await this, let it run in the background
-        hominioIndexing.startIndexingCycle();
+        // We now await this to ensure indexing completes before mutation returns
+        console.log('[Mutation Engine] Awaiting indexing cycle after successful commit...'); // DEBUG
+        try {
+            await hominioIndexing.startIndexingCycle();
+            console.log('[Mutation Engine] Indexing cycle completed.'); // DEBUG
+        } catch (indexingError) {
+            console.error('[Mutation Engine] Error during post-mutation indexing cycle:', indexingError);
+            // Decide if this should make the overall mutation fail? For now, just log.
+        }
         // ==============================================
 
-        console.log("[Mutation Engine] Mutation executed successfully.");
         return { status: 'success', generatedPubKeys: finalGeneratedPubKeys };
 
     } catch (error: unknown) {

@@ -1,20 +1,20 @@
 <script lang="ts">
 	import {
+		type QueryResult,
 		processReactiveQuery,
-		type LoroHqlQuery,
-		type QueryResult
+		type LoroHqlQueryExtended
 	} from '$lib/KERNEL/hominio-query';
-	import { readable, type Readable, writable } from 'svelte/store';
 	import { getContext } from 'svelte';
 	import { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
 	import type { SchemaLanguageTranslation } from '$db/seeding/schema.data';
-	import type { LeafValue } from '$db/seeding/leaf.data';
+	import { getMe } from '$lib/KERNEL/hominio-auth';
+	import { writable } from 'svelte/store';
 
 	// --- Get Effective User Function from Context ---
 	type GetCurrentUserFn = typeof getMeType;
-	const getMe = getContext<GetCurrentUserFn>('getMe');
+	const getCurrentUser = getContext<GetCurrentUserFn>('getCurrentUser');
 
-	// FIX: Rename type and update fields
+	// FIX: Rename type and update fields to match expected select output
 	interface SchemaQueryResult extends QueryResult {
 		id: string; // pubkey
 		name?: string; // data.name
@@ -29,162 +29,97 @@
 		translations?: Record<string, SchemaLanguageTranslation>;
 	}
 
-	// FIX: Rename type and update fields
-	interface CompositeQueryResult extends QueryResult {
-		id: string; // pubkey
-		schemaId?: string; // data.schemaId
-		// Resolved Leaf data for each place
-		x1?: { data: LeafValue | null; pubkey: string } | null; // Resolved LeafRecord.data
-		x2?: { data: LeafValue | null; pubkey: string } | null;
-		x3?: { data: LeafValue | null; pubkey: string } | null;
-		x4?: { data: LeafValue | null; pubkey: string } | null;
-		x5?: { data: LeafValue | null; pubkey: string } | null;
-	}
-
-	// FIX: Rename query, update fields, use schema key
-	const allSchemaQuery: LoroHqlQuery = {
-		from: {
-			schema: [] // Use schema key (Changed from gismu_pubkeys)
-		},
-		map: {
-			id: { field: 'doc.pubkey' },
-			name: { field: 'self.data.name' },
-			places: { field: 'self.data.places' },
-			translations: { field: 'self.data.translations' }
-		}
-	};
-
-	// FIX: Rename store
-	const schemaQueryStore = readable<LoroHqlQuery>(allSchemaQuery);
-
-	// FIX: Rename readable store and update type cast
-	const schemaReadable = processReactiveQuery(getMe, schemaQueryStore) as Readable<
-		SchemaQueryResult[] | null | undefined
-	>;
-
-	// FIX: Rename function and update query fields
-	function createCompositeQueryForSchema(schemaId: string): LoroHqlQuery {
-		return {
-			from: {
-				composite: [] // Use composite key (Changed from composite_pubkeys)
-			},
-			where: [
-				{
-					field: 'self.data.schemaId',
-					condition: { equals: schemaId }
-				}
-			],
-			map: {
-				id: { field: 'doc.pubkey' },
-				schemaId: { field: 'self.data.schemaId' },
-				x1: {
-					resolve: {
-						fromField: 'self.data.places.x1',
-						map: {
-							data: { field: 'self.data' },
-							pubkey: { field: 'doc.pubkey' }
-						}
-					}
-				},
-				x2: {
-					resolve: {
-						fromField: 'self.data.places.x2',
-						map: {
-							data: { field: 'self.data' },
-							pubkey: { field: 'doc.pubkey' }
-						}
-					}
-				},
-				x3: {
-					resolve: {
-						fromField: 'self.data.places.x3',
-						map: {
-							data: { field: 'self.data' },
-							pubkey: { field: 'doc.pubkey' }
-						}
-					}
-				},
-				x4: {
-					resolve: {
-						fromField: 'self.data.places.x4',
-						map: {
-							data: { field: 'self.data' },
-							pubkey: { field: 'doc.pubkey' }
-						}
-					}
-				},
-				x5: {
-					resolve: {
-						fromField: 'self.data.places.x5',
-						map: {
-							data: { field: 'self.data' },
-							pubkey: { field: 'doc.pubkey' }
-						}
-					}
-				}
-			}
-		};
-	}
-
-	// FIX: Rename state variable
+	// --- Component State ---
 	let selectedSchemaId = $state<string | null>(null);
-
-	// FIX: Rename state variable and type
 	let currentSelectedSchema = $state<SchemaQueryResult | null>(null);
 
-	// FIX: Rename store
-	const compositeQueryStore = writable<LoroHqlQuery | null>(null);
+	// --- HQL Query Definition ---
+	const allSchemaQueryDefinition: LoroHqlQueryExtended = {
+		steps: [
+			{
+				action: 'iterateIndex',
+				indexName: 'schemas', // Iterate the @index/schemas map
+				variables: {
+					key: 'schemaNameVar', // Output variable for the key (schema name)
+					value: 'schemaPubKeyVar' // Output variable for the value (pubkey)
+				},
+				resultVariable: 'schemaIndexItems' // Store the array of {schemaNameVar, schemaPubKeyVar}
+			},
+			{
+				action: 'get',
+				from: {
+					variable: 'schemaIndexItems', // Use the result from the previous step
+					sourceKey: 'schemaPubKeyVar', // Specify which variable in the items holds the pubkey
+					targetDocType: 'Schema' // Specify the type of document to fetch
+				},
+				fields: {
+					id: { field: 'doc.pubkey' },
+					name: { field: 'self.data.name' },
+					places: { field: 'self.data.places' },
+					translations: { field: 'self.data.translations' }
+				},
+				resultVariable: 'schemaDetails'
+			},
+			{
+				action: 'select',
+				groupBy: 'id', // Group by the fetched document ID (pubkey)
+				select: {
+					id: { variable: 'id' }, // Select the ID from the flattened context
+					name: { variable: 'name' },
+					places: { variable: 'places' },
+					translations: { variable: 'translations' }
+				}
+			}
+		]
+	};
 
-	// FIX: Rename readable store, update type cast
-	const compositeReadable = processReactiveQuery(getMe, compositeQueryStore) as Readable<
-		CompositeQueryResult[] | null | undefined
-	>;
+	// Create a writable store for the query definition
+	const schemaQueryDefStore = writable<LoroHqlQueryExtended | null>(allSchemaQueryDefinition);
 
-	// FIX: Rename function and update logic
+	// --- Reactive HQL Query Execution ---
+	// Pass the imported getMe function and the definition store
+	const schemaReadable = processReactiveQuery(getMe, schemaQueryDefStore);
+
+	// --- Event Handlers and Helpers ---
 	function selectSchema(id: string) {
 		console.log('Selecting schema with id:', id);
 		selectedSchemaId = id;
 
-		if ($schemaReadable) {
-			const found = $schemaReadable.find((item) => item.id === id);
+		// FIX: Use the reactive schemaReadable store's current value
+		const currentSchemaList = $schemaReadable; // Access Svelte 5 rune value
+
+		if (currentSchemaList) {
+			// FIX: Type item explicitly and cast result
+			const found = currentSchemaList.find(
+				(item): item is SchemaQueryResult =>
+					typeof item === 'object' && item !== null && (item as SchemaQueryResult).id === id
+			);
 			if (found) {
 				console.log('Found schema directly:', found.name);
 				currentSelectedSchema = found;
-
-				const compositeQuery = createCompositeQueryForSchema(id);
-				compositeQueryStore.set(compositeQuery);
 			} else {
-				console.log('Schema not found directly, trying flexible matching');
-				for (const schema of $schemaReadable) {
-					if (schema.id.toLowerCase() === id.toLowerCase()) {
-						console.log('Found schema with case-insensitive match:', schema.name);
-						currentSelectedSchema = schema;
-
-						const compositeQuery = createCompositeQueryForSchema(schema.id);
-						compositeQueryStore.set(compositeQuery);
-						break;
-					}
-				}
+				console.warn('Schema not found with ID:', id);
+				currentSelectedSchema = null;
 			}
+		} else {
+			console.warn('Schema list not yet loaded (schemaReadable is null/undefined).');
+			currentSelectedSchema = null;
 		}
 	}
 
-	// FIX: Rename helper function and update logic (if needed, check usage below)
-	function getSchemaDisplayInfo(schema: SchemaQueryResult): string {
-		// Example: Get English purpose or fallback to name
-		return schema.translations?.en?.purpose || schema.name || 'Unnamed Schema';
-	}
-
-	// Helper function to truncate long strings (remains the same)
-	function truncate(str: string, length = 16) {
-		if (!str) return '';
-		return str.length > length ? str.substring(0, length) + '...' : str;
-	}
-
 	// State for prenu creation (remains the same for now, assuming @schema/prenu ID is stable)
-	let isCreatingPrenu = false;
 	let creationMessage = '';
-	const PRENU_SCHEMA_ID = '@schema/prenu'; // Define constant for clarity
+
+	// --- REMOVED State for manual fetching ---
+	// let schemaIndexKey = $state<string | null>(null); // State for the index pubkey
+	// let schemaList = $state<SchemaQueryResult[]>([]); // State for final schema list
+	// let isLoadingSchemas = $state(true); // Loading state for the final list
+	// let schemaError = $state<string | null>(null); // Error state for final list
+
+	// --- REMOVED Fetch Schema Index Key and Schemas ---
+	// onMount(async () => {
+	// 	...
+	// });
 </script>
 
 <!-- FIX: Adjust grid columns for 3 columns: Sidebar, Main Content, Debug Aside - make right wider -->
@@ -192,7 +127,7 @@
 	<!-- Sidebar (Left Column) -->
 	<aside class="col-span-1 overflow-y-auto border-r border-gray-300 bg-white p-4">
 		<h2 class="mb-4 text-lg font-semibold text-gray-700">Schemas</h2>
-		<!-- FIX: Update readable store -->
+		<!-- FIX: Use reactive store $schemaReadable -->
 		{#if $schemaReadable === undefined}
 			<p class="text-sm text-gray-500">Loading schemas...</p>
 		{:else if $schemaReadable === null}
@@ -200,18 +135,20 @@
 		{:else if $schemaReadable.length === 0}
 			<p class="text-sm text-yellow-700">No schemas found.</p>
 		{:else}
+			{@const schemaList = $schemaReadable}
+			<!-- Assign to local const for clarity -->
 			<ul class="space-y-2">
-				<!-- FIX: Update iteration variable and click handler -->
-				{#each $schemaReadable as schema (schema.id)}
+				{#each schemaList as schema (schema.id)}
 					<li>
 						<button
 							class="w-full rounded px-3 py-2 text-left text-sm transition-colors duration-150 ease-in-out hover:bg-gray-200 {selectedSchemaId ===
-							schema.id
+							(schema as SchemaQueryResult).id
 								? 'bg-indigo-100 font-medium text-indigo-700'
 								: 'text-gray-600'}"
-							on:click={() => selectSchema(schema.id)}
+							on:click={() => selectSchema((schema as SchemaQueryResult).id)}
 						>
-							{schema.name}
+							<!-- Display schema name, fall back to ID if name is missing -->
+							{(schema as SchemaQueryResult).name ?? (schema as SchemaQueryResult).id}
 						</button>
 					</li>
 				{/each}
@@ -228,7 +165,8 @@
 			<div class="flex-shrink-0 pb-6">
 				<div class="flex items-center justify-between">
 					<h1 class="text-2xl font-bold text-gray-800">
-						{selectedSchema.name}
+						{selectedSchema.name ?? 'Schema Details'}
+						<!-- Fallback title -->
 					</h1>
 				</div>
 				<p class="mb-3 text-sm text-gray-500">

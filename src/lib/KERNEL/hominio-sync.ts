@@ -2,10 +2,10 @@ import { writable, get } from 'svelte/store';
 import { hominio } from '$lib/KERNEL/hominio-client';
 import { hominioDB, docChangeNotifier, triggerDocChangeNotification, type Docs } from '$lib/KERNEL/hominio-db';
 import { browser } from '$app/environment';
-import { canWrite, canDelete, type CapabilityUser } from './hominio-caps'; // Import capabilities
+import { canWrite, canDelete, type CapabilityUser } from './hominio-caps';
 import { getContentStorage } from '$lib/KERNEL/hominio-storage';
-import { getMe } from '$lib/KERNEL/hominio-auth'; // Import renamed function
-import { GENESIS_PUBKEY } from '$db/constants'; // <<< Import GENESIS_PUBKEY
+import { getMe } from '$lib/KERNEL/hominio-auth';
+import { GENESIS_PUBKEY } from '$db/constants';
 import { updateIndexLeafRegistry, type IndexLeafType } from './index-registry';
 import { LoroMap } from 'loro-crdt';
 
@@ -750,8 +750,6 @@ export class HominioSync {
                 console.error("[Pull] Pull from server completed with errors:", get(status).syncError); // Keep error
             }
 
-            triggerDocChangeNotification();
-
         } catch (err: unknown) {
             console.error('Error during pull from server:', err); // KEEP Error Log
             if (!get(status).syncError) {
@@ -881,7 +879,3 @@ export class HominioSync {
 }
 
 export const hominioSync = new HominioSync();
-
-// Helper function to get all keys from content storage (adjust if needed)
-// REMOVED: declaration merge as it's not used and might cause issues
-
