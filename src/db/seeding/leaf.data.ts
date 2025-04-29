@@ -24,7 +24,7 @@ export type LeafValue = LeafValueMap | LeafValueText | LeafValueList | LeafValue
 export interface LeafRecord {
     pubkey: Pubkey;
     metadata: {
-        type: 'Leaf'; // Simplified type
+        type: 'Leaf' | 'Index'; // Allow both Leaf and Index types
     };
     data: LeafValue; // Renamed from datni
 }

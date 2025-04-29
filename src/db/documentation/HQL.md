@@ -67,13 +67,14 @@ The goal is to provide a declarative way to fetch and structure data by specifyi
         "return": "first",
         "map": {
             // Resolve the Leaf referenced in x2 of the 'cneme' composite
-            "resolved_name_leaf": {
+            "resolved_name_leaf": { // This key defines the structure for the resolved leaf
                 "place": "x2", // Target the node in place x2 of the composite
                 "resolve": {
                     // Use the pubkey stored in the composite's x2 place
-                    "fromField": "doc.pubkey", // NOTE: Using doc.pubkey of the x2 LEAF
+                    "fromField": "self.data.places.x2", // Corrected: get key from composite
                     "targetType": "leaf",
-                    "map": { "_value": { "field": "self.data.value" } }
+                    // The map here defines the structure of the resolved leaf's data
+                    "map": { "value": { "field": "self.data.value" } } // Use 'value' key
                 }
             }
         }
@@ -116,12 +117,12 @@ The goal is to provide a declarative way to fetch and structure data by specifyi
         "composite_where": { "schemaId": "@schema/cneme", "place": "x1" },
         "return": "first",
         "map": {
-          "resolved_name_leaf": {
+          "name_leaf_info": { // Key for the resolved name leaf object
             "place": "x2", // Target the node in x2 of the 'cneme' composite
             "resolve": {
-              "fromField": "doc.pubkey", // Use the pubkey of the Leaf in place x2
+              "fromField": "self.data.places.x2", // Use the pubkey of the Leaf in place x2
               "targetType": "leaf",
-              "map": { "_value": { "field": "self.data.value" } }
+              "map": { "value": { "field": "self.data.value" } } // Extract value into 'value' key
             }
           }
         }
@@ -136,28 +137,42 @@ The goal is to provide a declarative way to fetch and structure data by specifyi
           "task": { // Resolve the Leaf in place x2 (the task)
             "place": "x2",
             "resolve": {
-              "fromField": "doc.pubkey",
+              "fromField": "self.data.places.x2", // Corrected
               "targetType": "leaf",
               "map": { // Map data from the resolved Task Leaf
                 "id": { "field": "doc.pubkey" },
-                "name": { /* Nested traversal/resolve to get task name via cneme */ },
+                "name": { // Nested traversal/resolve to get task name via cneme
+                   "traverse": {
+                     "composite_where": { "schemaId": "@schema/cneme", "place": "x1" },
+                     "return": "first",
+                     "map": {
+                       "name_leaf_info": { // Key for resolved name leaf
+                         "place": "x2",
+                         "resolve": {
+                           "fromField": "self.data.places.x2", // Corrected
+                           "targetType": "leaf",
+                           "map": { "value": { "field": "self.data.value" } } // Direct value
+                         }
+                       }
+                     }
+                   }
+                },
                 "status": { // Traverse from Task Leaf to find its status via ckaji
                   "traverse": {
                      "composite_where": { "schemaId": "@schema/ckaji", "place": "x1" },
                      // Filter where the related node (x2) is a status property
                      "where_related": [
                          { "place": "x2", "field": "doc.pubkey", "condition": { "in": ["@status_inprogress", "@status_notstarted", "@status_completed"] } }
-                         // Alternative: Filter by a specific property type if available, e.g., "field": "self.data.propertyType", "condition": { "equals": "status" }
                      ],
                      "return": "first",
                      "map": {
                          // Resolve the status Leaf (x2) to get its value
-                         "status_value": {
+                         "status_leaf_info": { // Key for resolved status leaf
                            "place": "x2",
                            "resolve": {
-                             "fromField": "doc.pubkey",
+                             "fromField": "self.data.places.x2", // Corrected
                              "targetType": "leaf",
-                             "map": { "_value": { "field": "self.data.value" } }
+                             "map": { "value": { "field": "self.data.value" } } // Direct value
                            }
                          }
                      }
@@ -168,7 +183,14 @@ The goal is to provide a declarative way to fetch and structure data by specifyi
           },
           "worker": { // Resolve the Leaf in place x1 (the worker)
             "place": "x1",
-            "resolve": { /* ... similar resolve logic for worker ... */ }
+            "resolve": {
+              "fromField": "self.data.places.x1", // Corrected
+              "targetType": "leaf",
+              "map": {
+                  "id": { "field": "doc.pubkey" },
+                  "name": { /* traverse/resolve like above */ }
+              }
+            }
           }
         }
       }
@@ -189,15 +211,31 @@ The goal is to provide a declarative way to fetch and structure data by specifyi
         "composite_where": { "schemaId": "@schema/ckaji", "place": "x2" },
         "return": "array",
         "map": { // Map data from the ckaji composite
-          "task_id": { // Resolve the Leaf in place x1 (the task)
+          "task_info": { // Resolve the Leaf in place x1 (the task)
             "place": "x1",
             "resolve": {
-              "fromField": "doc.pubkey",
+              "fromField": "self.data.places.x1", // Corrected
               "targetType": "leaf",
-              "map": { "_value": { "field": "doc.pubkey" } } // Just get the task pubkey
+              "map": { "id": { "field": "doc.pubkey"} } // Map the task's ID
             }
           },
-          "task_name": { /* ... resolve task name ... */ },
+          "task_name": { // Get Task name 
+            "place": "x1", // Still targeting the task node (x1 of ckaji)
+            "traverse": { // Traverse from task via cneme
+                "composite_where": { "schemaId": "@schema/cneme", "place": "x1"},
+                "return": "first",
+                "map": {
+                    "name_leaf_info": { // Key for resolved name leaf
+                        "place": "x2",
+                        "resolve": {
+                           "fromField": "self.data.places.x2", // Corrected
+                           "targetType": "leaf",
+                           "map": { "value": { "field": "self.data.value" } } // Direct value
+                        }
+                    }
+                }
+            }
+           },
           // Nested traverse: Find the worker for this task
           "worker": {
             "place": "x1", // Still targeting the task node (x1 of ckaji)
@@ -208,11 +246,26 @@ The goal is to provide a declarative way to fetch and structure data by specifyi
                 "worker_info": { // Resolve the Leaf in place x1 (the worker)
                   "place": "x1",
                   "resolve": {
-                    "fromField": "doc.pubkey",
+                    "fromField": "self.data.places.x1", // Corrected
                     "targetType": "leaf",
-                    "map": {
+                    "map": { // Keep map here for structured worker info
                       "id": { "field": "doc.pubkey" },
-                      "name": { /* ... resolve worker name ... */ }
+                      "name": {
+                          "traverse": {
+                              "composite_where": { "schemaId": "@schema/cneme", "place": "x1" },
+                              "return": "first",
+                              "map": {
+                                  "name_leaf_info": { // Key for resolved name leaf
+                                      "place": "x2",
+                                      "resolve": {
+                                        "fromField": "self.data.places.x2", // Corrected
+                                        "targetType": "leaf",
+                                        "map": { "value": { "field": "self.data.value" } } // Direct value
+                                      }
+                                  }
+                              }
+                          }
+                       }
                     }
                   }
                 }

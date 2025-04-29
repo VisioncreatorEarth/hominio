@@ -422,22 +422,22 @@ async function main() {
             // Other Index Leaves (Start empty)
             {
                 pubkey: INDEX_SEMANTIC_NAME_LEAF,
-                metadata: { type: 'Leaf' },
+                metadata: { type: 'Index' },
                 data: { type: 'LoroMap', value: {} } // Index starts as empty LoroMap
             },
             {
                 pubkey: INDEX_SEMANTIC_NAME_SCHEMA,
-                metadata: { type: 'Leaf' },
+                metadata: { type: 'Index' },
                 data: { type: 'LoroMap', value: {} } // Index starts as empty LoroMap
             },
             {
                 pubkey: INDEX_SEMANTIC_NAME_COMPOSITE,
-                metadata: { type: 'Leaf' },
+                metadata: { type: 'Index' },
                 data: { type: 'LoroMap', value: {} } // Index starts as empty LoroMap
             },
             {
                 pubkey: INDEX_SEMANTIC_NAME_COMPOSITE_BY_COMPONENT,
-                metadata: { type: 'Leaf' },
+                metadata: { type: 'Index' },
                 data: { type: 'LoroMap', value: {} } // Index starts as empty LoroMap
             },
         ];

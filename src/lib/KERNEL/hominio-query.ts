@@ -416,6 +416,9 @@ async function processTraversal(
     const placeWildcard = compositeWhere.place === '*';
     const sourcePlaceInComposite = compositeWhere.place;
 
+    // [Logging Point 1: Before finding composites]
+    console.log(`[Query Traversal Detail] Finding composites for source ${sourcePubKey} (Schema: ${compositeWhere.schemaId}, Place: ${sourcePlaceInComposite})`);
+
     if (schemaWildcard) {
         console.warn(`[Query Engine] Traversing with Composite schemaId wildcard (place: ${sourcePlaceInComposite}) from ${sourcePubKey}. This may be slow.`);
         try {
@@ -484,68 +487,114 @@ async function processTraversal(
         }
     }
 
+    // [Logging Point 2: After finding composites]
+    console.log(`[Query Traversal Detail] Found ${compositeMatches.length} composite matches for source ${sourcePubKey}.`);
+
     const results: QueryResult[] = [];
     if (compositeMatches.length === 0) {
-        console.log(`[Query Traversal] No composite matches found for source ${sourcePubKey}.`);
+        console.log(`[Query Traversal] No composite matches found for source ${sourcePubKey}.`); // Kept original log
     }
 
     for (const { pubkey: compositePubKey, doc: compositeDoc } of compositeMatches) {
+        // [Logging Point 3: Processing a composite match]
+        console.log(`[Query Traversal Detail] Processing composite match: ${compositePubKey}`);
         const compositeData = getDataFromDoc(compositeDoc) as { schemaId: string; places: Record<string, string> } | undefined;
-        if (!compositeData) continue;
+        if (!compositeData) {
+            console.warn(`[Query Traversal Detail] Skipping composite ${compositePubKey}: Failed to get data.`);
+            continue;
+        }
 
         if (traverseDefinition.where_related) {
+            // [Logging Point 4: Evaluating where_related]
+            console.log(`[Query Traversal Detail] Evaluating where_related filters for composite ${compositePubKey}`);
             let passesAllFilters = true;
             for (const relatedFilter of traverseDefinition.where_related) {
                 const targetNodePubkey = compositeData.places[relatedFilter.place];
-                if (!targetNodePubkey) { passesAllFilters = false; break; }
+                if (!targetNodePubkey) {
+                    console.log(`[Query Traversal Detail] Filter failed: Target node key not found at place '${relatedFilter.place}'.`);
+                    passesAllFilters = false; break;
+                }
                 const targetNodeDoc = await getLeafDoc(targetNodePubkey);
-                if (!targetNodeDoc || !evaluateSingleWhere(targetNodeDoc, relatedFilter.field, relatedFilter.condition, targetNodePubkey)) {
+                if (!targetNodeDoc) {
+                    console.log(`[Query Traversal Detail] Filter failed: Could not load target node doc ${targetNodePubkey}.`);
+                    passesAllFilters = false; break;
+                }
+                const passesSingle = evaluateSingleWhere(targetNodeDoc, relatedFilter.field, relatedFilter.condition, targetNodePubkey);
+                console.log(`[Query Traversal Detail]   - Filter on place '${relatedFilter.place}' (node ${targetNodePubkey}, field '${relatedFilter.field}'): ${passesSingle}`);
+                if (!passesSingle) {
                     passesAllFilters = false;
                     break;
                 }
             }
-            if (!passesAllFilters) continue;
+            if (!passesAllFilters) {
+                console.log(`[Query Traversal Detail] Skipping composite ${compositePubKey} due to where_related filter.`);
+                continue;
+            }
         }
 
         const relatedNodeResult: QueryResult = {};
         const mapEntries = Object.entries(traverseDefinition.map);
 
+        // [Logging Point 5: Processing map entries for a composite]
+        console.log(`[Query Traversal Detail] Processing map entries for composite ${compositePubKey}`);
         for (const [outputKey, valueDefinition] of mapEntries) {
+            console.log(`[Query Traversal Detail]   - Mapping output key: "${outputKey}"`);
             let isCompositeField = false;
             if (valueDefinition.field && (valueDefinition.field === 'doc.pubkey' || valueDefinition.field.startsWith('self.'))) {
                 isCompositeField = true;
             }
 
+            let entryResult: unknown = undefined; // Variable to hold result before assignment
+
             if (isCompositeField && valueDefinition.field) {
-                relatedNodeResult[outputKey] = selectFieldValue(compositeDoc, valueDefinition.field, compositePubKey);
+                console.log(`[Query Traversal Detail]     - Type: Composite Field ('${valueDefinition.field}')`);
+                entryResult = selectFieldValue(compositeDoc, valueDefinition.field, compositePubKey);
             } else if (valueDefinition.resolve) {
-                relatedNodeResult[outputKey] = await processResolve(compositeDoc, valueDefinition.resolve, user);
+                console.log(`[Query Traversal Detail]     - Type: Resolve (from composite ${compositePubKey})`);
+                entryResult = await processResolve(compositeDoc, valueDefinition.resolve, user);
             } else {
                 if (!valueDefinition.place) {
-                    console.warn(`Missing 'place' for key "${outputKey}" in traverse.map - cannot get target Leaf.`); continue;
+                    console.warn(`[Query Traversal Detail]     - MISSING 'place' for key "${outputKey}". Skipping.`); continue;
                 }
                 const targetNodePubkey = compositeData.places[valueDefinition.place];
+                console.log(`[Query Traversal Detail]     - Target Node PubKey (from place '${valueDefinition.place}'): ${targetNodePubkey}`);
                 if (!targetNodePubkey) { relatedNodeResult[outputKey] = null; continue; }
                 const targetNodeDoc = await getLeafDoc(targetNodePubkey);
-                if (!targetNodeDoc) { relatedNodeResult[outputKey] = null; continue; }
+                if (!targetNodeDoc) {
+                    console.warn(`[Query Traversal Detail]     - Failed to load target node doc ${targetNodePubkey}. Setting null.`);
+                    relatedNodeResult[outputKey] = null; continue;
+                }
 
                 if (valueDefinition.field) {
-                    relatedNodeResult[outputKey] = selectFieldValue(targetNodeDoc, valueDefinition.field, targetNodePubkey);
+                    console.log(`[Query Traversal Detail]     - Type: Target Field ('${valueDefinition.field}' on ${targetNodePubkey})`);
+                    entryResult = selectFieldValue(targetNodeDoc, valueDefinition.field, targetNodePubkey);
                 } else if (valueDefinition.map) {
-                    relatedNodeResult[outputKey] = await processMap(targetNodeDoc, valueDefinition.map, targetNodePubkey, user);
+                    console.log(`[Query Traversal Detail]     - Type: Target Map (on ${targetNodePubkey})`);
+                    entryResult = await processMap(targetNodeDoc, valueDefinition.map, targetNodePubkey, user);
                 } else if (valueDefinition.traverse) {
-                    relatedNodeResult[outputKey] = await processTraversal(targetNodeDoc, valueDefinition.traverse, targetNodePubkey, user);
+                    console.log(`[Query Traversal Detail]     - Type: Target Traverse (from ${targetNodePubkey})`);
+                    entryResult = await processTraversal(targetNodeDoc, valueDefinition.traverse, targetNodePubkey, user);
                 }
             }
+            // [Logging Point 6: Result for a map entry]
+            console.log(`[Query Traversal Detail]     - Result for "${outputKey}":`, entryResult);
+            relatedNodeResult[outputKey] = entryResult;
         }
 
         if (Object.keys(relatedNodeResult).length > 0) {
+            // [Logging Point 7: Pushing result for a composite]
+            console.log(`[Query Traversal Detail] Pushing result for composite ${compositePubKey}:`, relatedNodeResult);
             results.push(relatedNodeResult);
             if (traverseDefinition.return === 'first') break;
+        } else {
+            console.log(`[Query Traversal Detail] No data mapped for composite ${compositePubKey}. Skipping.`);
         }
     }
 
-    return traverseDefinition.return === 'first' ? (results.length > 0 ? results[0] : null) : results;
+    // [Logging Point 8: Final result of traversal]
+    const finalResult = traverseDefinition.return === 'first' ? (results.length > 0 ? results[0] : null) : results;
+    console.log(`[Query Traversal Detail] Final traversal result for source ${sourcePubKey}:`, finalResult);
+    return finalResult;
 }
 
 /**
@@ -581,13 +630,21 @@ async function processResolve(
     resolveDefinition: LoroHqlResolve,
     user: CapabilityUser | null
 ): Promise<QueryResult | null> {
-    const targetPubKey = selectFieldValue(sourceDoc, resolveDefinition.fromField, "") as string | undefined;
-    if (!targetPubKey) return null;
+    // [Logging Point 9: Starting Resolve]
+    console.log(`[Query Resolve Detail] Starting resolve. FromField: '${resolveDefinition.fromField}'`);
+    const targetPubKey = selectFieldValue(sourceDoc, resolveDefinition.fromField, "") as string | undefined; // Note: PubKey not relevant here
+    console.log(`[Query Resolve Detail]   - Extracted target PubKey: ${targetPubKey}`);
+    if (!targetPubKey) {
+        console.log(`[Query Resolve Detail]   - No target PubKey found. Returning null.`);
+        return null;
+    }
 
     const targetType = resolveDefinition.targetType ?? 'leaf';
     let targetDoc: LoroDoc | null = null;
     let docMeta: Awaited<ReturnType<typeof import('$lib/KERNEL/hominio-db')['hominioDB']['getDocument']>> | null = null;
 
+    // [Logging Point 10: Checking existence and fetching doc]
+    console.log(`[Query Resolve Detail]   - Checking existence and fetching doc for ${targetPubKey} (type: ${targetType})`);
     try {
         let exists = false;
         if (targetType === 'gismu') {
@@ -595,6 +652,7 @@ async function processResolve(
         } else {
             exists = await checkLeafExists(targetPubKey);
         }
+        console.log(`[Query Resolve Detail]     - Exists in index: ${exists}`);
         if (!exists) return null;
 
         if (targetType === 'gismu') {
@@ -602,19 +660,31 @@ async function processResolve(
         } else {
             targetDoc = await getLeafDoc(targetPubKey);
         }
+        console.log(`[Query Resolve Detail]     - Loaded doc: ${!!targetDoc}`);
         if (!targetDoc) return null;
 
         docMeta = await import('$lib/KERNEL/hominio-db').then(m => m.hominioDB.getDocument(targetPubKey));
+        console.log(`[Query Resolve Detail]     - Loaded docMeta: ${!!docMeta}`);
         if (!docMeta) return null;
 
-    } catch (error) { console.error(`[Query Resolve] Error fetching ${targetPubKey} (type: ${targetType}):`, error); return null; }
+    } catch (error) { console.error(`[Query Resolve Detail] Error fetching ${targetPubKey} (type: ${targetType}):`, error); return null; }
 
-    if (user && !canRead(user, docMeta)) return null;
+    if (user) {
+        const canUserRead = canRead(user, docMeta);
+        console.log(`[Query Resolve Detail]   - Read permission check for user: ${canUserRead}`);
+        if (!canUserRead) return null;
+    } else {
+        console.log(`[Query Resolve Detail]   - No user provided, skipping read permission check.`);
+    }
 
+
+    // [Logging Point 11: Processing map for resolved doc]
+    console.log(`[Query Resolve Detail]   - Processing map for resolved doc ${targetPubKey}`);
     try {
         const resolvedResult = await processMap(targetDoc, resolveDefinition.map, targetPubKey, user);
+        console.log(`[Query Resolve Detail]   - Map result for ${targetPubKey}:`, resolvedResult);
         return resolvedResult;
-    } catch (error) { console.error(`[Query Resolve] Error processing map for ${targetPubKey}:`, error); return null; }
+    } catch (error) { console.error(`[Query Resolve Detail] Error processing map for ${targetPubKey}:`, error); return null; }
 }
 
 /**

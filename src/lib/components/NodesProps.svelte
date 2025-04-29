@@ -295,6 +295,7 @@
 	});
 </script>
 
+<!-- Outer grid for sidebar and main content -->
 <div class="grid h-full grid-cols-1 md:grid-cols-[250px_1fr]">
 	<!-- Sidebar (Left Column) -->
 	<aside class="col-span-1 overflow-y-auto border-r border-gray-300 bg-white p-4">
@@ -329,159 +330,168 @@
 		{/if}
 	</aside>
 
-	<!-- Main Content Area (Details) -->
+	<!-- Main Content Area -->
 	<main class="col-span-1 flex flex-col overflow-y-auto p-6">
 		<!-- FIX: Update selected variable -->
 		{#if currentSelectedLeaf}
 			{@const selectedLeaf = currentSelectedLeaf}
 
-			<!-- Node Properties Section -->
-			<div class="mb-8 rounded-lg border border-gray-300 bg-white p-6 shadow">
-				<h2 class="mb-4 text-2xl font-semibold text-gray-800">Selected Concept Leaf</h2>
-				<div class="space-y-2 text-base">
-					<p>
-						<span class="font-medium text-gray-600">Name:</span>
-						<!-- FIX: Display name (concept ID) -->
-						<span class="ml-2 font-semibold break-all text-gray-900">{selectedLeaf.id}</span>
-					</p>
-					<p>
-						<span class="font-medium text-gray-600">Type:</span>
-						<!-- FIX: Display type from data -->
-						<span class="ml-2 text-gray-800"
-							>{(selectedLeaf.data as { type?: string })?.type || 'Unknown Type'}</span
-						>
-					</p>
-					<p>
-						<span class="font-medium text-gray-600">ID:</span>
-						<code class="ml-2 rounded bg-gray-100 px-1.5 py-0.5 font-mono text-sm text-gray-700"
-							>{selectedLeaf.id}</code
-						>
-					</p>
-				</div>
-			</div>
+			<!-- Inner grid for main details and debug info -->
+			<div class="grid h-full grid-cols-1 gap-6 lg:grid-cols-2">
+				<!-- Left Column: Node Properties and Relationships -->
+				<div class="col-span-1 flex flex-col gap-6 overflow-y-auto">
+					<!-- Node Properties Section -->
+					<div class="rounded-lg border border-gray-300 bg-white p-6 shadow">
+						<h2 class="mb-4 text-2xl font-semibold text-gray-800">Selected Concept Leaf</h2>
+						<div class="space-y-2 text-base">
+							<p>
+								<span class="font-medium text-gray-600">Name:</span>
+								<!-- FIX: Display name (concept ID) -->
+								<span class="ml-2 font-semibold break-all text-gray-900">{selectedLeaf.id}</span>
+							</p>
+							<p>
+								<span class="font-medium text-gray-600">Type:</span>
+								<!-- FIX: Display type from data -->
+								<span class="ml-2 text-gray-800"
+									>{(selectedLeaf.data as { type?: string })?.type || 'Unknown Type'}</span
+								>
+							</p>
+							<p>
+								<span class="font-medium text-gray-600">ID:</span>
+								<code class="ml-2 rounded bg-gray-100 px-1.5 py-0.5 font-mono text-sm text-gray-700"
+									>{selectedLeaf.id}</code
+								>
+							</p>
+						</div>
+					</div>
 
-			<!-- Relationships Section (Human Readable) -->
-			<div class="rounded-lg border border-gray-300 bg-white p-6 shadow">
-				<!-- FIX: Update title -->
-				<h2 class="mb-4 text-2xl font-semibold text-gray-800">Composites</h2>
-				<!-- FIX: Update loading/result variables -->
-				{#if isLoadingComposites}
-					<p class="text-sm text-gray-500">Loading composites...</p>
-				{:else if compositeResults === null}
-					<!-- FIX: Update text -->
-					<p class="text-lg text-gray-500">Error loading composites.</p>
-				{:else if !compositeResults || compositeResults.length === 0}
-					<!-- FIX: Update text -->
-					<p class="text-lg text-gray-500">No composites found involving this leaf.</p>
-				{:else}
-					<!-- Relationship List -->
-					<div class="space-y-4">
-						<!-- FIX: Update iteration variable and display logic -->
-						{#each compositeResults as rel (rel.composite_id)}
-							{@const _debug = console.log('[NodesProps Debug] Processing Composite:', rel)}
+					<!-- Relationships Section (Human Readable) -->
+					<div class="rounded-lg border border-gray-300 bg-white p-6 shadow">
+						<!-- FIX: Update title -->
+						<h2 class="mb-4 text-2xl font-semibold text-gray-800">Composites</h2>
+						<!-- FIX: Update loading/result variables -->
+						{#if isLoadingComposites}
+							<p class="text-sm text-gray-500">Loading composites...</p>
+						{:else if compositeResults === null}
+							<!-- FIX: Update text -->
+							<p class="text-lg text-gray-500">Error loading composites.</p>
+						{:else if !compositeResults || compositeResults.length === 0}
+							<!-- FIX: Update text -->
+							<p class="text-lg text-gray-500">No composites found involving this leaf.</p>
+						{:else}
+							<!-- Relationship List -->
+							<div class="space-y-4">
+								<!-- FIX: Update iteration variable and display logic -->
+								{#each compositeResults as rel (rel.composite_id)}
+									{@const _debug = console.log('[NodesProps Debug] Processing Composite:', rel)}
 
-							<!-- FIX: Get schema name -->
-							{@const schemaName =
-								rel.schema_resolved?.name || // Access potentially problematic
-								truncate(rel.schemaId) ||
-								'Unknown Schema'}
+									<!-- FIX: Get schema name -->
+									{@const schemaName =
+										rel.schema_resolved?.name || // Access potentially problematic
+										truncate(rel.schemaId) ||
+										'Unknown Schema'}
 
-							<!-- Generate participant parts -->
-							{@const participants = []}
-							{#each ['x1', 'x2', 'x3', 'x4', 'x5'] as place}
-								<!-- FIX: Use ResolvedLeaf -->
-								{@const resolvedNode = rel[`${place}_resolved`] as ResolvedLeaf | null}
-								{@const _debugPlace = console.log(
-									`[NodesProps Debug] Resolved ${place}:`,
-									resolvedNode
-								)}
-								{#if resolvedNode && resolvedNode.id}
-									{@const isSelf = resolvedNode.id === selectedLeafId}
-									<!-- FIX: Use displayLeafData for node content -->
-									{@const nodeName = displayLeafData(resolvedNode.data) || 'Unnamed Leaf'}
-									{@const part = { place, name: nodeName, isSelf, id: resolvedNode.id }}
-									{@const _ = participants.push(part)}
-								{/if}
-							{/each}
-
-							<!-- Display relationship sentence -->
-							<div class="rounded border border-gray-200 bg-gray-50 p-3">
-								<div class="mb-1 text-xs text-gray-500">
-									Composite: {truncate(rel.composite_id, 12)}
-								</div>
-								<div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-									{#each participants as part, i}
-										<!-- Participant Node -->
-										<span class="inline-flex items-center" title={part.id}>
-											<span
-												class="font-medium text-gray-800 {part.isSelf
-													? 'font-bold text-indigo-700'
-													: ''}">{part.isSelf ? 'Self' : part.name}</span
-											>
-											{#if !part.isSelf}
-												<code class="ml-1 rounded bg-gray-200 px-1 py-0.5 text-xs text-gray-500"
-													>{truncate(part.id, 6)}</code
-												>{/if}
-										</span>
-
-										<!-- Separator / Schema Name -->
-										{#if i === 0}
-											<!-- Show schema after first participant -->
-											<!-- Revert the complex #if block and just use schemaName -->
-											<span class="mx-1 font-semibold text-blue-600">- {schemaName} -</span>
-										{:else if i < participants.length - 1}
-											<!-- Show hyphen between other participants -->
-											<span class="text-gray-400">-</span>
+									<!-- Generate participant parts -->
+									{@const participants = []}
+									{#each ['x1', 'x2', 'x3', 'x4', 'x5'] as place}
+										<!-- FIX: Use ResolvedLeaf -->
+										{@const resolvedNode = rel[`${place}_resolved`] as ResolvedLeaf | null}
+										{@const _debugPlace = console.log(
+											`[NodesProps Debug] Resolved ${place}:`,
+											resolvedNode
+										)}
+										{#if resolvedNode && resolvedNode.id}
+											{@const isSelf = resolvedNode.id === selectedLeafId}
+											<!-- FIX: Use displayLeafData for node content -->
+											{@const nodeName = displayLeafData(resolvedNode.data) || 'Unnamed Leaf'}
+											{@const part = { place, name: nodeName, isSelf, id: resolvedNode.id }}
+											{@const _ = participants.push(part)}
 										{/if}
 									{/each}
-								</div>
-							</div>
-						{/each}
-					</div>
-				{/if}
-			</div>
 
-			<!-- Debug Display -->
-			<div class="mt-6 border-t border-gray-300 pt-6">
-				<details class="rounded border border-gray-300 bg-white">
-					<!-- FIX: Update summary -->
-					<summary class="cursor-pointer list-none p-3 font-medium text-gray-700 hover:bg-gray-50"
-						>Raw Leaf Data</summary
-					>
-					<div class="border-t border-gray-300 p-3">
-						<pre
-							class="overflow-x-auto rounded bg-gray-50 p-3 font-mono text-xs whitespace-pre-wrap text-gray-700">{JSON.stringify(
-								// FIX: Use correct variable
-								selectedLeaf,
-								null,
-								2
-							)}</pre>
+									<!-- Display relationship sentence -->
+									<div class="rounded border border-gray-200 bg-gray-50 p-3">
+										<div class="mb-1 text-xs text-gray-500">
+											Composite: {truncate(rel.composite_id, 12)}
+										</div>
+										<div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+											{#each participants as part, i}
+												<!-- Participant Node -->
+												<span class="inline-flex items-center" title={part.id}>
+													<span
+														class="font-medium text-gray-800 {part.isSelf
+															? 'font-bold text-indigo-700'
+															: ''}">{part.isSelf ? 'Self' : part.name}</span
+													>
+													{#if !part.isSelf}
+														<code class="ml-1 rounded bg-gray-200 px-1 py-0.5 text-xs text-gray-500"
+															>{truncate(part.id, 6)}</code
+														>{/if}
+												</span>
+
+												<!-- Separator / Schema Name -->
+												{#if i === 0}
+													<!-- Show schema after first participant -->
+													<!-- Revert the complex #if block and just use schemaName -->
+													<span class="mx-1 font-semibold text-blue-600">- {schemaName} -</span>
+												{:else if i < participants.length - 1}
+													<!-- Show hyphen between other participants -->
+													<span class="text-gray-400">-</span>
+												{/if}
+											{/each}
+										</div>
+									</div>
+								{/each}
+							</div>
+						{/if}
 					</div>
-				</details>
-				<details
-					class="mt-2 rounded border border-gray-300 bg-white"
-					open={compositeResults !== undefined}
-				>
-					<!-- FIX: Update summary -->
-					<summary class="cursor-pointer list-none p-3 font-medium text-gray-700 hover:bg-gray-50"
-						>Raw Composite Query Result ({isLoadingComposites
-							? 'Loading'
-							: compositeResults === null
-								? 'Error'
-								: (compositeResults?.length ?? 'N/A')})</summary
+				</div>
+				<!-- End Left Column -->
+
+				<!-- Right Column: Debug Display -->
+				<div class="col-span-1 flex flex-col gap-2 overflow-y-auto">
+					<details class="rounded border border-gray-300 bg-white">
+						<!-- FIX: Update summary -->
+						<summary class="cursor-pointer list-none p-3 font-medium text-gray-700 hover:bg-gray-50"
+							>Raw Leaf Data</summary
+						>
+						<div class="border-t border-gray-300 p-3">
+							<pre
+								class="overflow-x-auto rounded bg-gray-50 p-3 font-mono text-xs whitespace-pre-wrap text-gray-700">{JSON.stringify(
+									// FIX: Use correct variable
+									selectedLeaf,
+									null,
+									2
+								)}</pre>
+						</div>
+					</details>
+					<details
+						class="rounded border border-gray-300 bg-white"
+						open={compositeResults !== undefined}
 					>
-					>
-					<div class="border-t border-gray-300 p-3">
-						<pre
-							class="overflow-x-auto rounded bg-gray-50 p-3 font-mono text-xs whitespace-pre-wrap text-gray-700">{JSON.stringify(
-								// FIX: Use correct variable
-								compositeResults,
-								null,
-								2
-							)}</pre>
-					</div>
-				</details>
+						<!-- FIX: Update summary -->
+						<summary class="cursor-pointer list-none p-3 font-medium text-gray-700 hover:bg-gray-50"
+							>Raw Composite Query Result ({isLoadingComposites
+								? 'Loading'
+								: compositeResults === null
+									? 'Error'
+									: (compositeResults?.length ?? 'N/A')})</summary
+						>
+						>
+						<div class="border-t border-gray-300 p-3">
+							<pre
+								class="overflow-x-auto rounded bg-gray-50 p-3 font-mono text-xs whitespace-pre-wrap text-gray-700">{JSON.stringify(
+									// FIX: Use correct variable
+									compositeResults,
+									null,
+									2
+								)}</pre>
+						</div>
+					</details>
+				</div>
+				<!-- End Right Column -->
 			</div>
+			<!-- End Inner Grid -->
 		{:else}
 			<div class="flex h-full items-center justify-center">
 				<!-- FIX: Update text -->

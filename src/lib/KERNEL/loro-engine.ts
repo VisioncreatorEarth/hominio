@@ -2,7 +2,7 @@ import type { LoroDoc } from 'loro-crdt';
 import { LoroList, LoroMap } from 'loro-crdt';
 import type { CompositeRecord } from '../../db/seeding/composite.data';
 import type { SchemaId } from '../../db/seeding/schema.data';
-import type { LeafId, LeafValue, LeafValueIndex, Pubkey } from '../../db/seeding/leaf.data';
+import type { LeafId, LeafValue, Pubkey } from '../../db/seeding/leaf.data';
 import { hominioDB } from '$lib/KERNEL/hominio-db'; // Import the singleton directly
 import { getIndexLeafPubKey } from './index-registry'; // Ensure this is imported
 
@@ -187,9 +187,10 @@ export async function getCompositeIndexList(compositeKey: string): Promise<LoroL
     }
 
     try {
-        const indexData = getDataFromDoc(indexCompositeDoc) as LeafValueIndex | undefined;
-        if (!indexData || indexData.type !== 'Index') {
-            console.warn(`[Loro Engine] Composite Component Index document (${indexCompositeByCompPubKey}) data structure invalid (not type Index).`);
+        // Use the broader LeafValue type which includes the LoroMap structure
+        const indexData = getDataFromDoc(indexCompositeDoc) as LeafValue | undefined;
+        if (!indexData || indexData.type !== 'LoroMap') {
+            console.warn(`[Loro Engine] Composite Component Index document (${indexCompositeByCompPubKey}) data structure invalid (expected data.type 'LoroMap', got '${indexData?.type}').`);
             return undefined;
         }
 

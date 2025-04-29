@@ -1,27 +1,12 @@
 <script lang="ts">
-	import {
-		processReactiveQuery,
-		type LoroHqlQuery,
-		type QueryResult
-	} from '$lib/KERNEL/hominio-query';
-	import { readable, type Readable, derived, writable } from 'svelte/store';
+	import { processReactiveQuery, type LoroHqlQuery } from '$lib/KERNEL/hominio-query';
+	import { writable } from 'svelte/store';
 	import { getContext } from 'svelte';
 	import { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
 
 	// --- Get Effective User Function from Context ---
 	type GetCurrentUserFn = typeof getMeType;
 	const getMe = getContext<GetCurrentUserFn>('getMe');
-
-	// Define a more specific type for our query results
-	interface BridiQueryResult extends QueryResult {
-		id: string;
-		selbri?: string;
-		x1?: { value: unknown; pubkey: string } | null;
-		x2?: { value: unknown; pubkey: string } | null;
-		x3?: { value: unknown; pubkey: string } | null;
-		x4?: { value: unknown; pubkey: string } | null;
-		x5?: { value: unknown; pubkey: string } | null;
-	}
 
 	// Current query and editor state
 	let queryText = writable(

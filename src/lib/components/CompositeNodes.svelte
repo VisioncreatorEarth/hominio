@@ -61,14 +61,12 @@
 >
 	<!-- Top Section: Schema Name -->
 	<div class="rounded-t-md bg-gray-300 p-2 text-center font-semibold text-gray-800">
-		// FIX: Update default text
 		{data.label || 'Unnamed Composite'}
 	</div>
 
 	<!-- Bottom Section: Places -->
 	<div class="flex min-h-[4em] items-stretch justify-around border-t border-gray-400 p-1 text-xs">
 		{#each places as place, i (place)}
-			// FIX: Use updated helper function
 			{@const placeTitle = getPlaceTitle(place)}
 			{@const literal = getLiteral(place)}
 
