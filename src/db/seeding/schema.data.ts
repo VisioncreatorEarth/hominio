@@ -152,7 +152,7 @@ export const initialSchemas: SchemaRecord[] = [
     2. Linking Project Name: 'cneme(@project1, @project1_name)' -> Links project1 to the Leaf containing "Project: Website".
                     `,
                     places: {
-                        x1: { title: 'entity being named', description: '' },
+                        x1: { title: 'concept', description: 'Concept being named' },
                         x2: { title: 'name leaf', description: '(Leaf containing the name string)' }
                     }
                 },
@@ -167,7 +167,7 @@ export const initialSchemas: SchemaRecord[] = [
     2. Verknüpfung Projektname: 'cneme(@project1, @project1_name)' -> Verknüpft project1 mit dem Leaf, das "Project: Website" enthält.
                     `,
                     places: {
-                        x1: { title: 'Entität die benannt wird', description: '' },
+                        x1: { title: 'Concept', description: 'concept being named' },
                         x2: { title: 'Namens-Leaf', description: '(Leaf, der den Namenstext enthält)' }
                     }
                 }

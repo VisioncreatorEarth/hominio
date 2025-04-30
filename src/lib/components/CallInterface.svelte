@@ -87,16 +87,16 @@
 {#if isInterfaceVisible}
 	<div class="fixed inset-x-0 bottom-0 z-40 flex justify-center p-4">
 		<div
-			class="w-full max-w-md rounded-2xl border border-gray-300 bg-white/80 p-4 shadow-xl backdrop-blur-md"
+			class="w-full max-w-md rounded-2xl border border-[#d6c7b1] bg-[#f8f4ed]/80 p-4 shadow-xl backdrop-blur-md"
 		>
 			<div class="flex items-center justify-between">
 				<!-- Agent Info -->
 				<div class="flex-1">
-					<div class="flex items-center rounded-xl border border-teal-500/20 bg-teal-100 p-2">
-						<div class="mr-3 rounded-full bg-teal-200 p-2">
+					<div class="flex items-center rounded-xl border border-[#c5d4e8] bg-[#f5f1e8] p-2">
+						<div class="mr-3 rounded-full bg-[#0a2a4e] p-2">
 							<svg
 								xmlns="http://www.w3.org/2000/svg"
-								class="h-5 w-5 text-teal-700"
+								class="h-5 w-5 text-[#f8f4ed]"
 								fill="none"
 								viewBox="0 0 24 24"
 								stroke="currentColor"
@@ -109,7 +109,7 @@
 								/>
 							</svg>
 						</div>
-						<div class="text-lg font-bold text-teal-800">{displayedAgent}</div>
+						<div class="text-lg font-bold text-[#0a2a4e]">{displayedAgent}</div>
 						<span
 							class="ml-auto rounded-full bg-gray-200 px-3 py-1 text-sm font-medium text-gray-700"
 						>

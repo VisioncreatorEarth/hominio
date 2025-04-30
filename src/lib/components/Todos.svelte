@@ -347,8 +347,8 @@
 	});
 </script>
 
-<div class="flex h-full flex-col overflow-hidden bg-white p-4">
-	<h2 class="mb-4 text-xl font-semibold text-gray-800">Simple Todos</h2>
+<div class="flex h-full flex-col overflow-hidden bg-[#f8f4ed] p-4">
+	<h2 class="mb-4 text-xl font-semibold text-[#0a2a4e]">Simple Todos</h2>
 
 	<!-- Add Todo Input -->
 	<form class="mb-4 flex items-center gap-2" on:submit|preventDefault={addTodo}>
@@ -356,13 +356,13 @@
 			type="text"
 			bind:value={newTodoText}
 			placeholder="What needs to be done?"
-			class="flex-grow rounded-l border border-gray-300 px-3 py-2 text-gray-900 transition-shadow focus:border-transparent focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+			class="flex-grow rounded-l border border-gray-300 bg-white px-3 py-2 text-[#0a2a4e] transition-shadow focus:border-[#a7b7cb] focus:ring-2 focus:ring-[#c5d4e8] focus:outline-none"
 			required
 			disabled={isAdding}
 		/>
 		<button
 			type="submit"
-			class="rounded-r bg-indigo-600 px-4 py-2 text-white transition-colors hover:bg-indigo-700 focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:outline-none disabled:opacity-50"
+			class="rounded-r bg-[#0a2a4e] px-4 py-2 text-[#f8f4ed] transition-colors hover:bg-[#1e3a5e] focus:ring-2 focus:ring-[#0a2a4e] focus:ring-offset-2 focus:outline-none disabled:opacity-50"
 			disabled={isAdding}
 		>
 			{#if isAdding}
@@ -431,16 +431,16 @@
 								type="checkbox"
 								checked={isDone}
 								on:change={() => toggleTodoStatus(item)}
-								class="mr-3 h-4 w-4 cursor-pointer rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+								class="mr-3 h-4 w-4 cursor-pointer rounded border-gray-300 text-[#0a2a4e] focus:ring-[#0a2a4e]"
 							/>
-							<span class={isDone ? 'text-gray-500 line-through' : 'text-gray-800'}>
+							<span class={isDone ? 'text-gray-500 line-through' : 'text-[#0a2a4e]'}>
 								{name}
 							</span>
 							<span class="ml-2 text-xs text-gray-400">({statusValue})</span>
 						</div>
 						<button
 							on:click={() => deleteTodo(item)}
-							class="rounded-full p-1 text-red-500 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-100 hover:text-red-700 focus:outline-none"
+							class="rounded-full p-1 text-red-600 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-100 hover:text-red-700 focus:outline-none"
 							aria-label="Delete todo"
 						>
 							<svg

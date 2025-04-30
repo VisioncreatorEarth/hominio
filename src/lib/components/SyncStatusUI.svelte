@@ -86,30 +86,32 @@
 </script>
 
 <!-- Sync Status Display & Buttons -->
-<div class="flex items-center justify-between gap-3 rounded-lg bg-white p-2 shadow-sm">
+<div
+	class="flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-[#f5f1e8] p-2 text-[#0a2a4e] shadow-sm"
+>
 	<!-- Status Information -->
 	<div class="flex flex-col">
-		<h3 class="text-sm font-medium text-gray-600">Sync Status</h3>
+		<h3 class="text-sm font-medium">Sync Status</h3>
 		<div class="flex items-center gap-1">
 			<span class="text-xs">
 				{#if $syncStatus.isOnline}
-					<span class="font-semibold text-green-600">Online</span>
+					<span class="font-semibold text-green-700">Online</span>
 				{:else}
-					<span class="font-semibold text-red-600">Offline</span>
+					<span class="font-semibold text-red-700">Offline</span>
 				{/if}
 			</span>
-			<span class="text-xs text-gray-500">
+			<span class="text-xs text-gray-600">
 				{#if $syncStatus.isSyncing}
 					Syncing...
 				{:else if $syncStatus.syncError}
-					<span class="text-red-600">Error: {$syncStatus.syncError}</span>
+					<span class="text-red-700">Error: {$syncStatus.syncError}</span>
 				{:else if $syncStatus.lastSynced}
 					Last synced: {new Date($syncStatus.lastSynced).toLocaleTimeString()}
 				{:else}
 					Ready to sync.
 				{/if}
 				{#if $syncStatus.pendingLocalChanges > 0}
-					<span class="text-orange-600">({$syncStatus.pendingLocalChanges} pending)</span>
+					<span class="text-orange-700">({$syncStatus.pendingLocalChanges} pending)</span>
 				{/if}
 			</span>
 		</div>
@@ -118,27 +120,28 @@
 	<!-- Action Buttons -->
 	<div class="flex items-center gap-2">
 		<button
-			class="rounded-md bg-blue-500 px-3 py-1 text-xs font-medium text-white shadow-sm hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+			class="rounded-md bg-[#0a2a4e] px-3 py-1 text-xs font-medium text-[#f8f4ed] shadow-sm hover:bg-[#1e3a5e] disabled:cursor-not-allowed disabled:opacity-50"
 			on:click={handlePull}
 			disabled={$syncStatus.isSyncing}
 		>
 			Pull from Server
 		</button>
 		<button
-			class="rounded-md bg-green-500 px-3 py-1 text-xs font-medium text-white shadow-sm hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-50"
+			class="rounded-md bg-[#0a2a4e] px-3 py-1 text-xs font-medium text-[#f8f4ed] shadow-sm hover:bg-[#1e3a5e] disabled:cursor-not-allowed disabled:opacity-50"
 			on:click={handlePush}
 			disabled={$syncStatus.isSyncing || $syncStatus.pendingLocalChanges === 0}
 		>
-			Push to Server ({$syncStatus.pendingLocalChanges})
+			Push ({$syncStatus.pendingLocalChanges})
 		</button>
 		<button
-			class="rounded-md bg-orange-500 px-3 py-1 text-xs font-medium text-white shadow-sm hover:bg-orange-600"
+			class="rounded-md bg-[#0a2a4e] px-3 py-1 text-xs font-medium text-[#f8f4ed] shadow-sm hover:bg-[#1e3a5e] disabled:cursor-not-allowed disabled:opacity-50"
 			on:click={handleIndexing}
+			disabled={$syncStatus.isSyncing}
 		>
 			Index Now
 		</button>
 		<button
-			class="rounded-md bg-red-600 px-3 py-1 text-xs font-medium text-white shadow-sm hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+			class="rounded-md bg-red-700 px-3 py-1 text-xs font-medium text-white shadow-sm hover:bg-red-800 disabled:cursor-not-allowed disabled:opacity-50"
 			on:click={handleClearStorage}
 			disabled={$syncStatus.isSyncing}
 		>

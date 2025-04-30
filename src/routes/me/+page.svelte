@@ -14,7 +14,7 @@
 	}
 </script>
 
-<main class="relative min-h-screen">
+<main class="relative min-h-screen bg-[#f8f4ed]">
 	<!-- Content on top -->
 	<div class="relative z-10 min-h-screen w-full">
 		<VibeRenderer vibeId="home" />

@@ -266,12 +266,12 @@
 	});
 </script>
 
-<div class="grid h-screen grid-cols-1 bg-gray-100 md:grid-cols-[250px_1fr_400px]">
+<div class="grid h-screen grid-cols-1 bg-[#f8f4ed] md:grid-cols-[250px_1fr_400px]">
 	<!-- Left sidebar for Skills -->
-	<aside class="col-span-1 overflow-y-auto border-r border-gray-300 bg-white p-4">
+	<aside class="col-span-1 overflow-y-auto border-r border-gray-200 bg-[#f8f4ed] p-4">
 		<!-- Vibe Tools Panel -->
 		<div class="space-y-6">
-			<h2 class="mb-4 text-lg font-semibold text-gray-700">
+			<h2 class="mb-4 text-lg font-semibold text-[#0a2a4e]">
 				Skills
 				{#if !loadingVibe}
 					<span class="ml-2 text-sm text-gray-500">
@@ -283,7 +283,7 @@
 			{#if loadingVibe}
 				<div class="flex items-center justify-center py-6">
 					<div
-						class="h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-gray-600"
+						class="h-6 w-6 animate-spin rounded-full border-2 border-[#c5d4e8] border-t-[#0a2a4e]"
 					></div>
 					<span class="ml-3 text-sm text-gray-600">Loading skills...</span>
 				</div>
@@ -297,15 +297,15 @@
 						<div class="space-y-2">
 							{#each globalSkills as tool}
 								<div
-									class="rounded border border-gray-200 bg-white p-3 transition-colors hover:bg-gray-100"
+									class="rounded border border-[#d6c7b1] bg-[#f5f1e8] p-3 transition-colors hover:bg-[#e0d8cb]"
 								>
 									<div class="flex items-center gap-2">
 										<div
-											class={`flex h-5 w-5 items-center justify-center rounded-full bg-${toolColors[tool.name] || 'gray'}-100 p-1`}
+											class={`flex h-5 w-5 items-center justify-center rounded-full bg-[#0a2a4e] p-1`}
 										>
 											<svg
 												xmlns="http://www.w3.org/2000/svg"
-												class={`h-3.5 w-3.5 text-${toolColors[tool.name] || 'gray'}-600`}
+												class={`h-3.5 w-3.5 text-[#f8f4ed]`}
 												fill="none"
 												viewBox="0 0 24 24"
 												stroke="currentColor"
@@ -319,7 +319,7 @@
 												/>
 											</svg>
 										</div>
-										<div class="text-xs font-medium text-gray-800">{tool.name}</div>
+										<div class="text-xs font-medium text-[#0a2a4e]">{tool.name}</div>
 									</div>
 									<div class="mt-1 text-xs text-gray-600">
 										{toolSkills[tool.name] || 'No description available'}
@@ -339,15 +339,15 @@
 						<div class="space-y-2">
 							{#each vibeSkills as tool}
 								<div
-									class="rounded border border-gray-200 bg-white p-3 transition-colors hover:bg-gray-100"
+									class="rounded border border-[#d6c7b1] bg-[#f5f1e8] p-3 transition-colors hover:bg-[#e0d8cb]"
 								>
 									<div class="flex items-center gap-2">
 										<div
-											class={`flex h-5 w-5 items-center justify-center rounded-full bg-${toolColors[tool.name] || 'gray'}-100 p-1`}
+											class={`flex h-5 w-5 items-center justify-center rounded-full bg-[#0a2a4e] p-1`}
 										>
 											<svg
 												xmlns="http://www.w3.org/2000/svg"
-												class={`h-3.5 w-3.5 text-${toolColors[tool.name] || 'gray'}-600`}
+												class={`h-3.5 w-3.5 text-[#f8f4ed]`}
 												fill="none"
 												viewBox="0 0 24 24"
 												stroke="currentColor"
@@ -361,7 +361,7 @@
 												/>
 											</svg>
 										</div>
-										<div class="text-xs font-medium text-gray-800">{tool.name}</div>
+										<div class="text-xs font-medium text-[#0a2a4e]">{tool.name}</div>
 									</div>
 									<div class="mt-1 text-xs text-gray-600">
 										{toolSkills[tool.name] || 'No description available'}
@@ -382,15 +382,15 @@
 							<div class="space-y-2">
 								{#each tools as tool}
 									<div
-										class="rounded border border-gray-200 bg-white p-3 transition-colors hover:bg-gray-100"
+										class="rounded border border-[#d6c7b1] bg-[#f5f1e8] p-3 transition-colors hover:bg-[#e0d8cb]"
 									>
 										<div class="flex items-center gap-2">
 											<div
-												class={`flex h-5 w-5 items-center justify-center rounded-full bg-${toolColors[tool.name] || 'gray'}-100 p-1`}
+												class={`flex h-5 w-5 items-center justify-center rounded-full bg-[#0a2a4e] p-1`}
 											>
 												<svg
 													xmlns="http://www.w3.org/2000/svg"
-													class={`h-3.5 w-3.5 text-${toolColors[tool.name] || 'gray'}-600`}
+													class={`h-3.5 w-3.5 text-[#f8f4ed]`}
 													fill="none"
 													viewBox="0 0 24 24"
 													stroke="currentColor"
@@ -404,7 +404,7 @@
 													/>
 												</svg>
 											</div>
-											<div class="text-xs font-medium text-gray-800">{tool.name}</div>
+											<div class="text-xs font-medium text-[#0a2a4e]">{tool.name}</div>
 										</div>
 										<div class="mt-1 text-xs text-gray-600">
 											{toolSkills[tool.name] || 'No description available'}
@@ -426,10 +426,10 @@
 	</aside>
 
 	<!-- Main content area - Dynamically loaded vibe component -->
-	<main class="col-span-1 flex flex-col overflow-y-auto border-r border-gray-300 p-6">
+	<main class="col-span-1 flex flex-col overflow-y-auto border-r border-gray-200 p-6">
 		<!-- Vibe Title -->
 		<div class="mb-6 flex-shrink-0">
-			<h1 class="text-2xl font-bold text-gray-800">
+			<h1 class="text-2xl font-bold text-[#0a2a4e]">
 				{activeManifest?.name || activeVibeName.charAt(0).toUpperCase() + activeVibeName.slice(1)}
 			</h1>
 			{#if activeManifest?.description}
@@ -438,12 +438,12 @@
 		</div>
 
 		<!-- Dynamic Content Area -->
-		<div class="flex-grow border-t border-gray-300 pt-6">
+		<div class="flex-grow border-t border-gray-200 pt-6">
 			{#if loadingVibe || loadingComponent}
 				<div class="flex h-64 items-center justify-center">
 					<div class="flex flex-col items-center">
 						<div
-							class="h-10 w-10 animate-spin rounded-full border-2 border-gray-300 border-t-gray-600"
+							class="h-10 w-10 animate-spin rounded-full border-2 border-[#c5d4e8] border-t-[#0a2a4e]"
 						></div>
 						<p class="mt-4 text-gray-600">
 							Loading {vibeComponentName || 'vibe'} component...
@@ -470,21 +470,21 @@
 	</main>
 
 	<!-- Right sidebar for schema information -->
-	<aside class="col-span-1 space-y-6 overflow-y-auto bg-white p-6">
+	<aside class="col-span-1 space-y-6 overflow-y-auto bg-[#f5f1e8] p-6">
 		<!-- Schema Display Area -->
 		<div>
-			<h2 class="mb-4 text-lg font-semibold text-gray-700">Data Schema</h2>
+			<h2 class="mb-4 text-lg font-semibold text-[#0a2a4e]">Data Schema</h2>
 
 			<!-- Schema List (Placeholder) -->
 			<div class="space-y-2">
 				<!-- TODO: Replace with dynamic schema data based on the current vibe/component -->
 				<div
-					class="group flex cursor-pointer items-center justify-between rounded-lg border border-gray-200 bg-white p-3 transition-all hover:border-blue-400 hover:bg-gray-50"
+					class="group flex cursor-pointer items-center justify-between rounded-lg border border-[#d6c7b1] bg-[#f8f4ed] p-3 transition-all hover:border-[#0a2a4e] hover:bg-[#e0d8cb]"
 				>
 					<div class="flex items-center space-x-2">
 						<svg
 							xmlns="http://www.w3.org/2000/svg"
-							class="h-4 w-4 text-blue-500"
+							class="h-4 w-4 text-[#0a2a4e]"
 							fill="none"
 							viewBox="0 0 24 24"
 							stroke="currentColor"
@@ -496,18 +496,18 @@
 								d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
 							/>
 						</svg>
-						<span class="text-sm font-medium text-gray-700">Todo</span>
+						<span class="text-sm font-medium text-[#0a2a4e]">Todo</span>
 					</div>
-					<span class="text-xs text-gray-400 group-hover:text-blue-500">4 fields</span>
+					<span class="text-xs text-gray-400 group-hover:text-[#0a2a4e]">4 fields</span>
 				</div>
 
 				<div
-					class="group flex cursor-pointer items-center justify-between rounded-lg border border-gray-200 bg-white p-3 transition-all hover:border-blue-400 hover:bg-gray-50"
+					class="group flex cursor-pointer items-center justify-between rounded-lg border border-[#d6c7b1] bg-[#f8f4ed] p-3 transition-all hover:border-[#0a2a4e] hover:bg-[#e0d8cb]"
 				>
 					<div class="flex items-center space-x-2">
 						<svg
 							xmlns="http://www.w3.org/2000/svg"
-							class="h-4 w-4 text-blue-500"
+							class="h-4 w-4 text-[#0a2a4e]"
 							fill="none"
 							viewBox="0 0 24 24"
 							stroke="currentColor"
@@ -519,9 +519,9 @@
 								d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
 							/>
 						</svg>
-						<span class="text-sm font-medium text-gray-700">TodoList</span>
+						<span class="text-sm font-medium text-[#0a2a4e]">TodoList</span>
 					</div>
-					<span class="text-xs text-gray-400 group-hover:text-blue-500">4 fields</span>
+					<span class="text-xs text-gray-400 group-hover:text-[#0a2a4e]">4 fields</span>
 				</div>
 				<p class="pt-4 text-center text-xs text-gray-400 italic">
 					(Schema display is currently static)

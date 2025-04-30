@@ -1,5 +1,9 @@
 <script lang="ts">
-	import { processReactiveQuery, type QueryResult } from '$lib/KERNEL/hominio-query';
+	import {
+		processReactiveQuery,
+		type QueryResult,
+		type LoroHqlQueryExtended
+	} from '$lib/KERNEL/hominio-query';
 	import { readable, type Readable, derived, writable } from 'svelte/store';
 	import { getContext } from 'svelte';
 	import { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
@@ -50,20 +54,10 @@
 	}
 
 	// Create a query to fetch all schemas (empty array tells the engine to fetch all)
-	const allSchemaQuery: LoroHqlQuery = {
-		from: {
-			schema: []
-		},
-		map: {
-			id: { field: 'doc.pubkey' },
-			name: { field: 'self.data.name' },
-			places: { field: 'self.data.places' },
-			translations: { field: 'self.data.translations' }
-		}
-	};
+	const allSchemaQuery: LoroHqlQueryExtended | null = null;
 
 	// Convert query to a store for reactive processing
-	const schemaQueryStore = readable<LoroHqlQuery>(allSchemaQuery);
+	const schemaQueryStore = readable<LoroHqlQueryExtended | null>(allSchemaQuery);
 
 	// Create a reactive query store that will update when data changes
 	const schemaReadable = processReactiveQuery(getMe, schemaQueryStore) as Readable<
@@ -71,67 +65,8 @@
 	>;
 
 	// Create a function to generate a composite query filtered by schema type
-	function createCompositeQueryForSchema(schemaId: string): LoroHqlQuery {
-		return {
-			from: {
-				composite: []
-			},
-			where: [
-				{
-					field: 'self.data.schemaId',
-					condition: { equals: schemaId }
-				}
-			],
-			map: {
-				id: { field: 'doc.pubkey' },
-				schemaId: { field: 'self.data.schemaId' },
-				x1: {
-					resolve: {
-						fromField: 'self.data.places.x1',
-						map: {
-							data: { field: 'self.data' },
-							pubkey: { field: 'doc.pubkey' }
-						}
-					}
-				},
-				x2: {
-					resolve: {
-						fromField: 'self.data.places.x2',
-						map: {
-							data: { field: 'self.data' },
-							pubkey: { field: 'doc.pubkey' }
-						}
-					}
-				},
-				x3: {
-					resolve: {
-						fromField: 'self.data.places.x3',
-						map: {
-							data: { field: 'self.data' },
-							pubkey: { field: 'doc.pubkey' }
-						}
-					}
-				},
-				x4: {
-					resolve: {
-						fromField: 'self.data.places.x4',
-						map: {
-							data: { field: 'self.data' },
-							pubkey: { field: 'doc.pubkey' }
-						}
-					}
-				},
-				x5: {
-					resolve: {
-						fromField: 'self.data.places.x5',
-						map: {
-							data: { field: 'self.data' },
-							pubkey: { field: 'doc.pubkey' }
-						}
-					}
-				}
-			}
-		};
+	function createCompositeQueryForSchema(schemaId: string): LoroHqlQueryExtended | null {
+		return null;
 	}
 
 	// Selected Schema State
@@ -141,7 +76,7 @@
 	let currentSelectedSchema = $state<SchemaQueryResult | null>(null);
 
 	// Store for the current composite query
-	const compositeQueryStore = writable<LoroHqlQuery | null>(null);
+	const compositeQueryStore = writable<LoroHqlQueryExtended | null>(null);
 
 	// Create a reactive query for composite records
 	const compositeReadable = processReactiveQuery(getMe, compositeQueryStore) as Readable<
@@ -201,12 +136,12 @@
 	}
 </script>
 
-<div class="flex h-screen flex-col bg-gray-100">
+<div class="flex h-screen flex-col bg-[#f8f4ed]">
 	<!-- Header with status and tabs -->
-	<header class="flex flex-col border-b border-gray-300 bg-white">
+	<header class="flex flex-col border-b border-gray-300 bg-[#f8f4ed]">
 		<div class="flex items-center justify-between px-4 py-2">
 			<div class="flex-1">
-				<h1 class="text-lg font-bold text-gray-800">HQL Query Explorer</h1>
+				<h1 class="text-lg font-bold text-[#0a2a4e]">HQL Query Explorer</h1>
 			</div>
 			<div class="flex-grow">
 				<SyncStatusUI />
@@ -217,24 +152,24 @@
 		<nav class="flex px-4">
 			<button
 				class="border-b-2 px-4 py-2 font-medium transition-colors {activeTab === 'schema'
-					? 'border-indigo-500 text-indigo-600'
-					: 'border-transparent text-gray-500 hover:text-gray-700'}"
+					? 'border-[#0a2a4e] text-[#0a2a4e]'
+					: 'border-transparent text-gray-500 hover:border-gray-300 hover:text-[#0a2a4e]'}"
 				on:click={() => setActiveTab('schema')}
 			>
 				Schemata
 			</button>
 			<button
 				class="border-b-2 px-4 py-2 font-medium transition-colors {activeTab === 'leaf'
-					? 'border-indigo-500 text-indigo-600'
-					: 'border-transparent text-gray-500 hover:text-gray-700'}"
+					? 'border-[#0a2a4e] text-[#0a2a4e]'
+					: 'border-transparent text-gray-500 hover:border-gray-300 hover:text-[#0a2a4e]'}"
 				on:click={() => setActiveTab('leaf')}
 			>
 				Leafs
 			</button>
 			<button
 				class="border-b-2 px-4 py-2 font-medium transition-colors {activeTab === 'query-editor'
-					? 'border-indigo-500 text-indigo-600'
-					: 'border-transparent text-gray-500 hover:text-gray-700'}"
+					? 'border-[#0a2a4e] text-[#0a2a4e]'
+					: 'border-transparent text-gray-500 hover:border-gray-300 hover:text-[#0a2a4e]'}"
 				on:click={() => setActiveTab('query-editor')}
 			>
 				Query Editor
@@ -243,8 +178,8 @@
 			<!-- Add Indices Tab Button -->
 			<button
 				class="border-b-2 px-4 py-2 font-medium transition-colors {activeTab === 'indices'
-					? 'border-indigo-500 text-indigo-600'
-					: 'border-transparent text-gray-500 hover:text-gray-700'}"
+					? 'border-[#0a2a4e] text-[#0a2a4e]'
+					: 'border-transparent text-gray-500 hover:border-gray-300 hover:text-[#0a2a4e]'}"
 				on:click={() => setActiveTab('indices')}
 			>
 				Indices
@@ -252,8 +187,8 @@
 			<!-- Add Todos Tab Button -->
 			<button
 				class="border-b-2 px-4 py-2 font-medium transition-colors {activeTab === 'todos'
-					? 'border-indigo-500 text-indigo-600'
-					: 'border-transparent text-gray-500 hover:text-gray-700'}"
+					? 'border-[#0a2a4e] text-[#0a2a4e]'
+					: 'border-transparent text-gray-500 hover:border-gray-300 hover:text-[#0a2a4e]'}"
 				on:click={() => setActiveTab('todos')}
 			>
 				Todos

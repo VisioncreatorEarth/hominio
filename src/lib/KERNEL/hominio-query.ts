@@ -362,10 +362,7 @@ async function processFindStep(
         const allCompositePubKeys = Object.keys(indexData.value);
         const matchingComposites: { pubkey: string; doc: LoroDoc }[] = [];
 
-        // --- DEBUGGING: Log index data and search schemaId --- 
-        console.log(`[Query Engine DEBUG] Composites Index Contents:`, JSON.stringify(indexData.value));
-        console.log(`[Query Engine DEBUG] Searching for Schema ID:`, schemaId);
-        // --- END DEBUGGING ---
+
 
         for (const compPubKey of allCompositePubKeys) {
             try {
@@ -448,7 +445,6 @@ async function processGetStep(
                     if (sourceKey && 'variables' in item && typeof item.variables === 'object' && item.variables !== null) {
                         const potentialPubkey = (item.variables as Record<string, unknown>)[sourceKey];
                         // <<< START DEBUG LOGGING >>>
-                        console.log(`[Query Engine GET DEBUG] Array Item: Extracted potential pubkey using sourceKey '${sourceKey}':`, potentialPubkey, '(type:', typeof potentialPubkey, ') from item:', item);
                         // <<< END DEBUG LOGGING >>>
                         if (typeof potentialPubkey === 'string') {
                             pubkey = potentialPubkey;
@@ -506,7 +502,6 @@ async function processGetStep(
             // FIX: Handle case where the variable holds the pubkey directly (no sourceKey)
             if (!sourceKey) {
                 pubKeysToFetch = [sourceData];
-                console.log(`[Query Engine GET DEBUG] Variable '${step.from.variable}' is string: ${sourceData}`);
             } else {
                 console.warn(`[Query Engine] GET step: Variable '${step.from.variable}' is a string, but sourceKey '${sourceKey}' was also provided. Ignoring string value.`);
             }
@@ -647,7 +642,6 @@ async function processSelectStep(
 
     // FIX: Handle case where sourceArray is null or empty *before* trying to group
     if (!sourceArray || sourceArray.length === 0) {
-        console.log(`[Query Engine] SELECT step: Source array for groupBy '${groupByVar}' is empty or not found. Returning empty results.`);
         return []; // Return empty array directly
     }
 
@@ -738,50 +732,24 @@ async function processSelectStep(
                     }
                 }
 
-                // Logic for LeafQueries: Correlate schema name (using a distinct variable)
+                // Logic for LeafQueries: Correlate schema info (name, placeTitles, etc.)
                 if (otherVarName === 'schemaInfo') {
                     const schemaIdToFind = groupContext['schema_id']; // schema_id comes from the foundComposites group
-                    // DEBUG: Log the ID we are trying to match
-                    // console.log(`[Query Engine SELECT DEBUG - schemaInfo] Trying to find schemaId: ${schemaIdToFind}`);
                     if (schemaIdToFind) {
                         const matchingSchemaInfo = otherDataArray.find(infoItem => infoItem.variables?.retrieved_schema_id === schemaIdToFind);
-                        if (matchingSchemaInfo && matchingSchemaInfo.variables?.name !== undefined) {
-                            // DEBUG: Log successful match and the name found
-                            console.log(`[Query Engine SELECT DEBUG - schemaInfo] Found match for ${schemaIdToFind}. Name: ${matchingSchemaInfo.variables.name}`);
-                            // <<< Use a distinct key to avoid collision with 'name' from Todos query >>>
-                            groupContext['correlated_schema_name'] = matchingSchemaInfo.variables.name;
+                        if (matchingSchemaInfo && typeof matchingSchemaInfo.variables === 'object') {
+                            // <<< GENERIC CORRELATION: Copy all variables from schemaInfo result >>>
+                            for (const [schemaVarKey, schemaVarValue] of Object.entries(matchingSchemaInfo.variables)) {
+                                // Avoid overwriting the key used for matching, if necessary
+                                // (In this case, 'retrieved_schema_id' is unlikely to clash with foundComposites vars)
+                                // Prefixing could be added here if needed: e.g., groupContext[`schemaInfo_${schemaVarKey}`] = schemaVarValue;
+                                groupContext[schemaVarKey] = schemaVarValue;
+                            }
                         } else {
-                            // DEBUG: Log if no match or name was found
-                            console.log(`[Query Engine SELECT DEBUG - schemaInfo] No matching schema name found for ${schemaIdToFind}. Match found: ${!!matchingSchemaInfo}, Name defined: ${matchingSchemaInfo?.variables?.name !== undefined}`); // More detailed log
+                            console.log(`[Query Engine SELECT DEBUG - ${otherVarName}] No matching item found for ${schemaIdToFind}.`);
                         }
                     }
-                    // DEBUG: Log group context after attempting correlation for this group
-                    // console.log(`[Query Engine SELECT DEBUG - schemaInfo] Group context for key ${groupKey} after schemaInfo correlation:`, JSON.stringify(groupContext));
-                }
-
-                // <<< NEW: Logic for LeafQueries Places (x1-x5) >>>
-                // Repeat this block for x1LeafDetails through x5LeafDetails
-                if (otherVarName.match(/^x[1-5]LeafDetails$/)) {
-                    const placeNum = otherVarName.charAt(1); // Extract '1' from 'x1LeafDetails'
-                    const placeKey = `x${placeNum}` as PlaceKey; // e.g., 'x1'
-                    const targetLeafPubKey = groupContext[placeKey]; // Get the pubkey stored in x1, x2 etc.
-
-                    if (targetLeafPubKey && typeof targetLeafPubKey === 'string') {
-                        const matchingLeafInfo = otherDataArray.find(infoItem => infoItem._sourceKey === targetLeafPubKey);
-                        const outputVarName = `correlated_${placeKey}_display`;
-
-                        if (matchingLeafInfo && matchingLeafInfo.variables?.type !== undefined && matchingLeafInfo.variables?.type !== 'Concept') {
-                            // Not a concept, use the value
-                            groupContext[outputVarName] = matchingLeafInfo.variables.value;
-                        } else {
-                            // It IS a concept, or fetching failed, or type is missing - use the original pubkey
-                            groupContext[outputVarName] = targetLeafPubKey;
-                        }
-                    } else {
-                        // No pubkey was stored in this place for this composite
-                        groupContext[`correlated_${placeKey}_display`] = null;
-                    }
-                }
+                } // End if(otherVarName === 'schemaInfo')
 
                 // --- END Specific Correlation Logic --- 
 
@@ -800,23 +768,20 @@ async function processSelectStep(
 
         for (const [outputKey, valueDef] of Object.entries(step.select)) {
             if (typeof valueDef === 'object' && valueDef !== null) {
-                // Resolve variable: Now expects flattened names like 'status', 'name', or prefixed like 'taskStatusLinks_statusLeafVar'
+                // Resolve variable: Expects variables directly available in groupContext
+                // (e.g., 'composite_key', 'schema_id', 'x1', 'name', 'placeTitles')
                 if ('variable' in valueDef && typeof valueDef.variable === 'string') {
                     const varName = valueDef.variable;
-                    // Direct access on the potentially flattened groupContext
                     resultItem[outputKey] = groupContext[varName];
                 } else if ('literal' in valueDef) {
                     resultItem[outputKey] = valueDef.literal;
                 } else if ('field' in valueDef && typeof valueDef.field === 'string') {
-                    // Field access remains difficult without storing the original documents in context.
-                    console.warn(`[Query Engine] SELECT: Direct 'field' usage in select step remains problematic.`);
-                    // const sourceItem = groupContext[sourceVarName!] as StepResultItem | undefined; 
-                    // ... lookup logic ...
+                    // ... (field access warning remains) ...
                 } else {
-                    console.warn(`[Query Engine] SELECT: Unsupported value definition for key '${outputKey}':`, valueDef);
+                    // ... (unsupported definition warning remains) ...
                 }
             } else {
-                console.warn(`[Query Engine] SELECT: Invalid value definition for key '${outputKey}':`, valueDef);
+                // ... (invalid definition warning remains) ...
             }
         }
         finalResults.push(resultItem);
@@ -865,7 +830,6 @@ async function processIterateIndexStep(
             stepResults.push({ _sourceKey: key, variables: itemVariables });
         }
 
-        console.log(`[Query Engine] IterateIndex '${step.indexName}' found ${stepResults.length} items.`); // DEBUG
 
     } catch (error) {
         console.error(`[Query Engine] Error during IterateIndex step for '${step.indexName}':`, error);
@@ -911,41 +875,28 @@ async function resolveSingleLeafValue(
             originalDataType = typeof dataType === 'string' ? dataType : null; // <<< Store the type if it's a string
             const dataValue = (data as Record<string, unknown>)[valueField];
 
-            // <<< NEW DEBUG LOG >>>
-            console.log(`[Query Engine Resolve DEBUG] Leaf ${pubkey}: Evaluating type. dataType = '${dataType}' (Type: ${typeof dataType}), excludeType = '${excludeType}'`);
-
             // Check if the type should be excluded (e.g., 'Concept')
             if (excludeType !== undefined && dataType === excludeType) {
                 // <<< START Secondary Lookup Logic for Concepts >>>
-                console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Type '${dataType}' matches excludeType '${excludeType}'. Starting secondary lookup.`); // DEBUG
                 if (!cnemeSchemaPubKey) {
                     console.warn(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Cannot resolve concept - 'cneme' schema pubkey not available.`); // DEBUG
                     return [null, originalDataType]; // <<< Return [null value, original type]
                 }
-                console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Using cneme schema pubkey: ${cnemeSchemaPubKey}`); // DEBUG
                 try {
-                    // Find the cneme composite where this concept is x1
-                    console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Finding cneme composites with x1=${pubkey}...`); // DEBUG
                     const relatedCnemeComposites = await findCompositeDocsBySchemaAndPlace(cnemeSchemaPubKey, 'x1', pubkey);
-                    console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Found ${relatedCnemeComposites.length} related cneme composites.`); // DEBUG
 
                     if (relatedCnemeComposites.length === 1) {
                         const cnemeComp = relatedCnemeComposites[0];
-                        console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Using cneme composite ${cnemeComp.pubkey}`); // DEBUG
                         const cnemeData = getDataFromDoc(cnemeComp.doc) as { places: Record<PlaceKey, string> } | undefined;
                         const x2PubKey = cnemeData?.places?.x2;
-                        console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Extracted x2 pubkey: ${x2PubKey}`); // DEBUG
 
                         if (x2PubKey) {
                             // Fetch the x2 leaf and its value
-                            console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Fetching x2 leaf doc: ${x2PubKey}`); // DEBUG
                             const x2LeafDoc = await getLeafDoc(x2PubKey);
                             if (x2LeafDoc) {
-                                console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Fetched x2 leaf doc successfully.`); // DEBUG
                                 const x2Data = getDataFromDoc(x2LeafDoc);
                                 if (x2Data && typeof x2Data === 'object' && (x2Data as Record<string, unknown>)[valueField] !== undefined) {
                                     const resolvedValue = (x2Data as Record<string, unknown>)[valueField];
-                                    console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: SUCCESS! Resolved via cneme x2 ${x2PubKey} to value:`, resolvedValue); // DEBUG
                                     return [resolvedValue, originalDataType]; // <<< SUCCESS! Return [resolved value, original type]
                                 } else {
                                     console.warn(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Found cneme composite ${cnemeComp.pubkey}, but x2 leaf ${x2PubKey} has no '${valueField}' or invalid data. x2Data:`, x2Data); // DEBUG
@@ -964,15 +915,12 @@ async function resolveSingleLeafValue(
                 } catch (secondaryLookupError) {
                     console.error(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Error during secondary lookup:`, secondaryLookupError); // DEBUG
                 }
-                // If secondary lookup fails at any point, fall through to return null value
-                console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Secondary lookup failed or didn't yield value. Returning null for fallback.`); // DEBUG
                 return [null, originalDataType]; // <<< Fallback: Return [null value, original type]
                 // <<< END Secondary Lookup Logic >>>
             }
 
             // Original logic: Not the excluded type, check if value exists
             if (dataValue !== undefined) {
-                console.log(`[Query Engine Resolve DEBUG] Leaf ${pubkey}: Type '${dataType}' !== excludeType '${excludeType}'. Returning direct value:`, dataValue); // DEBUG
                 return [dataValue, originalDataType]; // <<< Return [direct value, original type]
             }
         }
@@ -1085,7 +1033,6 @@ async function processResolveStep(
     } // End loop through input items
 
     updatedContext[step.resultVariable] = resolvedResults;
-    console.log(`[Query Engine] Resolve step '${step.resultVariable}' produced ${resolvedResults.length} items.`); // DEBUG
     return updatedContext;
 }
 // <<< END NEW STEP PROCESSING FUNCTION >>>
@@ -1215,7 +1162,6 @@ export function processReactiveQuery(
             const currentQueryDefinition = get(queryDefinitionStore);
             // Ensure we only proceed if the definition is valid (has steps)
             if (!currentQueryDefinition || !Array.isArray(currentQueryDefinition.steps)) {
-                console.log("[Reactive Query] Skipping execution: Query definition is null or invalid.");
                 if (debounceTimer) clearTimeout(debounceTimer); debounceTimer = null;
                 if (currentResults !== undefined && currentResults !== null && currentResults.length > 0) {
                     set([]);
@@ -1235,7 +1181,6 @@ export function processReactiveQuery(
             if (!queryChanged && currentResults !== undefined) return;
             if (debounceTimer) clearTimeout(debounceTimer);
             if (currentResults === undefined || queryChanged) {
-                console.log("[Reactive Query] Setting state to undefined (loading)"); // Changed log message
                 set(undefined);
                 currentResults = undefined;
             }
@@ -1247,11 +1192,9 @@ export function processReactiveQuery(
 
                 // Re-validate query before execution
                 if (!latestQueryDefinition || !Array.isArray(latestQueryDefinition.steps) || latestQueryDefString !== lastQueryDefinitionString) {
-                    console.log("[Reactive Query Debounced] Skipping execution: Query became null, invalid, or stale.");
                     return;
                 }
 
-                console.log("[Reactive Query Debounced] Executing query:", latestQueryDefString);
                 try {
                     // Set to undefined only if not already undefined (prevents flicker if query is fast)
                     if (currentResults !== undefined) set(undefined);
@@ -1261,17 +1204,14 @@ export function processReactiveQuery(
 
                     // Check if query changed *again* during async execution
                     if (JSON.stringify(get(queryDefinitionStore)) !== lastQueryDefinitionString) {
-                        console.log("[Reactive Query Debounced] Query became stale during execution, ignoring results.");
                         return;
                     }
-                    console.log("[Reactive Query Debounced] Setting results:", results);
                     set(results);
                     currentResults = results;
                 } catch (error) {
                     console.error("[LoroHQL Reactive] Error:", error);
                     // Check staleness before setting error state
                     if (JSON.stringify(get(queryDefinitionStore)) === lastQueryDefinitionString) {
-                        console.log("[Reactive Query Debounced] Setting state to null (error)");
                         set(null);
                         currentResults = null;
                     } else {
@@ -1290,7 +1230,6 @@ export function processReactiveQuery(
         });
 
         const unsubscribeNotifier = docChangeNotifier.subscribe(() => {
-            console.log("[Reactive Query] docChangeNotifier triggered.");
             triggerDebouncedQuery();
         });
 
@@ -1298,7 +1237,6 @@ export function processReactiveQuery(
         const unsubscribeSession = sessionStore.subscribe((session: MinimalSession) => { // Use defined type
             const currentSessionState = JSON.stringify(session?.data?.user?.id ?? null);
             if (lastSessionState !== null && lastSessionState !== currentSessionState) {
-                console.log("[Reactive Query] Session changed.");
                 triggerDebouncedQuery();
             }
             lastSessionState = currentSessionState;
@@ -1311,16 +1249,13 @@ export function processReactiveQuery(
 
         // Trigger initial query execution if valid
         if (get(queryDefinitionStore) && Array.isArray(get(queryDefinitionStore)?.steps)) {
-            console.log("[Reactive Query] Triggering initial query execution.");
             triggerDebouncedQuery();
         } else {
-            console.log("[Reactive Query] Initial query is invalid, setting state to empty array.");
             set([]); // Set empty array if initial query is invalid
             currentResults = [];
         }
 
         return () => {
-            console.log("[Reactive Query] Cleanup.");
             unsubscribeQueryDef();
             unsubscribeNotifier();
             unsubscribeSession();

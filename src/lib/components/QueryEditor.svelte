@@ -44,16 +44,16 @@
 	}
 </script>
 
-<div class="p-4">
-	<h2 class="mb-4 text-xl font-semibold text-black">Query Editor</h2>
+<div class="h-full bg-[#f8f4ed] p-4">
+	<h2 class="mb-4 text-xl font-semibold text-[#0a2a4e]">Query Editor</h2>
 
-	<div class="mb-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+	<div class="grid h-[calc(100%-52px)] grid-cols-1 gap-4 md:grid-cols-2">
 		<div>
-			<h3 class="mb-2 text-lg font-medium text-black">Edit Query</h3>
-			<div class="relative">
+			<h3 class="mb-2 text-lg font-medium text-[#0a2a4e]">Edit Query</h3>
+			<div class="relative flex h-full flex-col">
 				<textarea
 					bind:value={$queryText}
-					class="h-[400px] w-full resize-none rounded border border-gray-300 bg-white p-3 font-mono text-sm text-black"
+					class="w-full flex-grow resize-none rounded border border-gray-300 bg-white p-3 font-mono text-sm text-[#0a2a4e]"
 				></textarea>
 				{#if $queryError}
 					<div class="mt-2 rounded border border-red-300 bg-red-50 p-2 text-sm text-red-700">
@@ -61,7 +61,7 @@
 					</div>
 				{/if}
 				<button
-					class="mt-2 rounded bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700"
+					class="mt-2 rounded bg-[#0a2a4e] px-4 py-2 text-[#f8f4ed] hover:bg-[#1e3a5e] disabled:opacity-50"
 					on:click={runCustomQuery}
 				>
 					Run Query
@@ -70,14 +70,14 @@
 		</div>
 
 		<div>
-			<h3 class="mb-2 text-lg font-medium text-black">Results</h3>
-			<div class="h-[400px] overflow-auto rounded border border-gray-300 bg-white p-3">
+			<h3 class="mb-2 text-lg font-medium text-[#0a2a4e]">Results</h3>
+			<div class="h-full overflow-auto rounded border border-gray-300 bg-white p-3 text-[#0a2a4e]">
 				{#if $resultsStore === undefined}
 					<div class="flex h-full items-center justify-center text-gray-500">
 						<p>Loading results...</p>
 					</div>
 				{:else if $resultsStore === null}
-					<div class="flex h-full items-center justify-center text-red-500">
+					<div class="flex h-full items-center justify-center text-red-600">
 						<p>Error executing query</p>
 					</div>
 				{:else if $resultsStore.length === 0}
@@ -88,11 +88,11 @@
 					<div class="space-y-4">
 						{#each $resultsStore as result (result.id ?? JSON.stringify(result))}
 							<div class="rounded border border-gray-200 bg-white p-3">
-								<h4 class="mb-2 font-medium text-black">
+								<h4 class="mb-2 font-medium text-[#0a2a4e]">
 									{truncate(result.id ?? result.taskId ?? 'Unknown', 24)}
 								</h4>
 								<pre
-									class="max-h-48 overflow-auto rounded bg-gray-50 p-2 text-xs text-black">{JSON.stringify(
+									class="max-h-48 overflow-auto rounded bg-gray-50 p-2 text-xs text-[#0a2a4e]">{JSON.stringify(
 										result,
 										null,
 										2
