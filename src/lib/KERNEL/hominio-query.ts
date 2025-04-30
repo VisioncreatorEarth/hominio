@@ -35,7 +35,7 @@ export interface StepResultItem {
 }
 
 // Define possible step actions
-type HqlStepAction = 'find' | 'get' | 'select' | 'setVar' | 'iterateIndex';
+type HqlStepAction = 'find' | 'get' | 'select' | 'setVar' | 'iterateIndex' | 'resolve';
 
 // Base interface for a query step
 interface LoroHqlStepBase {
@@ -109,7 +109,7 @@ interface LoroHqlSelectStep extends LoroHqlStepBase {
     groupBy?: string; // Variable name (e.g., 'taskVar')
     // Option 2: Define explicit join conditions
     // join?: { on: string; sources: string[]; type: 'inner' | 'left' }; // More complex
-    resultVariable?: undefined; // Select is terminal
+    resultVariable?: string;
 }
 
 // <<< START NEW STEP DEFINITION: iterateIndex >>>
@@ -124,10 +124,34 @@ interface LoroHqlIterateIndexStep extends LoroHqlStepBase {
 }
 // <<< END NEW STEP DEFINITION >>>
 
+// <<< START NEW STEP DEFINITION: resolve >>>
+// Rule for resolving a leaf's value conditionally based on its type
+interface ResolveLeafValueRule {
+    type: 'resolveLeafValue';
+    pubkeyVar: string;      // Variable in the source item holding the leaf pubkey (e.g., 'x1')
+    fallbackVar: string;    // Variable in the source item to use as fallback (e.g., 'x1')
+    valueField?: string;     // Field in leaf data containing the value (default: 'value')
+    typeField?: string;      // Field in leaf data containing the type (default: 'type')
+    excludeType?: string;    // Type value to exclude (e.g., 'concept')
+}
+
+// Union of possible resolution rules (can be extended later)
+type ResolveRule = ResolveLeafValueRule;
+
+interface LoroHqlResolveStep extends LoroHqlStepBase {
+    action: 'resolve';
+    fromVariable: string; // Variable in context holding the array to process
+    resolveFields: {
+        [outputFieldName: string]: ResolveRule; // Map output names to resolution rules
+    };
+    resultVariable: string; // Required: Name for the array of resolved items
+}
+// <<< END NEW STEP DEFINITION >>>
+
 // --- Resolve and Enrich Steps Removed ---
 
 // Union type for any step
-type LoroHqlStep = LoroHqlSetVarStep | LoroHqlFindStep | LoroHqlGetStep | LoroHqlSelectStep | LoroHqlIterateIndexStep;
+type LoroHqlStep = LoroHqlSetVarStep | LoroHqlFindStep | LoroHqlGetStep | LoroHqlSelectStep | LoroHqlIterateIndexStep | LoroHqlResolveStep;
 
 // Redefined top-level query using steps
 export interface LoroHqlQueryExtended {
@@ -856,6 +880,216 @@ async function processIterateIndexStep(
 }
 // <<< END NEW STEP PROCESSING FUNCTION >>>
 
+// <<< START NEW STEP PROCESSING FUNCTION: processResolveStep >>>
+/**
+ * Helper function to perform the core logic of resolveLeafValue rule,
+ * including the secondary lookup for concept types.
+ */
+async function resolveSingleLeafValue(
+    pubkey: string | null | undefined,
+    valueField: string,
+    typeField: string,
+    excludeType: string | undefined,
+    cnemeSchemaPubKey: string | null // <<< Pass cneme schema key
+): Promise<[unknown | null, string | null]> { // <<< Return tuple [value, type]
+    if (!pubkey) {
+        return [null, null]; // <<< Return [null value, null type]
+    }
+    try {
+        const leafDoc = await getLeafDoc(pubkey);
+        if (!leafDoc) {
+            return [null, null]; // Indicate failure to resolve
+        }
+        const data = getDataFromDoc(leafDoc);
+        let originalDataType: string | null = null; // <<< Variable to store the type
+
+        if (
+            data &&
+            typeof data === 'object'
+        ) {
+            const dataType = (data as Record<string, unknown>)[typeField];
+            originalDataType = typeof dataType === 'string' ? dataType : null; // <<< Store the type if it's a string
+            const dataValue = (data as Record<string, unknown>)[valueField];
+
+            // <<< NEW DEBUG LOG >>>
+            console.log(`[Query Engine Resolve DEBUG] Leaf ${pubkey}: Evaluating type. dataType = '${dataType}' (Type: ${typeof dataType}), excludeType = '${excludeType}'`);
+
+            // Check if the type should be excluded (e.g., 'Concept')
+            if (excludeType !== undefined && dataType === excludeType) {
+                // <<< START Secondary Lookup Logic for Concepts >>>
+                console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Type '${dataType}' matches excludeType '${excludeType}'. Starting secondary lookup.`); // DEBUG
+                if (!cnemeSchemaPubKey) {
+                    console.warn(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Cannot resolve concept - 'cneme' schema pubkey not available.`); // DEBUG
+                    return [null, originalDataType]; // <<< Return [null value, original type]
+                }
+                console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Using cneme schema pubkey: ${cnemeSchemaPubKey}`); // DEBUG
+                try {
+                    // Find the cneme composite where this concept is x1
+                    console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Finding cneme composites with x1=${pubkey}...`); // DEBUG
+                    const relatedCnemeComposites = await findCompositeDocsBySchemaAndPlace(cnemeSchemaPubKey, 'x1', pubkey);
+                    console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Found ${relatedCnemeComposites.length} related cneme composites.`); // DEBUG
+
+                    if (relatedCnemeComposites.length === 1) {
+                        const cnemeComp = relatedCnemeComposites[0];
+                        console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Using cneme composite ${cnemeComp.pubkey}`); // DEBUG
+                        const cnemeData = getDataFromDoc(cnemeComp.doc) as { places: Record<PlaceKey, string> } | undefined;
+                        const x2PubKey = cnemeData?.places?.x2;
+                        console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Extracted x2 pubkey: ${x2PubKey}`); // DEBUG
+
+                        if (x2PubKey) {
+                            // Fetch the x2 leaf and its value
+                            console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Fetching x2 leaf doc: ${x2PubKey}`); // DEBUG
+                            const x2LeafDoc = await getLeafDoc(x2PubKey);
+                            if (x2LeafDoc) {
+                                console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Fetched x2 leaf doc successfully.`); // DEBUG
+                                const x2Data = getDataFromDoc(x2LeafDoc);
+                                if (x2Data && typeof x2Data === 'object' && (x2Data as Record<string, unknown>)[valueField] !== undefined) {
+                                    const resolvedValue = (x2Data as Record<string, unknown>)[valueField];
+                                    console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: SUCCESS! Resolved via cneme x2 ${x2PubKey} to value:`, resolvedValue); // DEBUG
+                                    return [resolvedValue, originalDataType]; // <<< SUCCESS! Return [resolved value, original type]
+                                } else {
+                                    console.warn(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Found cneme composite ${cnemeComp.pubkey}, but x2 leaf ${x2PubKey} has no '${valueField}' or invalid data. x2Data:`, x2Data); // DEBUG
+                                }
+                            } else {
+                                console.warn(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Found cneme composite ${cnemeComp.pubkey}, but failed to load x2 leaf ${x2PubKey}.`); // DEBUG
+                            }
+                        } else {
+                            console.warn(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Found cneme composite ${cnemeComp.pubkey}, but it has no x2 value.`); // DEBUG
+                        }
+                    } else if (relatedCnemeComposites.length > 1) {
+                        console.warn(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Found multiple (${relatedCnemeComposites.length}) 'cneme' composites with this concept in x1. Cannot resolve ambiguously.`); // DEBUG
+                    } else {
+                        console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: No related 'cneme' composite found with this concept in x1.`); // DEBUG
+                    }
+                } catch (secondaryLookupError) {
+                    console.error(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Error during secondary lookup:`, secondaryLookupError); // DEBUG
+                }
+                // If secondary lookup fails at any point, fall through to return null value
+                console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Secondary lookup failed or didn't yield value. Returning null for fallback.`); // DEBUG
+                return [null, originalDataType]; // <<< Fallback: Return [null value, original type]
+                // <<< END Secondary Lookup Logic >>>
+            }
+
+            // Original logic: Not the excluded type, check if value exists
+            if (dataValue !== undefined) {
+                console.log(`[Query Engine Resolve DEBUG] Leaf ${pubkey}: Type '${dataType}' !== excludeType '${excludeType}'. Returning direct value:`, dataValue); // DEBUG
+                return [dataValue, originalDataType]; // <<< Return [direct value, original type]
+            }
+        }
+        // Data missing, value missing, or type excluded (if check passed but value missing)
+        return [null, originalDataType]; // <<< Signal fallback: Return [null value, original type]
+    } catch (error) {
+        console.error(`resolveSingleLeafValue: Error fetching/processing leaf ${pubkey}:`, error);
+        return [null, null]; // <<< Signal fallback on error: Return [null value, null type]
+    }
+}
+
+
+/**
+ * Processes a 'resolve' step, performing conditional lookups based on previous results.
+ */
+async function processResolveStep(
+    step: LoroHqlResolveStep,
+    context: QueryContext
+): Promise<QueryContext> {
+    const updatedContext = { ...context };
+    const inputData = context[step.fromVariable];
+    const resolvedResults: QueryResult[] = [];
+
+    // <<< Fetch 'cneme' schema pubkey once >>>
+    let cnemeSchemaPubKey: string | null = null;
+    try {
+        const schemasIndexKey = await getIndexLeafPubKey('schemas');
+        if (schemasIndexKey) {
+            const indexDoc = await getLeafDoc(schemasIndexKey);
+            if (indexDoc) {
+                const valueMap = indexDoc.getMap('data')?.get('value') as LoroMap | undefined;
+                cnemeSchemaPubKey = valueMap?.get('cneme') as string | undefined ?? null;
+                if (!cnemeSchemaPubKey) {
+                    console.warn("[Query Engine Resolve] Could not find pubkey for schema 'cneme' in the index.");
+                }
+            }
+        }
+    } catch (e) {
+        console.error("[Query Engine Resolve] Error fetching 'cneme' schema pubkey:", e);
+    }
+
+    if (!Array.isArray(inputData)) {
+        console.warn(`[Query Engine] Resolve step: Input variable '${step.fromVariable}' is not an array. Skipping.`);
+        updatedContext[step.resultVariable] = [];
+        return updatedContext;
+    }
+
+    for (const item of inputData) {
+        if (typeof item !== 'object' || item === null) {
+            console.warn(`[Query Engine] Resolve step: Skipping non-object item in '${step.fromVariable}'.`);
+            continue;
+        }
+
+        const resolvedItem: QueryResult = { ...item }; // Start with a copy of the original item
+
+        for (const [outputField, rule] of Object.entries(step.resolveFields)) {
+            if (rule.type === 'resolveLeafValue') {
+                const pubkey = item[rule.pubkeyVar] as string | undefined;
+                const fallbackValue = item[rule.fallbackVar];
+                const valueField = rule.valueField ?? 'value';
+                const typeField = rule.typeField ?? 'type';
+                const excludeType = rule.excludeType;
+
+                try {
+                    // <<< Capture the tuple returned by resolveSingleLeafValue >>>
+                    const [resolvedValue, originalDataType] = await resolveSingleLeafValue(
+                        pubkey,
+                        valueField,
+                        typeField,
+                        excludeType,
+                        cnemeSchemaPubKey // Pass fetched key
+                    );
+
+                    // If resolution succeeded (returned non-null value), use the resolved value.
+                    // Otherwise, use the fallback value.
+                    resolvedItem[outputField] = resolvedValue !== null ? resolvedValue : fallbackValue;
+
+                    // <<< Add the new ResolvedFromType field >>>
+                    // Construct the key, e.g., "x1Display" -> "x1ResolvedFromType"
+                    const typeOutputFieldKey = outputField.replace(/Display$/, 'ResolvedFromType');
+                    if (typeOutputFieldKey !== outputField) { // Ensure replacement happened
+                        resolvedItem[typeOutputFieldKey] = originalDataType; // Store the original type
+                    } else {
+                        // Add a general key if the naming convention isn't followed
+                        resolvedItem[`${outputField}_ResolvedFromType`] = originalDataType;
+                    }
+
+
+                } catch (error) {
+                    console.error(`[Query Engine] Resolve step: Error applying rule for '${outputField}' on item:`, item, error);
+                    resolvedItem[outputField] = fallbackValue; // Use fallback on error during resolution
+                    // <<< Also set the type field to null on error? >>>
+                    const typeOutputFieldKey = outputField.replace(/Display$/, 'ResolvedFromType');
+                    if (typeOutputFieldKey !== outputField) {
+                        resolvedItem[typeOutputFieldKey] = null;
+                    } else {
+                        resolvedItem[`${outputField}_ResolvedFromType`] = null;
+                    }
+                }
+            }
+            else {
+                // FIX: Safer access to rule type for logging
+                const unknownType = (typeof rule === 'object' && rule !== null && 'type' in rule) ? rule.type : '(unknown format)';
+                console.warn(`[Query Engine] Resolve step: Unsupported rule type '${unknownType}' for field '${outputField}'.`);
+                // Keep original value or set to undefined?
+                // resolvedItem[outputField] = item[outputField]; // Assuming outputField might exist in input
+            }
+        }
+        resolvedResults.push(resolvedItem);
+    } // End loop through input items
+
+    updatedContext[step.resultVariable] = resolvedResults;
+    console.log(`[Query Engine] Resolve step '${step.resultVariable}' produced ${resolvedResults.length} items.`); // DEBUG
+    return updatedContext;
+}
+// <<< END NEW STEP PROCESSING FUNCTION >>>
+
 /**
  * Main function to execute a LORO_HQL steps-based query.
  */
@@ -865,6 +1099,7 @@ export async function executeQuery(
 ): Promise<QueryResult[]> {
     let context: QueryContext = {}; // Use defined type
     let finalResults: QueryResult[] = [];
+    let lastStepResultVariable: string | null = null; // <<< Track last result variable
 
     // Check if the query object and steps array are valid
     if (!query || typeof query !== 'object' || !Array.isArray(query.steps)) {
@@ -875,7 +1110,7 @@ export async function executeQuery(
     try {
         for (const step of query.steps) {
             switch (step.action) {
-                case 'setVar': { // Handle setting initial variables - Add braces for scope
+                case 'setVar': {
                     // FIX: Type assertion for step and check literal definition
                     const setVarStep = step as LoroHqlSetVarStep;
                     if (setVarStep.variables && typeof setVarStep.variables === 'object') {
@@ -897,11 +1132,21 @@ export async function executeQuery(
                     context = await processGetStep(step as LoroHqlGetStep, context, user);
                     break;
                 case 'select':
-                    finalResults = await processSelectStep(step as LoroHqlSelectStep, context);
-                    // Select is considered terminal for now
-                    return finalResults; // Assuming select is always last for now
+                    {
+                        const selectResults = await processSelectStep(step as LoroHqlSelectStep, context);
+                        if (step.resultVariable) {
+                            context[step.resultVariable] = selectResults;
+                        } else {
+                            // If no resultVariable, assume it's the final output (legacy behavior?)
+                            finalResults = selectResults;
+                        }
+                    }
+                    break;
                 case 'iterateIndex':
                     context = await processIterateIndexStep(step as LoroHqlIterateIndexStep, context);
+                    break;
+                case 'resolve':
+                    context = await processResolveStep(step as LoroHqlResolveStep, context);
                     break;
                 default: {
                     const unknownAction = (step as LoroHqlStepBase)?.action ?? 'unknown';
@@ -909,8 +1154,23 @@ export async function executeQuery(
                     throw new Error(`Unsupported step action: ${unknownAction}`);
                 }
             }
+            // <<< FIX: Update lastStepResultVariable AFTER processing the step >>>
+            if (step.resultVariable) {
+                lastStepResultVariable = step.resultVariable;
+            } else if (step.action !== 'setVar') {
+                // If a step that produces results (not setVar) doesn't have a resultVariable,
+                // we can't reliably know what the final result should be from context.
+                // Reset the tracker. The fallback return might be used.
+                lastStepResultVariable = null;
+            }
         }
-        return finalResults; // Might be empty if no select step ran
+        // <<< Return results from the last step that produced output >>>
+        if (lastStepResultVariable && context[lastStepResultVariable] && Array.isArray(context[lastStepResultVariable])) {
+            return context[lastStepResultVariable] as QueryResult[];
+        } else {
+            // Fallback to finalResults if last step didn't set a variable (e.g., old select step)
+            return finalResults;
+        }
 
     } catch (error) {
         console.error("[Query Engine] Error during STEPS execution:", error);

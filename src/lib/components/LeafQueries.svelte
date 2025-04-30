@@ -15,15 +15,28 @@
 		data: LeafValue | Record<string, unknown> | null;
 	}
 
-	// <<< NEW: Type for related composite results >>>
+	// <<< NEW: Type for related composite results (Updated for resolved values and type info) >>>
 	interface RelatedCompositeResult extends QueryResult {
 		compositePubKey: string;
 		schemaName?: string | null;
+		// Original pubkeys
 		x1?: string | null;
 		x2?: string | null;
 		x3?: string | null;
 		x4?: string | null;
 		x5?: string | null;
+		// Resolved display values
+		x1Display?: unknown | null;
+		x2Display?: unknown | null;
+		x3Display?: unknown | null;
+		x4Display?: unknown | null;
+		x5Display?: unknown | null;
+		// <<< NEW: Type information for resolved values >>>
+		x1ResolvedFromType?: string | null;
+		x2ResolvedFromType?: string | null;
+		x3ResolvedFromType?: string | null;
+		x4ResolvedFromType?: string | null;
+		x5ResolvedFromType?: string | null;
 	}
 
 	// --- Get Effective User Function from Context ---
@@ -41,11 +54,11 @@
 		AllLeavesResult[] | null | undefined
 	>;
 
-	// <<< NEW Readable >>>
+	// <<< NEW Readable (Updated type) >>>
 	const relatedCompositesReadable = processReactiveQuery(
 		getMe,
 		relatedCompositesQueryStore
-	) as Readable<RelatedCompositeResult[] | null | undefined>;
+	) as Readable<RelatedCompositeResult[] | null | undefined>; // Type already updated by interface change
 
 	// --- Effects to Set Queries ---
 	$effect.pre(() => {
@@ -130,12 +143,53 @@
 						compositePubKey: { variable: 'composite_key' },
 						// <<< Output the schema name fetched in the 'get' step >>>
 						schemaName: { variable: 'correlated_schema_name' },
+						// Output the original pubkeys for the resolve step
 						x1: { variable: 'x1' },
 						x2: { variable: 'x2' },
 						x3: { variable: 'x3' },
 						x4: { variable: 'x4' },
 						x5: { variable: 'x5' }
-					}
+					},
+					// <<< ADD resultVariable to make output explicit for next step >>>
+					resultVariable: 'selectedComposites'
+				},
+				// <<< NEW: Resolve step to get leaf values conditionally >>>
+				{
+					action: 'resolve',
+					fromVariable: 'selectedComposites',
+					resolveFields: {
+						x1Display: {
+							type: 'resolveLeafValue',
+							pubkeyVar: 'x1',
+							fallbackVar: 'x1',
+							excludeType: 'Concept'
+						},
+						x2Display: {
+							type: 'resolveLeafValue',
+							pubkeyVar: 'x2',
+							fallbackVar: 'x2',
+							excludeType: 'Concept'
+						},
+						x3Display: {
+							type: 'resolveLeafValue',
+							pubkeyVar: 'x3',
+							fallbackVar: 'x3',
+							excludeType: 'Concept'
+						},
+						x4Display: {
+							type: 'resolveLeafValue',
+							pubkeyVar: 'x4',
+							fallbackVar: 'x4',
+							excludeType: 'Concept'
+						},
+						x5Display: {
+							type: 'resolveLeafValue',
+							pubkeyVar: 'x5',
+							fallbackVar: 'x5',
+							excludeType: 'Concept'
+						}
+					},
+					resultVariable: 'resolvedComposites' // Final results
 				}
 			]
 		};
@@ -246,7 +300,6 @@
 	<!-- Related Composites (Right Column) -->
 	<aside class="col-span-1 h-full overflow-y-auto bg-gray-50 p-6">
 		<h2 class="mb-4 text-xl font-semibold text-gray-700">Related Composites</h2>
-		<!-- Removed (Future) -->
 		{#if !selectedLeafId}
 			<div class="flex h-full items-center justify-center">
 				<p class="text-center text-sm text-gray-500">Select a leaf to see related composites.</p>
@@ -261,37 +314,62 @@
 			<ul class="space-y-1 font-mono text-xs">
 				{#each $relatedCompositesReadable as comp (comp.compositePubKey)}
 					<li class="rounded border bg-white p-2">
-						<!-- <<< Display Schema Name and Pubkey >>> -->
+						<!-- Display Schema Name and Pubkey -->
 						<span class="block font-medium text-purple-700"
 							>{comp.schemaName ?? '(Unknown Schema)'}</span
 						>
 						<span class="block break-all text-gray-600">{comp.compositePubKey}</span>
-						<!-- <<< Display Place Pubkeys (x1-x5) >>> -->
+						<!-- Display Place Values (x1-x5) with Concept marker and Self badge -->
 						<div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 border-t pt-1">
-							{#if comp.x1}
-								<span class="text-gray-500"
-									>x1: <code class="text-gray-700">{truncate(comp.x1)}</code></span
-								>
+							{#if comp.x1Display !== null && comp.x1Display !== undefined}
+								<span class="text-gray-500">
+									{#if comp.x1 === selectedLeafId}<span class="self-badge">self</span>{/if}
+									x1:
+									<code class="text-gray-700"
+										>{comp.x1Display}{#if comp.x1ResolvedFromType === 'Concept'}
+											(C){/if}</code
+									>
+								</span>
 							{/if}
-							{#if comp.x2}
-								<span class="text-gray-500"
-									>x2: <code class="text-gray-700">{truncate(comp.x2)}</code></span
-								>
+							{#if comp.x2Display !== null && comp.x2Display !== undefined}
+								<span class="text-gray-500">
+									{#if comp.x2 === selectedLeafId}<span class="self-badge">self</span>{/if}
+									x2:
+									<code class="text-gray-700"
+										>{comp.x2Display}{#if comp.x2ResolvedFromType === 'Concept'}
+											(C){/if}</code
+									>
+								</span>
 							{/if}
-							{#if comp.x3}
-								<span class="text-gray-500"
-									>x3: <code class="text-gray-700">{truncate(comp.x3)}</code></span
-								>
+							{#if comp.x3Display !== null && comp.x3Display !== undefined}
+								<span class="text-gray-500">
+									{#if comp.x3 === selectedLeafId}<span class="self-badge">self</span>{/if}
+									x3:
+									<code class="text-gray-700"
+										>{comp.x3Display}{#if comp.x3ResolvedFromType === 'Concept'}
+											(C){/if}</code
+									>
+								</span>
 							{/if}
-							{#if comp.x4}
-								<span class="text-gray-500"
-									>x4: <code class="text-gray-700">{truncate(comp.x4)}</code></span
-								>
+							{#if comp.x4Display !== null && comp.x4Display !== undefined}
+								<span class="text-gray-500">
+									{#if comp.x4 === selectedLeafId}<span class="self-badge">self</span>{/if}
+									x4:
+									<code class="text-gray-700"
+										>{comp.x4Display}{#if comp.x4ResolvedFromType === 'Concept'}
+											(C){/if}</code
+									>
+								</span>
 							{/if}
-							{#if comp.x5}
-								<span class="text-gray-500"
-									>x5: <code class="text-gray-700">{truncate(comp.x5)}</code></span
-								>
+							{#if comp.x5Display !== null && comp.x5Display !== undefined}
+								<span class="text-gray-500">
+									{#if comp.x5 === selectedLeafId}<span class="self-badge">self</span>{/if}
+									x5:
+									<code class="text-gray-700"
+										>{comp.x5Display}{#if comp.x5ResolvedFromType === 'Concept'}
+											(C){/if}</code
+									>
+								</span>
 							{/if}
 						</div>
 					</li>
@@ -302,5 +380,16 @@
 </div>
 
 <style>
-	/* Add any specific styles if needed */
+	.self-badge {
+		display: inline-block;
+		margin-right: 4px;
+		padding: 1px 4px;
+		font-size: 0.65rem; /* Smaller font */
+		font-weight: bold;
+		line-height: 1;
+		color: #1e40af; /* dark blue text */
+		background-color: #dbeafe; /* light blue background */
+		border-radius: 0.25rem;
+		vertical-align: middle; /* Align with text */
+	}
 </style>
