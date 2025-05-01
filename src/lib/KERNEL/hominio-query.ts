@@ -299,6 +299,7 @@ async function processFindStep(
     step: LoroHqlFindStep,
     context: QueryContext
 ): Promise<QueryContext> {
+    console.log(`[processFindStep ENTRY] Step: ${JSON.stringify(step)}`); // Log step entry
     const updatedContext = { ...context };
     const stepResults: StepResultItem[] = [];
 
@@ -356,12 +357,23 @@ async function processFindStep(
         // Specific place find
         const placeKey = (Object.keys(step.target).find(k => k.startsWith('x') && step.target[k as PlaceKey]) as PlaceKey | undefined);
         const placeValue = placeKey ? resolveValue(step.target[placeKey], context) : undefined;
+
+        // <<< Add Logging for specific place find >>>
+        console.log(`[processFindStep DEBUG] Specific Place Find - Schema: ${schemaId}, PlaceKey: ${placeKey}, PlaceValue: ${placeValue}`);
+
         if (placeKey && placeValue) {
-            foundComposites = await findCompositeDocsBySchemaAndPlace(schemaId, placeKey, placeValue);
+            // Log before calling the core find function
+            console.log(`[processFindStep DEBUG] Calling findCompositeDocsBySchemaAndPlace(${schemaId}, ${placeKey}, ${placeValue})`);
+            try {
+                foundComposites = await findCompositeDocsBySchemaAndPlace(schemaId, placeKey, placeValue);
+                // Log the direct result of the find function
+                console.log(`[processFindStep DEBUG] findCompositeDocsBySchemaAndPlace returned ${foundComposites.length} composites.`);
+            } catch (findError) {
+                console.error(`[processFindStep ERROR] Error calling findCompositeDocsBySchemaAndPlace:`, findError);
+                foundComposites = []; // Ensure it's an empty array on error
+            }
         } else {
-            // A place key (x1-x5) was specified in the query, but its value couldn't be resolved.
-            // This implies an intentional filter for a specific place that resolved to undefined/null.
-            // So, we should find nothing in this case.
+            console.log(`[processFindStep DEBUG] Skipping findCompositeDocsBySchemaAndPlace because placeKey or placeValue is missing.`);
             foundComposites = [];
         }
 
@@ -401,6 +413,7 @@ async function processFindStep(
     }
 
     // --- Extract Variables --- 
+    console.log(`[processFindStep DEBUG] Processing ${foundComposites.length} found composites for variable extraction.`); // Log before extraction loop
     for (const composite of foundComposites) {
         const compositePubKey = composite.pubkey;
         const compositeData = getDataFromDoc(composite.doc) as { schemaId: string; places: Record<PlaceKey, string> } | undefined;
@@ -425,6 +438,7 @@ async function processFindStep(
     if (step.resultVariable) {
         updatedContext[step.resultVariable] = step.return === 'first' ? (stepResults[0] ?? null) : stepResults;
     }
+    console.log(`[processFindStep EXIT] Step results count: ${stepResults.length}, Context updated for: ${step.resultVariable ?? 'none'}`); // Log step exit
 
     return updatedContext;
 }
@@ -1112,6 +1126,9 @@ export async function executeQuery(
     query: LoroHqlQueryExtended, // Only accept the new steps-based format
     user: CapabilityUser | null = null
 ): Promise<QueryResult[]> {
+    // <<< Add Logging Here >>>
+    console.log(`[executeQuery ENTRY] Received query: ${JSON.stringify(query)}, User: ${user?.id ?? 'null'}`);
+
     let context: QueryContext = {}; // Use defined type
     let finalResults: QueryResult[] = [];
     let lastStepResultVariable: string | null = null; // <<< Track last result variable
@@ -1182,11 +1199,15 @@ export async function executeQuery(
                 lastStepResultVariable = null;
             }
         }
-        // <<< Return results from the last step that produced output >>>
-        if (lastStepResultVariable && context[lastStepResultVariable] && Array.isArray(context[lastStepResultVariable])) {
-            return context[lastStepResultVariable] as QueryResult[];
+        // <<< Return results logic updated >>>
+        if (lastStepResultVariable && context[lastStepResultVariable] !== undefined) {
+            const resultValue = context[lastStepResultVariable];
+            // If the result is already an array, return it as is.
+            // If it's a single object (from return: 'first'), wrap it in an array.
+            // If it's null/undefined, return empty array (or handle as error? currently returns []).
+            return Array.isArray(resultValue) ? resultValue as QueryResult[] : (resultValue ? [resultValue as QueryResult] : []);
         } else {
-            // Fallback to finalResults if last step didn't set a variable (e.g., old select step)
+            // Fallback if no result variable was set by the last step
             return finalResults;
         }
 

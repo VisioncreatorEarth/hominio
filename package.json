@@ -57,6 +57,7 @@
     "@noble/hashes": "^1.7.1",
     "@sinclair/typebox": "^0.34.31",
     "@tauri-apps/api": "^2.3.0",
+    "@thisux/sveltednd": "^0.0.20",
     "@xyflow/svelte": "^0.1.37",
     "better-auth": "^1.2.5",
     "drizzle-orm": "^0.41.0",
