@@ -309,15 +309,15 @@ export async function executeMutation(
 
     // --- Phase 2: Commit (Persistent Storage) --- 
     try {
-        let requiresNotification = false;
+        let requiresNotification = false; // Keep flag for final notification
 
-        // NOTE: No DB transaction wrapper here as hominio-db uses IndexedDB directly.
-        // Operations are performed sequentially; failure midway leaves inconsistent state.
+        // <<< Start Batch Operation >>>
+        hominioDB.startBatchOperation();
 
         // 1. Process Deletes first
         for (const pubKeyToDelete of deletesToPersist) {
             await hominioDB.deleteDocument(user, pubKeyToDelete);
-            requiresNotification = true;
+            // Internal notification is suppressed, requiresNotification flag used later
         }
 
         // 2. Generate Final Keys for ALL Creations
@@ -393,41 +393,47 @@ export async function executeMutation(
 
                 // Persist using the internal method
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                await (hominioDB as any)._persistNewDocument(user, finalPubKey, owner, doc); // Use internal method
-                requiresNotification = true;
+                await (hominioDB as any)._persistNewDocument(user, finalPubKey, owner, doc);
+                requiresNotification = true; // Mark that a change occurred
             } else {
                 // Update existing doc (key is the actual targetPubKey)
                 // Ensure refs in updated docs are also using final keys if needed
                 // (The update logic in step 3 handles this)
                 await hominioDB.updateDocument(user, key, doc);
-                requiresNotification = true;
+                requiresNotification = true; // Mark that a change occurred
             }
         }
 
 
         // --- Post-Commit --- 
-        if (requiresNotification) {
-            triggerDocChangeNotification();
-        }
-        // === Trigger Indexing After Successful Commit ===
-        // We now await this to ensure indexing completes before mutation returns
-        console.log('[Mutation Engine] Awaiting indexing cycle after successful commit...'); // DEBUG
+
+        // === Trigger Indexing BEFORE ending batch ===
+        console.log('[Mutation Engine] Awaiting indexing cycle before final notification...'); // DEBUG
         try {
             await hominioIndexing.startIndexingCycle();
             console.log('[Mutation Engine] Indexing cycle completed.'); // DEBUG
         } catch (indexingError) {
             console.error('[Mutation Engine] Error during post-mutation indexing cycle:', indexingError);
-            // Decide if this should make the overall mutation fail? For now, just log.
         }
         // ==============================================
+
+        // <<< End Batch Operation >>>
+        hominioDB.endBatchOperation();
+
+        // <<< Trigger ONE Notification AFTER batch and indexing >>>
+        if (requiresNotification || deletesToPersist.size > 0) { // Trigger if creates/updates happened OR deletes happened
+            console.log('[Mutation Engine] Triggering final notification after batch commit and indexing.'); // DEBUG
+            triggerDocChangeNotification();
+        }
 
         return { status: 'success', generatedPubKeys: finalGeneratedPubKeys };
 
     } catch (error: unknown) {
-        // This block catches errors during the transaction/commit phase.
+        // <<< Ensure batch ends even on error >>>
+        hominioDB.endBatchOperation();
+
         const message = error instanceof Error ? error.message : String(error);
         console.error("[Mutation Engine] Phase 2 Failed (Persistence/Commit):", message);
-        // No need to manually rollback DB if transaction mechanism handles it.
         return { status: 'error', message: `Commit failed: ${message}`, errorDetails: error };
     }
 }

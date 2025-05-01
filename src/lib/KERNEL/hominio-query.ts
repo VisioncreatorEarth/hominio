@@ -1262,10 +1262,16 @@ export function processReactiveQuery(
             console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Query changed: ${queryChanged}`);
             lastQueryDefinitionString = queryDefString;
 
-            if (!queryChanged && currentResults !== undefined) {
-                console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Query not changed and results exist. Skipping debounce.`);
-                return; // Already have results, query didn't change
+            // <<< MODIFIED LOGIC >>>
+            // If the trigger was a document change, we ALWAYS proceed to debounce/execute,
+            // even if the query string itself hasn't changed and we have previous results.
+            // The underlying data might have changed.
+            if (reason !== 'Document Change Notifier' && !queryChanged && currentResults !== undefined) {
+                console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Not a doc change, query not changed, and results exist. Skipping debounce.`);
+                return; // Skip if not a doc change AND query is same AND results exist
             }
+            // <<< END MODIFIED LOGIC >>>
+
             if (debounceTimer) {
                 console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Clearing existing debounce timer.`);
                 clearTimeout(debounceTimer);

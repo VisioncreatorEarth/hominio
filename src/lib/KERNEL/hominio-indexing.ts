@@ -2,8 +2,7 @@ import { type LoroDoc, LoroMap, LoroList } from 'loro-crdt';
 import {
     hominioDB,
     /* docChangeNotifier, */ type Docs,
-    type IndexingBacklogItem,
-    triggerDocChangeNotification
+    type IndexingBacklogItem
 } from './hominio-db';
 import { hashService } from './hash-service';
 import { getIndexLeafPubKey, isIndexLeafDocument, type IndexLeafType } from './index-registry';
@@ -96,8 +95,7 @@ class HominioIndexing {
             this.isIndexing = false;
             // Trigger notification ONLY if needed, AFTER the lock is released
             if (notificationNeeded) {
-                console.log('[HominioIndexing] Indexing cycle complete, triggering notification.'); // DEBUG
-                triggerDocChangeNotification();
+                console.log('[HominioIndexing] Indexing cycle complete, changes detected. Relying on caller (e.g., mutation) for final notification.'); // DEBUG - REMOVED trigger
             } else {
                 console.log('[HominioIndexing] Indexing cycle complete, no changes detected, skipping notification.'); // DEBUG
             }

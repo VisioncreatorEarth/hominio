@@ -18,10 +18,6 @@ export const docChangeNotifier = writable(0);
 let notificationDebounceTimer: NodeJS.Timeout | null = null;
 const NOTIFICATION_DEBOUNCE_MS = 50; // REDUCED from 150ms 
 
-// Add variables to track notification timing
-let lastNotificationTime: number = 0;
-const NOTIFICATION_THROTTLE_MS = 75; // REDUCED from 200ms 
-
 // Helper to trigger notification with debounce
 export function triggerDocChangeNotification(): void {
     if (!browser) return; // Skip in SSR
@@ -31,22 +27,12 @@ export function triggerDocChangeNotification(): void {
             clearTimeout(notificationDebounceTimer);
         }
 
-        // Throttle updates to no more than once per NOTIFICATION_THROTTLE_MS
-        const now = Date.now();
-        if (lastNotificationTime && now - lastNotificationTime < NOTIFICATION_THROTTLE_MS) {
-            // Too soon after last notification, schedule for later
-            notificationDebounceTimer = setTimeout(() => {
-                lastNotificationTime = Date.now();
-                docChangeNotifier.update(n => n + 1);
-            }, NOTIFICATION_DEBOUNCE_MS);
-            return;
-        }
-
-        // Normal debounced path
+        // Simplified Debounce Logic:
         notificationDebounceTimer = setTimeout(() => {
-            lastNotificationTime = Date.now();
+            console.log("[triggerDocChangeNotification] Firing debounced notification."); // <<< ADDED LOG
             docChangeNotifier.update(n => n + 1);
-        }, NOTIFICATION_DEBOUNCE_MS);
+        }, NOTIFICATION_DEBOUNCE_MS); // Use existing constant
+
     } catch (err) {
         console.error("Error in triggerDocChangeNotification:", err);
         // Try direct update as fallback with a slight delay
@@ -176,6 +162,7 @@ class HominioDB {
     private _isCreatingDoc: boolean = false;
     private _lastError: string | null = null;
     private _isInitializingDoc: boolean = false; // Flag to prevent persistence during creation
+    private _suppressNotifications: boolean = false; // <<< ADDED FLAG
 
     // Store the local peer info for potential use (though Loro peerId needs to be numeric)
     private _localUserId: string | null = null;
@@ -301,6 +288,9 @@ class HominioDB {
             });
         });
 
+        // <<< Use controlled notification >>>
+        this._notifyIfAllowed();
+
         return { snapshotCid };
     }
 
@@ -348,7 +338,6 @@ class HominioDB {
             // --- Persist using the internal method --- 
             await this._persistNewDocument(user, pubKey, owner, loroDoc);
 
-            triggerDocChangeNotification();
             return pubKey;
         } catch (err) {
             console.error('Error creating document:', err);
@@ -513,6 +502,9 @@ class HominioDB {
                     console.error(`[Loro Subscribe - Update] Failed to persist update for ${pubKey}:`, err);
                 });
             });
+
+            // <<< Use controlled notification >>>
+            this._notifyIfAllowed();
 
             return snapshotCid; // Return the new snapshot CID
 
@@ -785,7 +777,7 @@ class HominioDB {
                 updatedDoc.updatedAt = new Date().toISOString(); // Update timestamp
                 const docsStorage = getDocsStorage();
                 await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDoc)));
-                triggerDocChangeNotification();
+                this._notifyIfAllowed();
             }
 
         } catch (err) {
@@ -991,16 +983,10 @@ class HominioDB {
             const docsStorage = getDocsStorage();
             const deleted = await docsStorage.delete(pubKey);
 
-            // This is complex - requires tracking CID references.
-
-            // REMOVED: triggerDocChangeNotification(); // Don't notify immediately on delete
-
-            // <<< Trigger indexing asynchronously AFTER deleting metadata >>>
-            // REMOVED: console.log(`[HominioDB deleteDocument] Triggering indexing after deleting doc ${pubKey}...`); // DEBUG
-            // REMOVED: hominioIndexing.startIndexingCycle().catch(err => {
-            // REMOVED:    console.error('[HominioDB deleteDocument] Error triggering indexing:', err);
-            // REMOVED: });
-            // <<< END Trigger >>>
+            if (deleted) {
+                // <<< Use controlled notification >>>
+                this._notifyIfAllowed();
+            }
 
             return deleted; // Return success based on storage deletion
         } catch (err) {
@@ -1142,32 +1128,30 @@ class HominioDB {
             loroDoc.import(snapshotData);
             loroDoc.setPeerId(1); // Set a default peer ID
 
-            // <<< ADDED: Apply incremental updates >>>
-            if (docMetadata.updateCids && docMetadata.updateCids.length > 0) {
-                // REMOVED: console.log(`[getLoroDoc] Applying ${docMetadata.updateCids.length} updates for ${pubKey}...`);
-                for (const updateCid of docMetadata.updateCids) {
+            // <<< COMBINE and APPLY updates >>>
+            const baseUpdates = docMetadata.updateCids ?? [];
+            const localUpdates = docMetadata.localState?.updateCids ?? [];
+            const allUpdateCids = [...new Set([...baseUpdates, ...localUpdates])]; // Combine and deduplicate
+
+            if (allUpdateCids.length > 0) {
+                // console.log(`[getLoroDoc] Applying ${allUpdateCids.length} total updates for ${pubKey}...`); // Optional debug
+                for (const updateCid of allUpdateCids) {
                     try {
                         const updateData = await contentStorage.get(updateCid);
                         if (updateData) {
                             loroDoc.import(updateData);
-                            // REMOVED: console.log(`[getLoroDoc] Applied update ${updateCid}`);
                         } else {
                             console.warn(`[getLoroDoc] Update content not found for CID ${updateCid} (doc ${pubKey})`);
                         }
                     } catch (updateImportErr) {
                         console.error(`[getLoroDoc] Error importing update ${updateCid} for ${pubKey}:`, updateImportErr);
-                        // Decide whether to continue or fail if an update fails?
-                        // For now, log and continue.
                     }
                 }
-                // REMOVED: console.log(`[getLoroDoc] Finished applying updates for ${pubKey}.`);
             }
-            // <<< END ADDED >>>
+            // <<< END COMBINE and APPLY >>>
 
             // Add subscribe to changes
             loroDoc.subscribe(() => {
-                // Check if there are changes that need persisting
-                // This is called when the document changes in-memory
                 this._persistLoroUpdateAsync(pubKey, loroDoc).catch(err => {
                     console.error(`[Loro Subscribe] Failed to persist update for ${pubKey}:`, err);
                 });
@@ -1214,7 +1198,8 @@ class HominioDB {
             }
 
             // 4. Prepare updated metadata with the new update CID in localState
-            const updatedDocData: Docs = { ...currentDoc }; // Shallow copy
+            const updatedDocData: Docs = { ...currentDoc };
+            let metadataWasUpdated = false; // Flag to track if notification is needed
 
             // Ensure localState and updateCids array exist
             if (!updatedDocData.localState) {
@@ -1226,21 +1211,20 @@ class HominioDB {
             }
 
             // Append CID if not already present in localState
-            // Now we know updatedDocData.localState.updateCids is an array
             if (!updatedDocData.localState.updateCids.includes(updateCid)) {
                 updatedDocData.localState.updateCids.push(updateCid);
-                // Always update the updatedAt timestamp to ensure change detection
                 updatedDocData.updatedAt = new Date().toISOString();
-                // Persist updated metadata
                 const docsStorage = getDocsStorage();
                 await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDocData)));
-                // REMOVED: docChangeNotifier.update((n) => n + 1); // Don't notify here
-            } else {
-                // REMOVED: Trigger notification even if no new updates
-                // REMOVED: docChangeNotifier.update((n) => n + 1);
+                metadataWasUpdated = true; // Mark that metadata changed
             }
 
-            return updateCid; // Return the CID regardless of whether metadata was updated
+            // <<< Use controlled notification ONLY if metadata changed >>>
+            if (metadataWasUpdated) {
+                this._notifyIfAllowed();
+            }
+
+            return updateCid;
 
         } catch (err) {
             console.error(`[persistLoroUpdate] Failed for doc ${pubKey}:`, err);
@@ -1252,48 +1236,27 @@ class HominioDB {
     // Helper for async persistence triggered by Loro event
     private async _persistLoroUpdateAsync(pubKey: string, loroDoc: LoroDoc): Promise<void> {
         if (this._isInitializingDoc) {
-            // REMOVED: console.log("[HominioDB] Skipping persistence during initial document creation.");
             return; // Skip persistence if called during createDocument
         }
 
-        // REMOVED: Facki logging start
+        console.log(`[_persistLoroUpdateAsync] Loro subscribe fired for ${pubKey}. Checking for updates...`);
 
         try {
             // 1. Export Incremental Updates
-            // REMOVED: Log: Exporting Snapshot
-            // FIX: Use the correct export syntax based on Loro documentation
-            const updateBytes = loroDoc.export({ mode: "update" }); // Export changes since last import/snapshot/commit
+            const updateBytes = loroDoc.export({ mode: "update" });
 
             // 2. Check if there are actual updates to persist
             if (updateBytes && updateBytes.length > 0) {
-                // REMOVED: Log: Saving Content
-                // REMOVED: Log: Content Saved
-
+                console.log(`[_persistLoroUpdateAsync] Found ${updateBytes.length} bytes of updates for ${pubKey}. Persisting...`);
                 // 3. Persist the incremental update using the dedicated method
-                // This method handles hashing, saving content, and updating metadata (localState.updateCids)
-                // It also triggers the docChangeNotifier internally.
-                // REMOVED: Log: Updating Metadata
                 await this.persistLoroUpdate(pubKey, updateBytes);
-                // REMOVED: console.log persistence log
+
             } else {
-                // REMOVED: console.log("No updates to persist for", pubKey);
+                console.log(`[_persistLoroUpdateAsync] No actual update bytes exported for ${pubKey}. No persistence needed.`);
             }
-
-            // REMOVED: Redundant snapshot persistence logic
-            // REMOVED: snapshotBytes calculation
-            // REMOVED: snapshotCid calculation
-            // REMOVED: contentStorage.put for snapshot
-            // REMOVED: updatedDocMeta creation for snapshot
-            // REMOVED: docsStorage.put for snapshot metadata
-
-            // REMOVED: Redundant triggerDocChangeNotification() call (handled within persistLoroUpdate if updates occurred)
-            // REMOVED: Snapshot details logging
 
         } catch (err) {
             console.error(`[HominioDB _persistLoroUpdateAsync] Error processing update for ${pubKey}:`, err);
-            // Consider how to handle errors - maybe add to a failed queue?
-        } finally {
-            // REMOVED: Facki logging end
         }
     }
     // -------------------------
@@ -1526,6 +1489,23 @@ class HominioDB {
     }
 
     // --- End Backlog Queue Management Methods ---
+
+    /** Starts a batch operation, suppressing notifications */
+    public startBatchOperation(): void {
+        this._suppressNotifications = true;
+    }
+
+    /** Ends a batch operation, allowing notifications */
+    public endBatchOperation(): void {
+        this._suppressNotifications = false;
+    }
+
+    /** Internal method to trigger notification ONLY if not suppressed */
+    private _notifyIfAllowed(): void {
+        if (!this._suppressNotifications) {
+            triggerDocChangeNotification();
+        }
+    }
 }
 
 // Create and export singleton instance
