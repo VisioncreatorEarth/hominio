@@ -340,6 +340,14 @@
 											class="mb-1 inline-block rounded-full bg-yellow-400 px-4 py-1 text-xs leading-tight font-semibold whitespace-nowrap text-yellow-900"
 											>Self</span
 										>
+									{:else if comp.x1}
+										<button
+											on:click={() => selectLeaf(comp.x1!)}
+											class="mb-1 inline-block cursor-pointer rounded-full border border-[#d6c7b1] bg-[#f5f1e8] px-4 py-1 text-xs leading-tight font-semibold whitespace-nowrap text-[#0a2a4e] transition-colors hover:border-[#0a2a4e] hover:bg-[#e0d8cb]"
+										>
+											{comp.x1Display}{#if comp.x1ResolvedFromType === 'Concept'}
+												(C){/if}
+										</button>
 									{:else}
 										<span
 											class="mb-1 inline-block rounded-full border border-[#d6c7b1] bg-[#f5f1e8] px-4 py-1 text-xs leading-tight font-semibold whitespace-nowrap text-[#0a2a4e]"
@@ -372,6 +380,14 @@
 											class="mb-1 inline-block rounded-full bg-yellow-400 px-4 py-1 text-xs leading-tight font-semibold whitespace-nowrap text-yellow-900"
 											>Self</span
 										>
+									{:else if comp.x2}
+										<button
+											on:click={() => selectLeaf(comp.x2!)}
+											class="mb-1 inline-block cursor-pointer rounded-full border border-[#d6c7b1] bg-[#f5f1e8] px-4 py-1 text-xs leading-tight font-semibold whitespace-nowrap text-[#0a2a4e] transition-colors hover:border-[#0a2a4e] hover:bg-[#e0d8cb]"
+										>
+											{comp.x2Display}{#if comp.x2ResolvedFromType === 'Concept'}
+												(C){/if}
+										</button>
 									{:else}
 										<span
 											class="mb-1 inline-block rounded-full border border-[#d6c7b1] bg-[#f5f1e8] px-4 py-1 text-xs leading-tight font-semibold whitespace-nowrap text-[#0a2a4e]"
@@ -394,6 +410,14 @@
 											class="mb-1 inline-block rounded-full bg-yellow-400 px-4 py-1 text-xs leading-tight font-semibold whitespace-nowrap text-yellow-900"
 											>Self</span
 										>
+									{:else if comp.x3}
+										<button
+											on:click={() => selectLeaf(comp.x3!)}
+											class="mb-1 inline-block cursor-pointer rounded-full border border-[#d6c7b1] bg-[#f5f1e8] px-4 py-1 text-xs leading-tight font-semibold whitespace-nowrap text-[#0a2a4e] transition-colors hover:border-[#0a2a4e] hover:bg-[#e0d8cb]"
+										>
+											{comp.x3Display}{#if comp.x3ResolvedFromType === 'Concept'}
+												(C){/if}
+										</button>
 									{:else}
 										<span
 											class="mb-1 inline-block rounded-full border border-[#d6c7b1] bg-[#f5f1e8] px-4 py-1 text-xs leading-tight font-semibold whitespace-nowrap text-[#0a2a4e]"
@@ -416,6 +440,14 @@
 											class="mb-1 inline-block rounded-full bg-yellow-400 px-4 py-1 text-xs leading-tight font-semibold whitespace-nowrap text-yellow-900"
 											>Self</span
 										>
+									{:else if comp.x4}
+										<button
+											on:click={() => selectLeaf(comp.x4!)}
+											class="mb-1 inline-block cursor-pointer rounded-full border border-[#d6c7b1] bg-[#f5f1e8] px-4 py-1 text-xs leading-tight font-semibold whitespace-nowrap text-[#0a2a4e] transition-colors hover:border-[#0a2a4e] hover:bg-[#e0d8cb]"
+										>
+											{comp.x4Display}{#if comp.x4ResolvedFromType === 'Concept'}
+												(C){/if}
+										</button>
 									{:else}
 										<span
 											class="mb-1 inline-block rounded-full border border-[#d6c7b1] bg-[#f5f1e8] px-4 py-1 text-xs leading-tight font-semibold whitespace-nowrap text-[#0a2a4e]"
@@ -438,6 +470,14 @@
 											class="mb-1 inline-block rounded-full bg-yellow-400 px-4 py-1 text-xs leading-tight font-semibold whitespace-nowrap text-yellow-900"
 											>Self</span
 										>
+									{:else if comp.x5}
+										<button
+											on:click={() => selectLeaf(comp.x5!)}
+											class="mb-1 inline-block cursor-pointer rounded-full border border-[#d6c7b1] bg-[#f5f1e8] px-4 py-1 text-xs leading-tight font-semibold whitespace-nowrap text-[#0a2a4e] transition-colors hover:border-[#0a2a4e] hover:bg-[#e0d8cb]"
+										>
+											{comp.x5Display}{#if comp.x5ResolvedFromType === 'Concept'}
+												(C){/if}
+										</button>
 									{:else}
 										<span
 											class="mb-1 inline-block rounded-full border border-[#d6c7b1] bg-[#f5f1e8] px-4 py-1 text-xs leading-tight font-semibold whitespace-nowrap text-[#0a2a4e]"
