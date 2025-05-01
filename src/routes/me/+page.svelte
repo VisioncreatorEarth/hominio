@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { authClient } from '$lib/KERNEL/hominio-auth';
 	import { goto } from '$app/navigation';
 	import type { PageData } from './$types';
 	import { browser } from '$app/environment';

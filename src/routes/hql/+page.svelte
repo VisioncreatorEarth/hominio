@@ -19,15 +19,6 @@
 	type GetCurrentUserFn = typeof getMeType;
 	const getMe = getContext<GetCurrentUserFn>('getMe');
 
-	// Define language translation record type
-	interface LanguageTranslation {
-		x1?: string;
-		x2?: string;
-		x3?: string;
-		x4?: string;
-		x5?: string;
-	}
-
 	// Define a more specific type for our query results
 	interface SchemaQueryResult extends QueryResult {
 		id: string;

@@ -2,7 +2,7 @@
 	import {
 		processReactiveQuery,
 		executeQuery, // Needed to fetch meta index initially
-		type LoroHqlQuery,
+		type LoroHqlQueryExtended,
 		type QueryResult
 	} from '$lib/KERNEL/hominio-query';
 	import { readable, writable, type Readable } from 'svelte/store';
@@ -23,7 +23,7 @@
 	let registryError = $state<string | null>(null);
 
 	// --- Query for selected Index Content ---
-	const selectedIndexQueryStore = writable<LoroHqlQuery | null>(null);
+	const selectedIndexQueryStore = writable<LoroHqlQueryExtended | null>(null);
 	interface IndexContentResult extends QueryResult {
 		id: string;
 		data?: LeafValue | Record<string, unknown> | null;
@@ -31,18 +31,25 @@
 	const selectedIndexContent = processReactiveQuery(getMe, selectedIndexQueryStore) as Readable<
 		IndexContentResult[] | null | undefined
 	>;
-	let currentSelectedIndexData = $derived(($selectedIndexContent ?? [])[0] ?? null);
+	let currentSelectedIndexData = $derived(($selectedIndexContent ?? [])[0]);
 
 	// --- Fetch Meta Index on Mount ---
 	onMount(async () => {
-		const metaIndexQuery: LoroHqlQuery = {
-			from: {
-				leaf: [GENESIS_PUBKEY]
-			},
-			map: {
-				id: { field: 'doc.pubkey' },
-				index_map: { field: 'self.data.value' } // Get the value map directly
-			}
+		const metaIndexQuery: LoroHqlQueryExtended = {
+			steps: [
+				{
+					action: 'get',
+					from: {
+						pubkey: [GENESIS_PUBKEY],
+						targetDocType: 'Leaf'
+					},
+					fields: {
+						id: { field: 'doc.pubkey' },
+						index_map: { field: 'self.data.value' }
+					},
+					resultVariable: 'metaIndex'
+				}
+			]
 		};
 
 		try {
@@ -51,14 +58,27 @@
 			if (
 				result &&
 				result.length > 0 &&
-				result[0].index_map &&
-				typeof result[0].index_map === 'object'
+				result[0].variables &&
+				(result[0].variables as any).index_map &&
+				typeof (result[0].variables as any).index_map === 'object'
 			) {
-				indexRegistry = result[0].index_map as Partial<Record<IndexLeafType, string>>;
+				indexRegistry = (result[0].variables as any).index_map as Partial<
+					Record<IndexLeafType, string>
+				>;
 				console.log('[IndexQueries] Loaded Index Registry:', indexRegistry);
 				registryError = null;
 			} else {
-				throw new Error('Meta Index query returned invalid data.');
+				let reason = 'Unknown reason.';
+				if (!result) reason = 'Query returned null/undefined.';
+				else if (result.length === 0)
+					reason = 'Query returned empty array (Genesis doc likely missing/not synced).';
+				else if (!result[0].variables) reason = 'Result item missing variables field.';
+				else if (!(result[0].variables as any).index_map)
+					reason = 'Result item variables missing index_map field.';
+				else if (typeof (result[0].variables as any).index_map !== 'object')
+					reason = `index_map field is not an object (type: ${typeof (result[0].variables as any).index_map}).`;
+				console.error(`[IndexQueries] Meta Index data invalid: ${reason}`, 'Result:', result);
+				throw new Error(`Meta Index query returned invalid data. Reason: ${reason}`);
 			}
 		} catch (err) {
 			console.error('[IndexQueries] Error fetching Meta Index:', err);
@@ -77,14 +97,30 @@
 		selectedIndexKey = key;
 		const pubKey = indexRegistry[key];
 		if (pubKey) {
-			const query: LoroHqlQuery = {
-				from: {
-					leaf: [pubKey]
-				},
-				map: {
-					id: { field: 'doc.pubkey' },
-					data: { field: 'self.data' } // Fetch the whole data object
-				}
+			const query: LoroHqlQueryExtended = {
+				steps: [
+					{
+						action: 'get',
+						from: {
+							pubkey: [pubKey],
+							targetDocType: 'Leaf'
+						},
+						fields: {
+							id: { field: 'doc.pubkey' },
+							data: { field: 'self.data' }
+						},
+						resultVariable: 'indexDetails'
+					},
+					{
+						action: 'select',
+						groupBy: 'id',
+						select: {
+							id: { variable: 'id' },
+							data: { variable: 'data' }
+						},
+						resultVariable: 'finalIndexData'
+					}
+				]
 			};
 			selectedIndexQueryStore.set(query);
 		} else {
@@ -99,32 +135,38 @@
 
 	// Helper to get Object entries for iterating maps in template
 	function getEntries(obj: object | null | undefined): [string, unknown][] {
-		if (!obj || typeof obj !== 'object') return [];
+		// Allow iterating over maps even if they are not strictly objects (e.g., from LoroMap.toJSON())
+		if (!obj) return [];
+		// Ensure it's an object-like structure before trying Object.entries
+		if (typeof obj !== 'object') return [];
 		return Object.entries(obj);
 	}
 </script>
 
-<div class="grid h-full grid-cols-1 md:grid-cols-[250px_1.75fr_1.25fr]">
+<!-- Apply styling similar to LeafQueries -->
+<div class="grid h-full grid-cols-[250px_1fr_1fr] bg-[#f8f4ed]">
 	<!-- Sidebar -->
-	<aside class="col-span-1 overflow-y-auto border-r border-gray-300 bg-white p-4">
-		<h2 class="mb-4 text-lg font-semibold text-gray-700">Index Leafs</h2>
+	<aside class="col-span-1 h-full overflow-y-auto border-r border-gray-200 p-4">
+		<h2 class="mb-4 text-lg font-semibold text-[#0a2a4e]">Index Leafs</h2>
 		{#if isLoadingRegistry}
 			<p class="text-sm text-gray-500">Loading index registry...</p>
 		{:else if registryError}
 			<p class="text-sm text-red-600">Error: {registryError}</p>
 		{:else}
-			<ul class="max-h-[calc(100vh-10rem)] space-y-1 overflow-y-auto">
+			<ul class="space-y-1">
 				{#each getEntries(indexRegistry) as [key, pubkey] (key)}
 					{@const indexTypeKey = key as IndexLeafType}
 					<li>
 						<button
-							class:bg-gray-100={selectedIndexKey === indexTypeKey}
-							class="w-full rounded px-3 py-1 text-left text-sm text-gray-800 transition-colors duration-150 ease-in-out hover:bg-gray-200"
+							class="w-full rounded px-3 py-2 text-left text-sm transition-colors duration-150 ease-in-out hover:bg-[#e0d8cb] {selectedIndexKey ===
+							indexTypeKey
+								? 'bg-[#0a2a4e] font-medium text-[#f8f4ed]'
+								: 'text-[#0a2a4e]'}"
 							on:click={() => selectIndex(indexTypeKey)}
 							title={pubkey?.toString() ?? 'N/A'}
 						>
-							<span class="font-medium">{indexTypeKey}</span>
-							<span class="block text-xs text-gray-500">{truncate(pubkey?.toString(), 24)}</span>
+							<span class="font-semibold">{indexTypeKey}</span>
+							<span class="text-opacity-70 block text-xs">{truncate(pubkey?.toString(), 24)}</span>
 						</button>
 					</li>
 				{/each}
@@ -133,47 +175,56 @@
 	</aside>
 
 	<!-- Main Content Area (Index Details) -->
-	<main class="col-span-1 flex flex-col overflow-y-auto p-6">
+	<main class="col-span-1 h-full overflow-y-auto border-r border-l border-gray-200 p-6">
 		{#if selectedIndexKey}
-			{@const currentData = currentSelectedIndexData?.data}
-			<h1 class="mb-4 text-2xl font-bold text-gray-800">Index: {selectedIndexKey}</h1>
-			<p class="mb-4 text-sm text-gray-500">Pubkey: {selectedIndexPubKey}</p>
+			<h2 class="mb-1 text-xl font-semibold text-[#0a2a4e]">Index: {selectedIndexKey}</h2>
+			<p class="mb-4 text-xs text-gray-500">
+				Pubkey: <code class="rounded bg-[#e0d8cb] px-1 text-[#0a2a4e]">{selectedIndexPubKey}</code>
+			</p>
 
-			{#if currentSelectedIndexData === undefined}
-				<p class="text-gray-500">Loading index content...</p>
-			{:else if currentSelectedIndexData === null}
-				<p class="text-red-600">Error loading index content.</p>
-			{:else if !currentData || typeof currentData !== 'object' || !('value' in currentData) || typeof currentData.value !== 'object' || currentData.value === null}
+			{#if $selectedIndexContent === undefined}
+				<p class="text-sm text-gray-500">Loading index content...</p>
+			{:else if $selectedIndexContent === null}
+				<p class="text-sm text-red-600">Error loading index content.</p>
+			{:else if typeof currentSelectedIndexData !== 'object' || !currentSelectedIndexData}
+				<p class="text-red-600">Error loading index content or data field missing.</p>
+			{:else if !currentSelectedIndexData.data || typeof currentSelectedIndexData.data !== 'object' || !(currentSelectedIndexData.data as any).value}
 				<p class="text-yellow-700">Index data.value is empty or invalid.</p>
 			{:else}
-				{@const indexValueMap = currentData.value}
-				<div class="overflow-auto rounded border border-gray-200 bg-gray-50 p-4">
+				{@const indexValueMap = (currentSelectedIndexData.data as any).value}
+				<div
+					class="space-y-2 rounded border border-gray-200 bg-white p-4 font-mono text-xs text-[#0a2a4e]"
+				>
 					{#if selectedIndexKey === 'leaves' || selectedIndexKey === 'schemas' || selectedIndexKey === 'composites'}
-						<h3 class="mb-2 text-lg font-semibold text-gray-700">Indexed PubKeys:</h3>
-						<ul class="list-disc space-y-1 pl-5">
+						<h3 class="mb-2 text-sm font-semibold text-gray-700">Indexed PubKeys:</h3>
+						<ul class="space-y-1">
 							{#each getEntries(indexValueMap) as [pubkey, _value] (pubkey)}
-								<li><code class="text-sm text-gray-800">{pubkey}</code></li>
+								<li>
+									<code class="text-xs text-gray-600">{pubkey}: {JSON.stringify(_value)}</code>
+								</li>
 							{:else}
 								<li class="text-gray-500 italic">No keys found.</li>
 							{/each}
 						</ul>
 					{:else if selectedIndexKey === 'composites_by_component'}
-						<h3 class="mb-2 text-lg font-semibold text-gray-700">
+						<h3 class="mb-2 text-sm font-semibold text-gray-700">
 							Component Index (Component Key -> Composites List):
 						</h3>
 						<div class="space-y-3">
 							{#each getEntries(indexValueMap) as [componentKey, compositeList] (componentKey)}
 								<div>
-									<code class="block font-medium text-blue-700">{componentKey}</code>
-									<ul class="list-disc space-y-1 pt-1 pl-6">
+									<code class="block font-semibold text-[#1e40af]">{componentKey}</code>
+									<ul class="mt-1 space-y-1 pl-4">
 										{#if Array.isArray(compositeList)}
 											{#each compositeList as compositePubKey (compositePubKey)}
-												<li><code class="text-sm text-gray-800">{compositePubKey}</code></li>
+												<li><code class="text-xs text-gray-700">{compositePubKey}</code></li>
 											{:else}
 												<li class="text-gray-500 italic">Empty list.</li>
 											{/each}
 										{:else}
-											<li class="text-red-600 italic">Invalid list data (expected Array).</li>
+											<li class="text-red-600 italic">
+												Invalid list data: {JSON.stringify(compositeList)}.
+											</li>
 										{/if}
 									</ul>
 								</div>
@@ -182,7 +233,7 @@
 							{/each}
 						</div>
 					{:else}
-						<p class="text-orange-600 italic">
+						<p class="text-orange-500 italic">
 							Display for index type '{selectedIndexKey}' not implemented.
 						</p>
 					{/if}
@@ -190,27 +241,31 @@
 			{/if}
 		{:else}
 			<div class="flex h-full items-center justify-center">
-				<p class="text-lg text-gray-500">Select an Index Leaf from the list to view its content.</p>
+				<p class="text-gray-500">Select an Index Leaf from the list to view its content.</p>
 			</div>
 		{/if}
 	</main>
 
 	<!-- Right Column (Raw JSON View) -->
-	<aside class="col-span-1 flex flex-col overflow-y-auto bg-gray-50 p-6">
-		<h2 class="mb-4 flex-shrink-0 text-xl font-semibold text-gray-700">JSON</h2>
-		{#if currentSelectedIndexData}
-			<div class="flex-1 overflow-auto rounded border border-gray-300 bg-white p-3">
+	<aside class="col-span-1 h-full overflow-y-auto p-4">
+		<h2 class="mb-4 text-lg font-semibold text-[#0a2a4e]">JSON</h2>
+		{#if $selectedIndexContent === undefined}
+			<div class="flex h-full items-center justify-center">
+				<p class="text-center text-sm text-gray-500">Loading JSON...</p>
+			</div>
+		{:else if $selectedIndexContent === null}
+			<div class="flex h-full items-center justify-center">
+				<p class="text-center text-sm text-red-600">Error loading JSON.</p>
+			</div>
+		{:else if currentSelectedIndexData}
+			<div class="flex-1 overflow-auto rounded border border-gray-200 bg-white p-3">
 				<pre class="font-mono text-xs text-gray-700">{JSON.stringify(
-						currentSelectedIndexData,
+						currentSelectedIndexData.data ?? currentSelectedIndexData,
 						null,
 						2
 					)}</pre>
 			</div>
 		{:else if selectedIndexKey}
-			<div class="flex h-full items-center justify-center">
-				<p class="text-center text-sm text-gray-500">Loading or no data...</p>
-			</div>
-		{:else}
 			<div class="flex h-full items-center justify-center">
 				<p class="text-center text-sm text-gray-500">Select an index to view its JSON data.</p>
 			</div>

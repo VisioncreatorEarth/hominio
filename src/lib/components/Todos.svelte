@@ -64,10 +64,6 @@
 				fields: {
 					statusValue: { field: 'self.data.value' }
 				},
-				variables: {
-					// Corrected: Use doc.pubkey which IS the _sourceKey for the GET operation
-					statusLeafKey: { source: 'doc.pubkey' }
-				},
 				resultVariable: 'statusDetails',
 				return: 'array'
 			},
@@ -81,10 +77,6 @@
 				fields: {
 					nameValue: { field: 'self.data.value' }
 				},
-				variables: {
-					// Corrected: Use doc.pubkey which IS the _sourceKey for the GET operation
-					nameLeafKey: { source: 'doc.pubkey' }
-				},
 				resultVariable: 'nameDetails',
 				return: 'array'
 			},
@@ -97,9 +89,9 @@
 					statusLeafId: { variable: 'taskStatusLinks_statusLeafVar' },
 					status: { variable: 'status' },
 					name: { variable: 'name' },
-					tciniCompositeId: { variable: 'taskStatusLinks__sourceKey' }, // Get pubkey of the tcini link
-					cnemeCompositeId: { variable: 'entityNameLinks__sourceKey' }, // Get pubkey of the cneme link
-					nameLeafId: { variable: 'entityNameLinks_nameLeafVar' } // Get the name leaf id
+					tciniCompositeId: { variable: 'taskStatusLinks__sourceKey' },
+					cnemeCompositeId: { variable: 'entityNameLinks__sourceKey' },
+					nameLeafId: { variable: 'entityNameLinks_nameLeafVar' }
 				}
 			}
 		]
