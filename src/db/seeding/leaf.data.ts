@@ -1,10 +1,8 @@
-import { readFileSync, readdirSync } from 'node:fs';
-import { resolve, dirname, parse } from 'node:path';
-import { fileURLToPath } from 'node:url';
+// Removed unused imports
 
 // Helper to get __dirname in ES modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+// const __filename = fileURLToPath(import.meta.url); // Commented out as unused
+// const __dirname = dirname(__filename); // Commented out as unused
 
 // --- Updated Types ---
 export type LeafId = string;
@@ -26,12 +24,12 @@ export interface LeafRecord {
     metadata: {
         type: 'Leaf' | 'Index'; // Allow both Leaf and Index types
     };
-    data: LeafValue; // Renamed from datni
+    data: LeafValue;
 }
 // --- End Updated Types ---
 
 // --- Updated Data ---
-// Define static Leaves first (formerly staticSumti)
+// Define static Leaves first
 const staticLeaves: LeafRecord[] = [
     // Entities (conceptual entities use 'Concept' type)
     {
@@ -45,39 +43,7 @@ const staticLeaves: LeafRecord[] = [
         data: { type: 'Concept' }
     },
     {
-        pubkey: '@task2',
-        metadata: { type: 'Leaf' },
-        data: { type: 'Concept' }
-    },
-    {
-        pubkey: '@task3',
-        metadata: { type: 'Leaf' },
-        data: { type: 'Concept' }
-    },
-    {
         pubkey: '@person1',
-        metadata: { type: 'Leaf' },
-        data: { type: 'Concept' }
-    },
-    {
-        pubkey: '@person2',
-        metadata: { type: 'Leaf' },
-        data: { type: 'Concept' }
-    },
-    {
-        pubkey: '@person3',
-        metadata: { type: 'Leaf' },
-        data: { type: 'Concept' }
-    },
-
-    // Property Type Concepts - Keep only @prop_status and @prop_name for now
-    {
-        pubkey: '@prop_status',
-        metadata: { type: 'Leaf' },
-        data: { type: 'Concept' }
-    },
-    {
-        pubkey: '@prop_name', // Keep for cneme
         metadata: { type: 'Leaf' },
         data: { type: 'Concept' }
     },
@@ -99,14 +65,8 @@ const staticLeaves: LeafRecord[] = [
         metadata: { type: 'Leaf' },
         data: { type: 'LoroText', value: 'completed' }
     },
-    // Keep purpose_build_website as it's used in project name leaf
-    {
-        pubkey: '@purpose_build_website',
-        metadata: { type: 'Leaf' },
-        data: { type: 'LoroText', value: 'Build website' }
-    },
 
-    // --- Name Leaves for Entities (formerly Name Sumti) ---
+    // --- Name Leaves for Entities  ---
     {
         pubkey: '@project1_name',
         metadata: { type: 'Leaf' },
@@ -118,36 +78,17 @@ const staticLeaves: LeafRecord[] = [
         data: { type: 'LoroText', value: 'Task 1' }
     },
     {
-        pubkey: '@task2_name',
-        metadata: { type: 'Leaf' },
-        data: { type: 'LoroText', value: 'Task 2' }
-    },
-    {
-        pubkey: '@task3_name',
-        metadata: { type: 'Leaf' },
-        data: { type: 'LoroText', value: 'Task 3' }
-    },
-    {
         pubkey: '@person1_name',
         metadata: { type: 'Leaf' },
         data: { type: 'LoroText', value: 'Alice' }
     },
-    {
-        pubkey: '@person2_name',
-        metadata: { type: 'Leaf' },
-        data: { type: 'LoroText', value: 'Bob' }
-    },
-    {
-        pubkey: '@person3_name',
-        metadata: { type: 'Leaf' },
-        data: { type: 'LoroText', value: 'Charlie' }
-    },
 ];
 
 // --- Dynamic Prompt Leaves ---
-const documentationPath = resolve(__dirname, '../../../DOCUMENTATION');
+// const documentationPath = resolve(__dirname, '../../../DOCUMENTATION'); // Removed unused const
 const promptLeafRecords: LeafRecord[] = []; // Renamed from promptSumtiRecords
 
+/* <<< COMMENTED OUT DYNAMIC PROMPT LOADING
 try {
     const files = readdirSync(documentationPath);
     const markdownFiles = files.filter(file => file.endsWith('.md'));
@@ -193,8 +134,9 @@ try {
         }
     });
 }
+>>> COMMENTED OUT DYNAMIC PROMPT LOADING */
 
 // Combine static and dynamic Leaves
 // Renamed export from initialSumti to initialLeaves
-export const initialLeaves: LeafRecord[] = [...staticLeaves, ...promptLeafRecords];
+export const initialLeaves: LeafRecord[] = [...staticLeaves, ...promptLeafRecords]; // promptLeafRecords will be empty now
 // --- End Updated Data ---

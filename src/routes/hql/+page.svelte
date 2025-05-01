@@ -13,6 +13,7 @@
 	import QueryEditor from '$lib/components/QueryEditor.svelte';
 	import IndexQueries from '$lib/components/IndexQueries.svelte';
 	import Todos from '$lib/components/Todos.svelte';
+	import DocStatusViewer from '$lib/components/DocStatusViewer.svelte';
 	import type { SchemaLanguageTranslation } from '$db/seeding/schema.data';
 
 	// --- Get Effective User Function from Context ---
@@ -119,7 +120,7 @@
 	}
 
 	// Tab state
-	let activeTab = $state('schema'); // Default tab: 'schema', 'leaf', 'query-editor', 'nodes-props', 'graph-view', 'indices', 'todos'
+	let activeTab = $state('schema'); // Default tab: 'schema', 'leaf', 'query-editor', 'nodes-props', 'graph-view', 'indices', 'todos', 'doc-status'
 
 	// Function to change active tab
 	function setActiveTab(tab: string) {
@@ -184,6 +185,15 @@
 			>
 				Todos
 			</button>
+			<!-- Add Docs Status Tab Button -->
+			<button
+				class="border-b-2 px-4 py-2 font-medium transition-colors {activeTab === 'doc-status'
+					? 'border-[#0a2a4e] text-[#0a2a4e]'
+					: 'border-transparent text-gray-500 hover:border-gray-300 hover:text-[#0a2a4e]'}"
+				on:click={() => setActiveTab('doc-status')}
+			>
+				Docs Status
+			</button>
 		</nav>
 	</header>
 
@@ -209,6 +219,11 @@
 		{:else if activeTab === 'todos'}
 			<div class="h-full">
 				<Todos />
+			</div>
+			<!-- Add Docs Status Tab Content -->
+		{:else if activeTab === 'doc-status'}
+			<div class="h-full">
+				<DocStatusViewer />
 			</div>
 		{/if}
 	</main>

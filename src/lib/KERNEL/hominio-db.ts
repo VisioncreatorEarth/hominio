@@ -245,7 +245,12 @@ class HominioDB {
             indexingState: {
                 needsReindex: true,
                 indexingError: null // Start clean
+            },
+            // <<< FIX: Add localState to mark for initial sync >>>
+            localState: {
+                snapshotCid: snapshotCid // Mark the initial snapshot as needing sync
             }
+            // <<< END FIX >>>
         };
 
         const docsStorage = getDocsStorage();
