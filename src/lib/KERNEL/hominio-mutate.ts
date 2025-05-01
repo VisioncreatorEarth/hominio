@@ -5,7 +5,6 @@ import type { LeafRecord, LeafValue } from '$db/seeding/leaf.data'; // Use only 
 import type { SchemaRecord } from '$db/seeding/schema.data';
 import type { CompositeRecord } from '$db/seeding/composite.data'; // Removed CompositeId
 import { docIdService } from './docid-service'; // Needed for key generation
-import { hominioIndexing } from './hominio-indexing'; // Import the indexing service
 
 // --- MUTATE_HQL Types --- 
 
@@ -407,7 +406,8 @@ export async function executeMutation(
 
         // --- Post-Commit --- 
 
-        // === Trigger Indexing BEFORE ending batch ===
+        // === REMOVE Explicit Indexing Trigger (now handled in hominio-db) ===
+        /*
         console.log('[Mutation Engine] Awaiting indexing cycle before final notification...'); // DEBUG
         try {
             await hominioIndexing.startIndexingCycle();
@@ -415,9 +415,10 @@ export async function executeMutation(
         } catch (indexingError) {
             console.error('[Mutation Engine] Error during post-mutation indexing cycle:', indexingError);
         }
-        // ==============================================
+        */
+        // =====================================================================
 
-        // <<< End Batch Operation >>>
+        // <<< End Batch Operation (this will trigger _triggerNotification if changes occurred) >>>
         hominioDB.endBatchOperation();
 
         // <<< Trigger ONE Notification AFTER batch and indexing >>>

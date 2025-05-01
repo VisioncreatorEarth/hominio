@@ -7,7 +7,7 @@ import { getContentStorage, getDocsStorage, initStorage } from './hominio-storag
 import { canRead, canWrite } from './hominio-caps'; // Removed canDelete import
 import type { CapabilityUser } from './hominio-caps'; // Fixed import source
 import type { ValidationRuleStructure } from './hominio-validate';
-// REMOVED: import { hominioIndexing } from './hominio-indexing'; // <<< Import indexing service >>>
+import { hominioIndexing } from './hominio-indexing';
 
 // --- Reactivity Notifier ---
 // Simple store that increments when any tracked document changes.
@@ -550,6 +550,10 @@ class HominioDB {
             // Save updated document metadata
             const docsStorage = getDocsStorage();
             await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDoc))); // Use pubKey directly
+
+            // <<< TRIGGER NOTIFICATION AFTER SAVE >>>
+            this._triggerNotification();
+            // <<< END TRIGGER >>>
 
             return snapshotCid;
         } catch (err) {
@@ -1316,12 +1320,9 @@ class HominioDB {
             const docsStorage = getDocsStorage();
             await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(mergedDoc)));
 
-            // <<< Trigger indexing asynchronously AFTER saving synced metadata >>>
-            // REMOVED: console.log(`[HominioDB saveSyncedDocument] Triggering indexing for synced doc ${pubKey}...`); // DEBUG
-            // REMOVED: hominioIndexing.startIndexingCycle().catch(err => {
-            // REMOVED:     console.error('[HominioDB saveSyncedDocument] Error triggering indexing:', err);
-            // REMOVED: });
-            // <<< END Trigger >>>
+            // <<< TRIGGER NOTIFICATION AFTER SAVE >>>
+            this._triggerNotification();
+            // <<< END TRIGGER >>>
 
         } catch (err) {
             console.error(`[saveSyncedDocument] Error processing doc ${pubKey}:`, err);
@@ -1474,12 +1475,8 @@ class HominioDB {
         this._suppressNotifications = false;
         if (wasSuppressed && this._needsNotification) {
             this._needsNotification = false;
-            console.log("[HominioDB endBatchOperation] Firing deferred notification."); // DEBUG
-            if (notificationDebounceTimer) clearTimeout(notificationDebounceTimer);
-            notificationDebounceTimer = setTimeout(() => {
-                console.log("[HominioDB - Deferred] Firing debounced notification."); // DEBUG
-                docChangeNotifier.update(n => n + 1);
-            }, NOTIFICATION_DEBOUNCE_MS);
+            console.log("[HominioDB endBatchOperation] Firing deferred notification (which includes indexing)..."); // DEBUG
+            this._triggerNotification();
         }
     }
 
@@ -1492,6 +1489,14 @@ class HominioDB {
             this._needsNotification = true;
             return;
         }
+
+        // --- Trigger Indexing FIRST (if not suppressed) ---
+        console.log("[_triggerNotification] Triggering indexing cycle..."); // DEBUG
+        hominioIndexing.startIndexingCycle().catch(err => {
+            // Prevent indexing errors from stopping notifications
+            console.error('[_triggerNotification] Error triggering indexing cycle:', err);
+        });
+        // --------------------------------------------------
 
         // If not suppressed, proceed with the debounced notification
         try {
