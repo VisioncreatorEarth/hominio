@@ -15,8 +15,13 @@
 	type GetCurrentUserFn = typeof getMeType;
 	const getCurrentUser = getContext<GetCurrentUserFn>('getMe');
 
-	// --- Types ---
-	// No longer need MappedTodo interface
+	// --- Constants ---
+	const TCINI_SCHEMA_ID = '0xf4f64c16a96daf1d2b91269fe82946b21b7d1faa728ff20ed86a6c18dabc4943'; // Task -> Status
+	const GUNKA_SCHEMA_ID = '0x7f7cd305d27b953759f16a461f26b3d237494dc98cc2fbca45b60960ab'; // Worker -> Task
+	const CNEME_SCHEMA_ID = '0xe936b2fc03557057b6c021a0c8e17d21312b7446ca11a46bc0d61d3bcd150a96'; // Concept -> Name
+	const STATUS_NOT_STARTED_ID =
+		'0x3b302f86a7873b6533959d80c53efec82ce28ea3fd540da3ed90dd26cac76bde';
+	const STATUS_COMPLETED_ID = '0xe3110ac83fd5ef52cf91873b8a94ef6662cd03d5eb433d51922942e834d63c66';
 
 	// --- State ---
 	let isLoading = $state(true);
@@ -27,14 +32,13 @@
 	let currentUser = $state<CapabilityUser | null>(null);
 	let todos = $state<QueryResult[]>([]);
 
-	// Define the Todos query using the steps-based JSON format
+	// Define the Todos query using the structure from QueryEditor
 	const todosQuery: LoroHqlQueryExtended = {
 		steps: [
 			{
+				// Step 1: Find Task Status Links (tcini: task -> status)
 				action: 'find',
-				target: {
-					schema: '0xf4f64c16a96daf1d2b91269fe82946b21b7d1faa728ff20ed86a6c18dabc4943'
-				},
+				target: { schema: TCINI_SCHEMA_ID }, // Use Constant
 				variables: {
 					taskVar: { source: 'link.x1' },
 					statusLeafVar: { source: 'link.x2' }
@@ -43,56 +47,54 @@
 				return: 'array'
 			},
 			{
+				// Step 2: Find Task Assignment Links (gunka: worker -> task)
 				action: 'find',
-				target: {
-					schema: '0xe936b2fc03557057b6c021a0c8e17d21312b7446ca11a46bc0d61d3bcd150a96'
-				},
+				target: { schema: GUNKA_SCHEMA_ID }, // Use Constant
 				variables: {
-					entityVar: { source: 'link.x1' },
-					nameLeafVar: { source: 'link.x2' }
+					workerVar: { source: 'link.x1' },
+					assignedTaskVar: { source: 'link.x2' } // Task is x2 in gunka
 				},
-				resultVariable: 'entityNameLinks',
+				resultVariable: 'taskAssignmentLinks',
 				return: 'array'
 			},
 			{
-				action: 'get',
-				from: {
-					variable: 'taskStatusLinks',
-					sourceKey: 'statusLeafVar',
-					targetDocType: 'Leaf'
-				},
-				fields: {
-					statusValue: { field: 'self.data.value' }
-				},
-				resultVariable: 'statusDetails',
-				return: 'array'
-			},
-			{
-				action: 'get',
-				from: {
-					variable: 'entityNameLinks',
-					sourceKey: 'nameLeafVar',
-					targetDocType: 'Leaf'
-				},
-				fields: {
-					nameValue: { field: 'self.data.value' }
-				},
-				resultVariable: 'nameDetails',
-				return: 'array'
-			},
-			{
-				action: 'select',
-				groupBy: 'taskVar',
+				// Step 3: Join task status and assignments
+				action: 'join',
+				left: { variable: 'taskStatusLinks', key: 'taskVar' },
+				right: { variable: 'taskAssignmentLinks', key: 'assignedTaskVar' },
+				type: 'left',
 				select: {
-					// Also select the composite/leaf IDs needed for mutations
-					taskId: { variable: 'taskVar' },
-					statusLeafId: { variable: 'taskStatusLinks_statusLeafVar' },
-					status: { variable: 'status' },
-					name: { variable: 'name' },
-					tciniCompositeId: { variable: 'taskStatusLinks__sourceKey' },
-					cnemeCompositeId: { variable: 'entityNameLinks__sourceKey' },
-					nameLeafId: { variable: 'entityNameLinks_nameLeafVar' }
-				}
+					taskId: { source: 'left.taskVar' },
+					statusLeafId: { source: 'left.statusLeafVar' },
+					workerId: { source: 'right.workerVar' }
+				},
+				resultVariable: 'joinedTaskInfo' // Result of the join
+			},
+			{
+				// Step 4: Resolve Names and Status
+				action: 'resolve',
+				fromVariable: 'joinedTaskInfo', // Use the joined results
+				resolveFields: {
+					taskName: {
+						type: 'resolveLeafValue',
+						pubkeyVar: 'taskId',
+						fallbackVar: 'taskId',
+						excludeType: 'Concept' // Use cneme lookup for tasks
+					},
+					workerName: {
+						type: 'resolveLeafValue',
+						pubkeyVar: 'workerId',
+						fallbackVar: 'workerId',
+						excludeType: 'Concept' // Use cneme lookup for workers
+					},
+					status: {
+						type: 'resolveLeafValue',
+						pubkeyVar: 'statusLeafId',
+						fallbackVar: 'statusLeafId',
+						valueField: 'value' // Get the text value directly
+					}
+				},
+				resultVariable: 'resolvedTodos' // Final results
 			}
 		]
 	};
@@ -105,13 +107,6 @@
 		getCurrentUser,
 		queryStore // Pass the object store
 	);
-
-	// --- Constants ---
-	const TCINI_SCHEMA_ID = '0xf4f64c16a96daf1d2b91269fe82946b21b7d1faa728ff20ed86a6c18dabc4943';
-	const CNEME_SCHEMA_ID = '0xe936b2fc03557057b6c021a0c8e17d21312b7446ca11a46bc0d61d3bcd150a96';
-	const STATUS_NOT_STARTED_ID =
-		'0x3b302f86a7873b6533959d80c53efec82ce28ea3fd540da3ed90dd26cac76bde';
-	const STATUS_COMPLETED_ID = '0xe3110ac83fd5ef52cf91873b8a94ef6662cd03d5eb433d51922942e834d63c66';
 
 	// --- Helper Functions ---
 	// Remove unused triggerIndexing function
@@ -197,7 +192,7 @@
 		}
 	}
 
-	// --- Refactored toggleTodoStatus (Uses correct Status IDs) ---
+	// --- Refactored toggleTodoStatus (Uses correct Status IDs and item structure) ---
 	async function toggleTodoStatus(item: QueryResult) {
 		const user = currentUser;
 		if (!user) {
@@ -206,17 +201,56 @@
 			return;
 		}
 
-		// Access IDs directly from the item (as selected in the query)
-		const tciniCompositeId = item.tciniCompositeId as string;
+		// Access IDs directly from the item (as selected/resolved in the query)
+		const taskId = item.taskId as string; // Task Concept ID
 		const currentStatusLeafId = item.statusLeafId as string;
 
-		if (!tciniCompositeId || !currentStatusLeafId) {
-			mutationError = 'Cannot toggle status: Link information missing from query result.';
+		if (!taskId || !currentStatusLeafId) {
+			mutationError = 'Cannot toggle status: Task or Status Leaf ID missing from query result.';
 			console.error('Missing IDs from query result for toggle:', item);
 			return;
 		}
 
-		// Corrected: Use STATUS constants
+		// Find the tcini composite link (Task -> Status) to update its x2 place
+		// We need a way to get this. We can't easily select it in the query currently.
+		// WORKAROUND: Find the composite using the taskId and currentStatusLeafId
+		let tciniCompositeId: string | null = null;
+		try {
+			const findLinkQuery: LoroHqlQueryExtended = {
+				steps: [
+					{
+						action: 'find',
+						target: {
+							schema: TCINI_SCHEMA_ID,
+							x1: taskId, // Find the link for *this* task
+							x2: currentStatusLeafId // and *this* status
+						},
+						variables: {
+							linkId: { source: 'link.pubkey' }
+						},
+						return: 'first',
+						resultVariable: 'foundLink'
+					}
+				]
+			};
+			// Execute this small query immediately (not reactive)
+			const findResult = await import('$lib/KERNEL/hominio-query').then((m) =>
+				m.executeQuery(findLinkQuery, user)
+			);
+			if (findResult && findResult.length > 0 && findResult[0].linkId) {
+				tciniCompositeId = findResult[0].linkId as string;
+			} else {
+				throw new Error(
+					`Could not find the tcini link composite for task ${taskId} and status ${currentStatusLeafId}`
+				);
+			}
+		} catch (err) {
+			mutationError = err instanceof Error ? err.message : 'Failed to find link to update.';
+			console.error('Error finding tcini composite for update:', err);
+			return;
+		}
+
+		// Determine the next status ID
 		const targetStatusLeafId =
 			currentStatusLeafId === STATUS_COMPLETED_ID ? STATUS_NOT_STARTED_ID : STATUS_COMPLETED_ID;
 
@@ -230,7 +264,7 @@
 				{
 					operation: 'update',
 					type: 'Composite',
-					targetPubKey: tciniCompositeId,
+					targetPubKey: tciniCompositeId, // Use the ID found above
 					data: {
 						places: { x2: targetStatusLeafId }
 					}
@@ -251,7 +285,7 @@
 		}
 	}
 
-	// --- Refactored deleteTodo ---
+	// --- Refactored deleteTodo (Needs to find composite/leaf IDs) ---
 	async function deleteTodo(item: QueryResult) {
 		const user = currentUser;
 		if (!user) {
@@ -260,29 +294,129 @@
 			return;
 		}
 
-		// Access IDs directly from the item (as selected in the query)
+		// Access known IDs directly from the item
 		const taskId = item.taskId as string;
-		const tciniCompositeId = item.tciniCompositeId as string;
-		const cnemeCompositeId = item.cnemeCompositeId as string;
-		const nameLeafId = item.nameLeafId as string;
+		const workerId = item.workerId as string; // We have worker concept ID
+		const statusLeafId = item.statusLeafId as string; // We have status leaf ID
+		// We DON'T have the composite IDs or the name leaf ID from the current query result
 
-		if (!taskId || !tciniCompositeId || !cnemeCompositeId || !nameLeafId) {
+		if (!taskId || !workerId || !statusLeafId) {
 			mutationError = 'Cannot delete: Missing required IDs from query result.';
-			console.error('Missing IDs for deletion from query result:', item);
+			console.error('Missing base IDs for deletion from query result:', item);
 			return;
 		}
 
 		console.log('Attempting to delete todo (Task ID):', taskId);
 		mutationError = null;
 
-		const mutationRequest: MutateHqlRequest = {
-			mutations: [
-				{ operation: 'delete', type: 'Composite', targetPubKey: tciniCompositeId },
-				{ operation: 'delete', type: 'Composite', targetPubKey: cnemeCompositeId },
-				{ operation: 'delete', type: 'Leaf', targetPubKey: nameLeafId },
-				{ operation: 'delete', type: 'Leaf', targetPubKey: taskId }
-			]
-		};
+		// WORKAROUND: We need to find the related composites and the name leaf to delete them.
+		// This requires multiple queries before the mutation.
+		let tciniCompositeId: string | null = null;
+		let gunkaCompositeId: string | null = null;
+		let cnemeCompositeId: string | null = null;
+		let nameLeafId: string | null = null;
+
+		try {
+			// 1. Find TCINI composite (Task -> Status)
+			const findTciniQuery: LoroHqlQueryExtended = {
+				steps: [
+					{
+						action: 'find',
+						target: { schema: TCINI_SCHEMA_ID, x1: taskId, x2: statusLeafId },
+						variables: { linkId: { source: 'link.pubkey' } },
+						return: 'first',
+						resultVariable: 'found'
+					}
+				]
+			};
+			const tciniRes = await import('$lib/KERNEL/hominio-query').then((m) =>
+				m.executeQuery(findTciniQuery, user)
+			);
+			if (tciniRes && tciniRes.length > 0 && tciniRes[0].linkId)
+				tciniCompositeId = tciniRes[0].linkId as string;
+			else console.warn(`Could not find TCINI link for task ${taskId}`);
+
+			// 2. Find GUNKA composite (Worker -> Task)
+			const findGunkaQuery: LoroHqlQueryExtended = {
+				steps: [
+					{
+						action: 'find',
+						target: { schema: GUNKA_SCHEMA_ID, x1: workerId, x2: taskId },
+						variables: { linkId: { source: 'link.pubkey' } },
+						return: 'first',
+						resultVariable: 'found'
+					}
+				]
+			};
+			const gunkaRes = await import('$lib/KERNEL/hominio-query').then((m) =>
+				m.executeQuery(findGunkaQuery, user)
+			);
+			if (gunkaRes && gunkaRes.length > 0 && gunkaRes[0].linkId)
+				gunkaCompositeId = gunkaRes[0].linkId as string;
+			else console.warn(`Could not find GUNKA link for worker ${workerId} and task ${taskId}`);
+
+			// 3. Find CNEME composite (Task Concept -> Name Leaf) and the Name Leaf ID itself
+			const findCnemeQuery: LoroHqlQueryExtended = {
+				steps: [
+					{
+						action: 'find',
+						target: { schema: CNEME_SCHEMA_ID, x1: taskId }, // Find link by task concept
+						variables: {
+							linkId: { source: 'link.pubkey' },
+							nameLeafVar: { source: 'link.x2' } // Get the name leaf ID (x2)
+						},
+						return: 'first',
+						resultVariable: 'found'
+					}
+				]
+			};
+			const cnemeRes = await import('$lib/KERNEL/hominio-query').then((m) =>
+				m.executeQuery(findCnemeQuery, user)
+			);
+			if (cnemeRes && cnemeRes.length > 0 && cnemeRes[0].linkId && cnemeRes[0].nameLeafVar) {
+				cnemeCompositeId = cnemeRes[0].linkId as string;
+				nameLeafId = cnemeRes[0].nameLeafVar as string;
+			} else {
+				console.warn(`Could not find CNEME link or name leaf for task ${taskId}`);
+			}
+		} catch (err) {
+			mutationError =
+				err instanceof Error ? err.message : 'Failed to find related items for deletion.';
+			console.error('Error finding items for deletion:', err);
+			return;
+		}
+
+		// Construct the deletion list carefully, only including found items
+		const mutationsToDelete: MutateHqlRequest['mutations'] = [];
+		if (tciniCompositeId)
+			mutationsToDelete.push({
+				operation: 'delete',
+				type: 'Composite',
+				targetPubKey: tciniCompositeId
+			});
+		if (gunkaCompositeId)
+			mutationsToDelete.push({
+				operation: 'delete',
+				type: 'Composite',
+				targetPubKey: gunkaCompositeId
+			});
+		if (cnemeCompositeId)
+			mutationsToDelete.push({
+				operation: 'delete',
+				type: 'Composite',
+				targetPubKey: cnemeCompositeId
+			});
+		if (nameLeafId)
+			mutationsToDelete.push({ operation: 'delete', type: 'Leaf', targetPubKey: nameLeafId });
+		mutationsToDelete.push({ operation: 'delete', type: 'Leaf', targetPubKey: taskId }); // Always delete the task concept itself
+
+		if (mutationsToDelete.length === 1 && (mutationsToDelete[0] as any).targetPubKey === taskId) {
+			console.warn(
+				`Could not find any related items for task ${taskId}, only deleting the task concept itself.`
+			);
+		}
+
+		const mutationRequest: MutateHqlRequest = { mutations: mutationsToDelete };
 
 		try {
 			const result = await executeMutationInstance(mutationRequest, user);
@@ -408,14 +542,13 @@
 		<ul class="flex-1 divide-y divide-gray-200 overflow-y-auto pr-2">
 			{#each todos as item (item.taskId)}
 				{#if item.taskId}
-					<!-- Add safety check for taskId -->
-					{@const name = typeof item.name === 'string' ? item.name : '(No Name)'}
-					<!-- Access name directly -->
+					{@const taskName = typeof item.taskName === 'string' ? item.taskName : '(No Task Name)'}
+					{@const workerName =
+						typeof item.workerName === 'string' ? item.workerName : '(No Worker)'}
 					{@const currentStatusLeafId =
 						typeof item.statusLeafId === 'string' ? item.statusLeafId : undefined}
 					{@const isDone = currentStatusLeafId === STATUS_COMPLETED_ID}
-					{@const statusValue = typeof item.status === 'string' ? item.status : 'no status value'}
-					<!-- Access status directly -->
+					{@const statusValue = typeof item.status === 'string' ? item.status : '(no status value)'}
 
 					<li class="group flex items-center justify-between px-1 py-3">
 						<div class="flex items-center">
@@ -426,7 +559,10 @@
 								class="mr-3 h-4 w-4 cursor-pointer rounded border-gray-300 text-[#0a2a4e] focus:ring-[#0a2a4e]"
 							/>
 							<span class={isDone ? 'text-gray-500 line-through' : 'text-[#0a2a4e]'}>
-								{name}
+								{taskName}
+							</span>
+							<span class="ml-2 text-xs text-gray-500">
+								assigned to <span class="font-medium text-gray-600">{workerName}</span>
 							</span>
 							<span class="ml-2 text-xs text-gray-400">({statusValue})</span>
 						</div>

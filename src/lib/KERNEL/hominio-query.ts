@@ -35,7 +35,7 @@ export interface StepResultItem {
 }
 
 // Define possible step actions
-type HqlStepAction = 'find' | 'get' | 'select' | 'setVar' | 'iterateIndex' | 'resolve';
+type HqlStepAction = 'find' | 'get' | 'select' | 'setVar' | 'iterateIndex' | 'resolve' | 'join';
 
 // Base interface for a query step
 interface LoroHqlStepBase {
@@ -148,10 +148,36 @@ interface LoroHqlResolveStep extends LoroHqlStepBase {
 }
 // <<< END NEW STEP DEFINITION >>>
 
+// <<< START NEW STEP DEFINITION: join >>>
+interface LoroHqlJoinSource {
+    variable: string; // Variable name in context holding the array
+    key: string; // Variable name *within* the items' `variables` object to join on
+}
+
+interface LoroHqlJoinStep extends LoroHqlStepBase {
+    action: 'join';
+    left: LoroHqlJoinSource;
+    right: LoroHqlJoinSource;
+    type?: 'inner' | 'left'; // Optional: Type of join (default: 'inner')
+    select: {
+        // Output field name -> source variable name (e.g., { taskId: 'left.taskVar' })
+        [outputKey: string]: { source: string };
+    };
+    resultVariable: string; // Required: Name for the array of joined items
+}
+// <<< END NEW STEP DEFINITION >>>
+
 // --- Resolve and Enrich Steps Removed ---
 
 // Union type for any step
-type LoroHqlStep = LoroHqlSetVarStep | LoroHqlFindStep | LoroHqlGetStep | LoroHqlSelectStep | LoroHqlIterateIndexStep | LoroHqlResolveStep;
+type LoroHqlStep =
+    | LoroHqlSetVarStep
+    | LoroHqlFindStep
+    | LoroHqlGetStep
+    | LoroHqlSelectStep
+    | LoroHqlIterateIndexStep
+    | LoroHqlResolveStep
+    | LoroHqlJoinStep; // Add Join step
 
 // Redefined top-level query using steps
 export interface LoroHqlQueryExtended {
@@ -286,7 +312,6 @@ async function processFindStep(
     // --- Determine Find Strategy --- 
     if (step.target.place === '*') {
         // Wildcard place find (potentially slow)
-        console.warn("[Query Engine] Find step using wildcard place is not optimized yet.");
         const targetValue = resolveValue(step.target.value, context);
         if (!targetValue) throw new Error("Find step failed: Value required for wildcard place find.");
 
@@ -311,20 +336,17 @@ async function processFindStep(
             try {
                 const compDoc = await hominioDB.getLoroDoc(compPubKey);
                 if (!compDoc) {
-                    console.warn(`[Query Engine] Wildcard find: Could not load composite doc ${compPubKey}. Skipping.`);
                     continue;
                 }
                 const compData = getDataFromDoc(compDoc) as { schemaId: string; places: Record<PlaceKey, string> } | undefined;
-                // Check if schema matches (if schema is not also wildcard)
                 if (schemaId !== '*' && compData?.schemaId !== schemaId) {
                     continue; // Skip if schema doesn't match the specific one requested
                 }
-                // Check if targetValue exists in any place
                 if (compData?.places && Object.values(compData.places).includes(targetValue)) {
                     matchingComposites.push({ pubkey: compPubKey, doc: compDoc });
                 }
             } catch (loadError) {
-                console.warn(`[Query Engine] Wildcard find: Error loading composite doc ${compPubKey}:`, loadError);
+                console.error(`[Query Engine] Find by schema: Error loading composite doc ${compPubKey}:`, loadError); // Log error
             }
         }
         foundComposites = matchingComposites;
@@ -340,7 +362,6 @@ async function processFindStep(
             // A place key (x1-x5) was specified in the query, but its value couldn't be resolved.
             // This implies an intentional filter for a specific place that resolved to undefined/null.
             // So, we should find nothing in this case.
-            console.warn(`[Query Engine] Find step specified place '${placeKey}' but value resolved to undefined/null. Finding 0 items.`);
             foundComposites = [];
         }
 
@@ -362,13 +383,10 @@ async function processFindStep(
         const allCompositePubKeys = Object.keys(indexData.value);
         const matchingComposites: { pubkey: string; doc: LoroDoc }[] = [];
 
-
-
         for (const compPubKey of allCompositePubKeys) {
             try {
                 const compDoc = await hominioDB.getLoroDoc(compPubKey);
                 if (!compDoc) {
-                    console.warn(`[Query Engine] Find by schema: Could not load composite doc ${compPubKey}. Skipping.`);
                     continue;
                 }
                 const compData = getDataFromDoc(compDoc) as { schemaId: string; places: Record<PlaceKey, string> } | undefined;
@@ -376,7 +394,7 @@ async function processFindStep(
                     matchingComposites.push({ pubkey: compPubKey, doc: compDoc });
                 }
             } catch (loadError) {
-                console.warn(`[Query Engine] Find by schema: Error loading composite doc ${compPubKey}:`, loadError);
+                console.error(`[Query Engine] Find by schema: Error loading composite doc ${compPubKey}:`, loadError); // Log error
             }
         }
         foundComposites = matchingComposites;
@@ -402,12 +420,6 @@ async function processFindStep(
             }
         }
         stepResults.push({ _sourceKey: compositePubKey, variables: extractedVars });
-
-        // Also add extracted variables directly to the main context, potentially prefixed?
-        // This makes them easily accessible for subsequent steps without knowing the resultVariable.
-        // Needs careful design to avoid clashes and handle arrays.
-        // Example: updatedContext[`${step.resultVariable ?? 'find'}_${compositePubKey}_${varName}`] = extractedVars[varName];
-        // For now, rely on processing stepResults in the 'select' step.
     }
 
     if (step.resultVariable) {
@@ -444,8 +456,6 @@ async function processGetStep(
                     // 1. If sourceKey is provided, prioritize extracting from item.variables[sourceKey]
                     if (sourceKey && 'variables' in item && typeof item.variables === 'object' && item.variables !== null) {
                         const potentialPubkey = (item.variables as Record<string, unknown>)[sourceKey];
-                        // <<< START DEBUG LOGGING >>>
-                        // <<< END DEBUG LOGGING >>>
                         if (typeof potentialPubkey === 'string') {
                             pubkey = potentialPubkey;
                         } else {
@@ -855,32 +865,30 @@ async function resolveSingleLeafValue(
     typeField: string,
     excludeType: string | undefined,
     cnemeSchemaPubKey: string | null // <<< Pass cneme schema key
-): Promise<[unknown | null, string | null]> { // <<< Return tuple [value, type]
+): Promise<[unknown | null]> { // <<< Return tuple [value]
     if (!pubkey) {
-        return [null, null]; // <<< Return [null value, null type]
+        return [null]; // <<< Return [null value]
     }
     try {
         const leafDoc = await getLeafDoc(pubkey);
         if (!leafDoc) {
-            return [null, null]; // Indicate failure to resolve
+            return [null]; // Indicate failure to resolve
         }
         const data = getDataFromDoc(leafDoc);
-        let originalDataType: string | null = null; // <<< Variable to store the type
 
         if (
             data &&
             typeof data === 'object'
         ) {
             const dataType = (data as Record<string, unknown>)[typeField];
-            originalDataType = typeof dataType === 'string' ? dataType : null; // <<< Store the type if it's a string
-            const dataValue = (data as Record<string, unknown>)[valueField];
+            const dataValue = (data as Record<string, unknown>)[valueField]; // Re-add assignment
 
             // Check if the type should be excluded (e.g., 'Concept')
             if (excludeType !== undefined && dataType === excludeType) {
                 // <<< START Secondary Lookup Logic for Concepts >>>
                 if (!cnemeSchemaPubKey) {
                     console.warn(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Cannot resolve concept - 'cneme' schema pubkey not available.`); // DEBUG
-                    return [null, originalDataType]; // <<< Return [null value, original type]
+                    return [null]; // <<< Return [null value]
                 }
                 try {
                     const relatedCnemeComposites = await findCompositeDocsBySchemaAndPlace(cnemeSchemaPubKey, 'x1', pubkey);
@@ -897,7 +905,7 @@ async function resolveSingleLeafValue(
                                 const x2Data = getDataFromDoc(x2LeafDoc);
                                 if (x2Data && typeof x2Data === 'object' && (x2Data as Record<string, unknown>)[valueField] !== undefined) {
                                     const resolvedValue = (x2Data as Record<string, unknown>)[valueField];
-                                    return [resolvedValue, originalDataType]; // <<< SUCCESS! Return [resolved value, original type]
+                                    return [resolvedValue]; // <<< SUCCESS! Return [resolved value]
                                 } else {
                                     console.warn(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Found cneme composite ${cnemeComp.pubkey}, but x2 leaf ${x2PubKey} has no '${valueField}' or invalid data. x2Data:`, x2Data); // DEBUG
                                 }
@@ -915,20 +923,20 @@ async function resolveSingleLeafValue(
                 } catch (secondaryLookupError) {
                     console.error(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Error during secondary lookup:`, secondaryLookupError); // DEBUG
                 }
-                return [null, originalDataType]; // <<< Fallback: Return [null value, original type]
+                return [null]; // <<< Fallback: Return [null value]
                 // <<< END Secondary Lookup Logic >>>
             }
 
             // Original logic: Not the excluded type, check if value exists
             if (dataValue !== undefined) {
-                return [dataValue, originalDataType]; // <<< Return [direct value, original type]
+                return [dataValue]; // <<< Return [direct value]
             }
         }
         // Data missing, value missing, or type excluded (if check passed but value missing)
-        return [null, originalDataType]; // <<< Signal fallback: Return [null value, original type]
+        return [null]; // <<< Signal fallback: Return [null value]
     } catch (error) {
         console.error(`resolveSingleLeafValue: Error fetching/processing leaf ${pubkey}:`, error);
-        return [null, null]; // <<< Signal fallback on error: Return [null value, null type]
+        return [null]; // <<< Signal fallback on error: Return [null value]
     }
 }
 
@@ -986,7 +994,7 @@ async function processResolveStep(
 
                 try {
                     // <<< Capture the tuple returned by resolveSingleLeafValue >>>
-                    const [resolvedValue, originalDataType] = await resolveSingleLeafValue(
+                    const [resolvedValue] = await resolveSingleLeafValue(
                         pubkey,
                         valueField,
                         typeField,
@@ -998,27 +1006,9 @@ async function processResolveStep(
                     // Otherwise, use the fallback value.
                     resolvedItem[outputField] = resolvedValue !== null ? resolvedValue : fallbackValue;
 
-                    // <<< Add the new ResolvedFromType field >>>
-                    // Construct the key, e.g., "x1Display" -> "x1ResolvedFromType"
-                    const typeOutputFieldKey = outputField.replace(/Display$/, 'ResolvedFromType');
-                    if (typeOutputFieldKey !== outputField) { // Ensure replacement happened
-                        resolvedItem[typeOutputFieldKey] = originalDataType; // Store the original type
-                    } else {
-                        // Add a general key if the naming convention isn't followed
-                        resolvedItem[`${outputField}_ResolvedFromType`] = originalDataType;
-                    }
-
-
                 } catch (error) {
                     console.error(`[Query Engine] Resolve step: Error applying rule for '${outputField}' on item:`, item, error);
                     resolvedItem[outputField] = fallbackValue; // Use fallback on error during resolution
-                    // <<< Also set the type field to null on error? >>>
-                    const typeOutputFieldKey = outputField.replace(/Display$/, 'ResolvedFromType');
-                    if (typeOutputFieldKey !== outputField) {
-                        resolvedItem[typeOutputFieldKey] = null;
-                    } else {
-                        resolvedItem[`${outputField}_ResolvedFromType`] = null;
-                    }
                 }
             }
             else {
@@ -1033,6 +1023,84 @@ async function processResolveStep(
     } // End loop through input items
 
     updatedContext[step.resultVariable] = resolvedResults;
+    return updatedContext;
+}
+// <<< END NEW STEP PROCESSING FUNCTION >>>
+
+// <<< START NEW STEP PROCESSING FUNCTION: processJoinStep >>>
+async function processJoinStep(
+    step: LoroHqlJoinStep,
+    context: QueryContext
+): Promise<QueryContext> {
+    const updatedContext = { ...context };
+    const leftArray = context[step.left.variable] as StepResultItem[] | undefined;
+    const rightArray = context[step.right.variable] as StepResultItem[] | undefined;
+    const joinType = step.type ?? 'inner';
+    const joinedResults: QueryResult[] = [];
+
+    if (!Array.isArray(leftArray) || !Array.isArray(rightArray)) {
+        console.warn(
+            `[Query Engine JOIN] Input variables '${step.left.variable}' or '${step.right.variable}' are not arrays. Skipping join.`
+        );
+        updatedContext[step.resultVariable] = [];
+        return updatedContext;
+    }
+
+    // Build a map from the right array for efficient lookup (inner/left join)
+    const rightMap = new Map<unknown, StepResultItem[]>();
+    for (const rightItem of rightArray) {
+        if (typeof rightItem !== 'object' || !rightItem || !('variables' in rightItem)) continue;
+        const rightKey = rightItem.variables[step.right.key];
+        if (rightKey === undefined) continue;
+
+        if (!rightMap.has(rightKey)) {
+            rightMap.set(rightKey, []);
+        }
+        rightMap.get(rightKey)!.push(rightItem);
+    }
+
+    // Iterate through the left array and perform the join
+    for (const leftItem of leftArray) {
+        if (typeof leftItem !== 'object' || !leftItem || !('variables' in leftItem)) continue;
+        const leftKey = leftItem.variables[step.left.key];
+
+        const matchingRightItems = leftKey !== undefined ? rightMap.get(leftKey) : undefined;
+
+        if (matchingRightItems && matchingRightItems.length > 0) {
+            // Inner join: process matches
+            for (const rightItem of matchingRightItems) {
+                const joinedItem: QueryResult = {};
+                for (const [outputKey, sourceDef] of Object.entries(step.select)) {
+                    if (sourceDef.source.startsWith('left.')) {
+                        const varName = sourceDef.source.substring(5);
+                        joinedItem[outputKey] = leftItem.variables[varName];
+                    } else if (sourceDef.source.startsWith('right.')) {
+                        const varName = sourceDef.source.substring(6);
+                        joinedItem[outputKey] = rightItem.variables[varName];
+                    } else {
+                        console.warn(`[Query Engine JOIN] Invalid source '${sourceDef.source}' in select. Must start with 'left.' or 'right.'.`);
+                    }
+                }
+                joinedResults.push(joinedItem);
+            }
+        } else if (joinType === 'left') {
+            // Left join: process left item even if no match on right
+            const joinedItem: QueryResult = {};
+            for (const [outputKey, sourceDef] of Object.entries(step.select)) {
+                if (sourceDef.source.startsWith('left.')) {
+                    const varName = sourceDef.source.substring(5);
+                    joinedItem[outputKey] = leftItem.variables[varName];
+                } else {
+                    // Right side fields are null/undefined in a left join with no match
+                    joinedItem[outputKey] = undefined;
+                }
+            }
+            joinedResults.push(joinedItem);
+        }
+        // Inner join and no match: leftItem is discarded
+    }
+
+    updatedContext[step.resultVariable] = joinedResults;
     return updatedContext;
 }
 // <<< END NEW STEP PROCESSING FUNCTION >>>
@@ -1095,6 +1163,9 @@ export async function executeQuery(
                 case 'resolve':
                     context = await processResolveStep(step as LoroHqlResolveStep, context);
                     break;
+                case 'join':
+                    context = await processJoinStep(step as LoroHqlJoinStep, context);
+                    break;
                 default: {
                     const unknownAction = (step as LoroHqlStepBase)?.action ?? 'unknown';
                     console.error(`[Query Engine] Unsupported step action encountered: ${unknownAction}`);
@@ -1138,35 +1209,47 @@ export function processReactiveQuery(
     getCurrentUserFn: typeof getMeType,
     queryDefinitionStore: Readable<LoroHqlQueryExtended | null> // Updated to expect only new format
 ): Readable<QueryResult[] | null | undefined> {
+
+    // <<< DEBUG: Identify the source component (if possible) >>>
+    const queryDefStringForId = JSON.stringify(get(queryDefinitionStore));
+    const queryIdentifier = queryDefStringForId.length > 50 ? queryDefStringForId.substring(0, 50) + '...' : queryDefStringForId;
+    console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Setting up reactive query.`);
+
     if (!browser) {
         // --- Server-Side Rendering (SSR) Handling --- 
         const initialQuery = get(queryDefinitionStore);
         const ssrUser = getCurrentUserFn();
+        console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] SSR - Initial Query: ${!!initialQuery}, User: ${ssrUser?.id ?? 'null'}`);
         return readable<QueryResult[] | null | undefined>(undefined, (set) => {
-            if (!initialQuery) { set([]); return; }
+            if (!initialQuery) { console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] SSR - No initial query, setting empty.`); set([]); return; }
             executeQuery(initialQuery, ssrUser)
-                .then(results => set(results))
-                .catch(err => { console.error("[SSR LoroHQL] Error:", err); set(null); });
+                .then(results => { console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] SSR - Query success, setting ${results.length} results.`); set(results); })
+                .catch(err => { console.error(`[processReactiveQuery DEBUG ${queryIdentifier}] SSR - Query error:`, err); set(null); });
         });
     }
 
     // --- Client-Side Reactive Logic --- 
     return readable<QueryResult[] | null | undefined>(undefined, (set) => {
+        console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Client - Readable store subscribed.`);
         let debounceTimer: NodeJS.Timeout | null = null;
         const DEBOUNCE_MS = 50;
         let lastSessionState: string | null = null;
         let lastQueryDefinitionString: string | null = null;
         let currentResults: QueryResult[] | null | undefined = undefined;
 
-        const triggerDebouncedQuery = () => {
+        const triggerDebouncedQuery = (reason: string) => { // <<< DEBUG: Add reason
+            console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] triggerDebouncedQuery called. Reason: ${reason}`);
             const currentQueryDefinition = get(queryDefinitionStore);
             // Ensure we only proceed if the definition is valid (has steps)
             if (!currentQueryDefinition || !Array.isArray(currentQueryDefinition.steps)) {
+                console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Query definition invalid or missing steps. Clearing timer.`);
                 if (debounceTimer) clearTimeout(debounceTimer); debounceTimer = null;
                 if (currentResults !== undefined && currentResults !== null && currentResults.length > 0) {
+                    console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Setting empty array (invalid query).`);
                     set([]);
                     currentResults = [];
                 } else if (currentResults === undefined) {
+                    console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Setting empty array (initial invalid query).`);
                     set([]); // Set to empty array if loading was interrupted by invalid query
                     currentResults = [];
                 }
@@ -1176,46 +1259,69 @@ export function processReactiveQuery(
 
             const queryDefString = JSON.stringify(currentQueryDefinition);
             const queryChanged = lastQueryDefinitionString !== queryDefString;
+            console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Query changed: ${queryChanged}`);
             lastQueryDefinitionString = queryDefString;
 
-            if (!queryChanged && currentResults !== undefined) return;
-            if (debounceTimer) clearTimeout(debounceTimer);
+            if (!queryChanged && currentResults !== undefined) {
+                console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Query not changed and results exist. Skipping debounce.`);
+                return; // Already have results, query didn't change
+            }
+            if (debounceTimer) {
+                console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Clearing existing debounce timer.`);
+                clearTimeout(debounceTimer);
+            }
             if (currentResults === undefined || queryChanged) {
-                set(undefined);
-                currentResults = undefined;
+                // Only set loading if not already loading
+                if (currentResults !== undefined) {
+                    console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Setting state to undefined (loading...).`);
+                    set(undefined);
+                }
             }
 
+            console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Setting debounce timer (${DEBOUNCE_MS}ms).`);
             debounceTimer = setTimeout(async () => {
+                console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Debounce timer expired. Executing query.`);
                 const currentUser = getCurrentUserFn();
                 const latestQueryDefinition = get(queryDefinitionStore);
                 const latestQueryDefString = JSON.stringify(latestQueryDefinition);
 
+                console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] User ID for execution: ${currentUser?.id ?? 'null'}`);
+                console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Query for execution: ${latestQueryDefString.substring(0, 100)}...`);
+
                 // Re-validate query before execution
                 if (!latestQueryDefinition || !Array.isArray(latestQueryDefinition.steps) || latestQueryDefString !== lastQueryDefinitionString) {
+                    console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Query became stale or invalid during debounce. Aborting execution.`);
                     return;
                 }
 
                 try {
                     // Set to undefined only if not already undefined (prevents flicker if query is fast)
-                    if (currentResults !== undefined) set(undefined);
+                    if (currentResults !== undefined) {
+                        console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Setting state to undefined before async executeQuery.`);
+                        set(undefined);
+                    }
                     currentResults = undefined;
 
                     const results = await executeQuery(latestQueryDefinition, currentUser);
+                    console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] executeQuery returned ${results.length} results.`);
 
                     // Check if query changed *again* during async execution
                     if (JSON.stringify(get(queryDefinitionStore)) !== lastQueryDefinitionString) {
+                        console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Query became stale during async execution. Ignoring results.`);
                         return;
                     }
+                    console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Setting final results (${results.length} items).`);
                     set(results);
                     currentResults = results;
                 } catch (error) {
-                    console.error("[LoroHQL Reactive] Error:", error);
+                    console.error(`[processReactiveQuery DEBUG ${queryIdentifier}] Error during executeQuery:`, error);
                     // Check staleness before setting error state
                     if (JSON.stringify(get(queryDefinitionStore)) === lastQueryDefinitionString) {
+                        console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Setting state to null (error).`);
                         set(null);
                         currentResults = null;
                     } else {
-                        console.log("[Reactive Query Debounced] Query became stale during error, ignoring error state.");
+                        console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Query became stale during error, ignoring error state.`);
                     }
                 }
             }, DEBOUNCE_MS);
@@ -1225,19 +1331,19 @@ export function processReactiveQuery(
             const newQueryDefString = JSON.stringify(newQueryDef);
             // Trigger if query changes OR if results are still undefined (initial load)
             if (lastQueryDefinitionString !== newQueryDefString || currentResults === undefined) {
-                triggerDebouncedQuery();
+                triggerDebouncedQuery('Query Definition Changed or Initial Load');
             }
         });
 
         const unsubscribeNotifier = docChangeNotifier.subscribe(() => {
-            triggerDebouncedQuery();
+            triggerDebouncedQuery('Document Change Notifier');
         });
 
         const sessionStore = authClient.useSession();
         const unsubscribeSession = sessionStore.subscribe((session: MinimalSession) => { // Use defined type
             const currentSessionState = JSON.stringify(session?.data?.user?.id ?? null);
             if (lastSessionState !== null && lastSessionState !== currentSessionState) {
-                triggerDebouncedQuery();
+                triggerDebouncedQuery('Session Change');
             }
             lastSessionState = currentSessionState;
         });
@@ -1246,16 +1352,20 @@ export function processReactiveQuery(
         lastSessionState = JSON.stringify(initialSessionData?.data?.user?.id ?? null);
         lastQueryDefinitionString = JSON.stringify(get(queryDefinitionStore));
         currentResults = undefined; // Start in loading state
+        console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Initial State - User: ${lastSessionState}, Query: ${lastQueryDefinitionString.substring(0, 50)}...`);
 
         // Trigger initial query execution if valid
         if (get(queryDefinitionStore) && Array.isArray(get(queryDefinitionStore)?.steps)) {
-            triggerDebouncedQuery();
+            console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Triggering initial query execution.`);
+            triggerDebouncedQuery('Initial Mount');
         } else {
+            console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Initial query invalid, setting empty array.`);
             set([]); // Set empty array if initial query is invalid
             currentResults = [];
         }
 
         return () => {
+            console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Unsubscribing readable store.`);
             unsubscribeQueryDef();
             unsubscribeNotifier();
             unsubscribeSession();

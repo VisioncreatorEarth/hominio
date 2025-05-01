@@ -133,8 +133,32 @@ interface LoroHqlResolveStep extends LoroHqlStepBase {
     // AND metadata fields indicating original type (e.g., x1ResolvedFromType)
 }
 
+interface LoroHqlJoinSource {
+	variable: string; // Variable name in context holding the array
+	key: string; // Variable name *within* the items' `variables` object to join on
+}
+
+interface LoroHqlJoinStep extends LoroHqlStepBase {
+	action: 'join';
+	left: LoroHqlJoinSource;
+	right: LoroHqlJoinSource;
+	type?: 'inner' | 'left'; // Optional: Type of join (default: 'inner')
+	select: {
+		// Output field name -> source variable name (e.g., { taskId: 'left.taskVar' })
+		[outputKey: string]: { source: string };
+	};
+	resultVariable: string; // Required: Name for the array of joined items
+}
+
 // Union type for any step
-type LoroHqlStep = LoroHqlSetVarStep | LoroHqlFindStep | LoroHqlGetStep | LoroHqlSelectStep | LoroHqlIterateIndexStep | LoroHqlResolveStep;
+type LoroHqlStep =
+	| LoroHqlSetVarStep
+	| LoroHqlFindStep
+	| LoroHqlGetStep
+	| LoroHqlSelectStep
+	| LoroHqlIterateIndexStep
+	| LoroHqlResolveStep
+	| LoroHqlJoinStep; // Add Join step
 
 // Top-level query structure
 export interface LoroHqlQueryExtended {
@@ -157,17 +181,20 @@ The `executeQuery` function in `src/lib/KERNEL/hominio-query.ts` processes the q
     *   Populates `ctx` with any `variables` defined by the step. Results from steps returning arrays are stored with associated source keys (`_sourceKey`) to enable correlation.
     *   If `resultVariable` is defined, stores the step's primary output array (or single object if `return: 'first'`) in `ctx[step.resultVariable]`.
 4.  The `select` step uses the populated `ctx` to construct its result objects. It performs grouping based on the `groupBy` variable, correlating data from different `resultVariable` arrays stored in the context using the `_sourceKey` linkage.
-5.  The `resolve` step takes an array from `ctx[fromVariable]`, processes each item according to the `resolveFields` rules, and stores the enriched array in `ctx[resultVariable]`. Crucially:
+5.  The `join` step takes two arrays from `ctx[left.variable]` and `ctx[right.variable]`, matching items where `left.key` equals `right.key`, and constructs new items containing fields specified in its `select` clause. The resulting array of combined items is stored in `ctx[resultVariable]`.
+6.  The `resolve` step takes an array from `ctx[fromVariable]`, processes each item according to the `resolveFields` rules, and stores the enriched array in `ctx[resultVariable]`. Crucially:
     *   The `resolveLeafValue` rule now performs a secondary lookup via the `@schema/cneme` for any leaf whose type matches `excludeType` (e.g., `'Concept'`). If successful, it returns the resolved name; otherwise, it falls back to the original value specified by `fallbackVar`.
-    *   The output items include the original item's fields, the new resolved fields (e.g., `x1Display`), and additional metadata fields (e.g., `x1ResolvedFromType`) indicating the type of the leaf originally specified by `pubkeyVar`.
-6.  The final result returned by `executeQuery` is typically the array stored in the `resultVariable` of the *last* step in the query definition.
+    *   The output items include the original item's fields plus the new resolved fields (e.g., `taskName`, `workerName`).
+7.  The final result returned by `executeQuery` is typically the array stored in the `resultVariable` of the *last* step in the query definition.
 
-## Example: `LeafQueries.svelte` Query
+## Example: Complex Todo Query (`QueryEditor.svelte` Default)
 
-This query fetches composites related to a selected leaf, resolves their place values (displaying names for concepts), and includes schema names.
+This query fetches tasks, their associated status, and their assigned worker, resolving the names/values for each.
 
 **Input Variable (Assumed in Context):**
 *   `selectedLeafId`: The public key of the leaf selected in the UI.
+*   `tciniPubKey`: Pubkey for `@schema/tcini` (fetched dynamically).
+*   `gunkaPubKey`: Pubkey for `@schema/gunka` (fetched dynamically).
 
 **Query:**
 
@@ -175,64 +202,45 @@ This query fetches composites related to a selected leaf, resolves their place v
 {
   "steps": [
     {
-      "action": "find",
-      "target": {
-        "schema": "*", // Search across all schemas
-        "place": "*", // Search in any place (x1-x5)
-        "value": "${selectedLeafId}" // Use the selected leaf ID (variable interpolation not shown, done by component)
-      },
+      "action": "find", // Step 1: Find Task Status Links
+      "target": { "schema": "${tciniPubKey}" },
       "variables": {
-        "composite_key": { "source": "link.pubkey" },
-        "schema_id": { "source": "link.schemaId" },
-        "x1": { "source": "link.x1" },
-        "x2": { "source": "link.x2" },
-        "x3": { "source": "link.x3" },
-        "x4": { "source": "link.x4" },
-        "x5": { "source": "link.x5" }
+        "taskVar": { "source": "link.x1" },
+        "statusLeafVar": { "source": "link.x2" }
       },
       "return": "array",
-      "resultVariable": "foundComposites"
+      "resultVariable": "taskStatusLinks"
     },
     {
-      "action": "get",
-      "from": {
-        "variable": "foundComposites",
-        "sourceKey": "schema_id", // Use the extracted schema_id
-        "targetDocType": "Schema"
-      },
-      "fields": {
-        "name": { "field": "self.data.name" } // Fetch the schema name
-      },
+      "action": "find", // Step 2: Find Task Assignment Links
+      "target": { "schema": "${gunkaPubKey}" },
       "variables": {
-        "retrieved_schema_id": { "source": "result._sourceKey" }
+        "workerVar": { "source": "link.x1" },
+        "assignedTaskVar": { "source": "link.x2" }
       },
-      "resultVariable": "schemaInfo"
+      "return": "array",
+      "resultVariable": "taskAssignmentLinks"
     },
     {
-      "action": "select",
-      "groupBy": "composite_key",
+      "action": "join", // Step 3: Join status and assignments
+      "left": { "variable": "taskStatusLinks", "key": "taskVar" },
+      "right": { "variable": "taskAssignmentLinks", "key": "assignedTaskVar" },
       "select": {
-        "compositePubKey": { "variable": "composite_key" },
-        "schemaName": { "variable": "correlated_schema_name" }, // Correlated in select step
-        "x1": { "variable": "x1" },
-        "x2": { "variable": "x2" },
-        "x3": { "variable": "x3" },
-        "x4": { "variable": "x4" },
-        "x5": { "variable": "x5" }
+        "taskId": { "source": "left.taskVar" }, 
+        "statusLeafId": { "source": "left.statusLeafVar" },
+        "workerId": { "source": "right.workerVar" }
       },
-      "resultVariable": "selectedComposites"
+      "resultVariable": "joinedTaskInfo"
     },
     {
-      "action": "resolve",
-      "fromVariable": "selectedComposites",
+      "action": "resolve", // Step 4: Resolve names/values
+      "fromVariable": "joinedTaskInfo",
       "resolveFields": {
-        "x1Display": { "type": "resolveLeafValue", "pubkeyVar": "x1", "fallbackVar": "x1", "excludeType": "Concept" },
-        "x2Display": { "type": "resolveLeafValue", "pubkeyVar": "x2", "fallbackVar": "x2", "excludeType": "Concept" },
-        "x3Display": { "type": "resolveLeafValue", "pubkeyVar": "x3", "fallbackVar": "x3", "excludeType": "Concept" },
-        "x4Display": { "type": "resolveLeafValue", "pubkeyVar": "x4", "fallbackVar": "x4", "excludeType": "Concept" },
-        "x5Display": { "type": "resolveLeafValue", "pubkeyVar": "x5", "fallbackVar": "x5", "excludeType": "Concept" }
+        "taskName": { "type": "resolveLeafValue", "pubkeyVar": "taskId", "fallbackVar": "taskId", "excludeType": "Concept" },
+        "workerName": { "type": "resolveLeafValue", "pubkeyVar": "workerId", "fallbackVar": "workerId", "excludeType": "Concept" },
+        "status": { "type": "resolveLeafValue", "pubkeyVar": "statusLeafId", "fallbackVar": "statusLeafId", "valueField": "value" }
       },
-      "resultVariable": "resolvedComposites" // Final results array
+      "resultVariable": "resolvedTodos" // Final results
     }
   ]
 }
@@ -240,30 +248,25 @@ This query fetches composites related to a selected leaf, resolves their place v
 
 **Explanation:**
 
-1.  **Find Related Composites:** Find all composites where `selectedLeafId` appears in any place (x1-x5). Extract the composite key, schema ID, and all place pubkeys. Store in `foundComposites`.
-2.  **Get Schema Names:** For each unique `schema_id` from `foundComposites`, fetch the Schema document and get its name. Store in `schemaInfo`.
-3.  **Select Initial Structure:** Group the `foundComposites` by `composite_key`. For each unique composite, correlate its `schemaName` from `schemaInfo`. Select the `compositePubKey`, `schemaName`, and the original place pubkeys (`x1` to `x5`). Store in `selectedComposites`.
-4.  **Resolve Place Values:** Take the `selectedComposites` array. For each item:
-    *   Apply the `resolveLeafValue` rule to the pubkey stored in `x1`, using `x1` itself as the fallback if resolution fails. Exclude `'Concept'` types from direct value lookup, triggering the secondary `cneme` lookup instead. Store the result (resolved name or fallback pubkey) in `x1Display`.
-    *   Repeat for `x2` through `x5`, storing results in `x2Display` through `x5Display`.
-    *   Implicitly (as implemented in `processResolveStep`), store the original data type ('Concept', 'LoroText', etc.) found for the `x1` pubkey into `x1ResolvedFromType`, and similarly for x2-x5.
-    *   Store the final enriched items in the `resolvedComposites` array.
+1.  **Find Task Status Links:** Find all `@schema/tcini` composites linking a task (`taskVar=link.x1`) to a status leaf (`statusLeafVar=link.x2`). Store results in `taskStatusLinks`.
+2.  **Find Task Assignment Links:** Find all `@schema/gunka` composites linking a worker (`workerVar=link.x1`) to a task (`assignedTaskVar=link.x2`). Store results in `taskAssignmentLinks`.
+3.  **Join:** Perform an inner join between `taskStatusLinks` and `taskAssignmentLinks` where `taskStatusLinks.taskVar` equals `taskAssignmentLinks.assignedTaskVar`. Select the task ID, status leaf ID, and worker ID into a new structure. Store results in `joinedTaskInfo`.
+4.  **Resolve:** Process the `joinedTaskInfo` array:
+    *   Resolve `taskId` (excluding `Concept` type to trigger `cneme` lookup) into `taskName`.
+    *   Resolve `workerId` (excluding `Concept` type) into `workerName`.
+    *   Resolve `statusLeafId` (getting the `value` field) into `status`.
+    *   Store the final enriched items in the `resolvedTodos` array.
 
-**Final Output Structure (`resolvedComposites` item):**
+**Final Output Structure (`resolvedTodos` item):**
 
 ```typescript
 {
-  compositePubKey: string;  // e.g., "0x..."
-  schemaName: string | null;   // e.g., "gunka"
-  x1: string | null;           // Original pubkey from composite
-  x2: string | null;
-  // ... x3, x4, x5
-  x1Display: unknown | null;   // Resolved name (e.g., "Bob") or original pubkey if fallback
-  x2Display: unknown | null;   // e.g., "Task 1"
-  // ... x3Display, x4Display, x5Display
-  x1ResolvedFromType: string | null; // e.g., "Concept"
-  x2ResolvedFromType: string | null; // e.g., "Concept"
-  // ... x3ResolvedFromType, etc.
+  taskId: string; // Task Concept pubkey
+  statusLeafId: string; // Status Leaf pubkey
+  workerId: string; // Worker Concept pubkey
+  taskName: string | null; // Resolved task name or original pubkey
+  workerName: string | null; // Resolved worker name or original pubkey
+  status: string | null; // Resolved status text value
 }
 ```
 
