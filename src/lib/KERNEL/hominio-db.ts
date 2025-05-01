@@ -18,35 +18,6 @@ export const docChangeNotifier = writable(0);
 let notificationDebounceTimer: NodeJS.Timeout | null = null;
 const NOTIFICATION_DEBOUNCE_MS = 50; // REDUCED from 150ms 
 
-// Helper to trigger notification with debounce
-export function triggerDocChangeNotification(): void {
-    if (!browser) return; // Skip in SSR
-
-    try {
-        if (notificationDebounceTimer) {
-            clearTimeout(notificationDebounceTimer);
-        }
-
-        // Simplified Debounce Logic:
-        notificationDebounceTimer = setTimeout(() => {
-            console.log("[triggerDocChangeNotification] Firing debounced notification."); // <<< ADDED LOG
-            docChangeNotifier.update(n => n + 1);
-        }, NOTIFICATION_DEBOUNCE_MS); // Use existing constant
-
-    } catch (err) {
-        console.error("Error in triggerDocChangeNotification:", err);
-        // Try direct update as fallback with a slight delay
-        setTimeout(() => {
-            try {
-                docChangeNotifier.update(n => n + 1);
-            } catch (e) {
-                console.error("Critical error updating docChangeNotifier:", e);
-            }
-        }, 10);
-    }
-}
-// --------------------------
-
 // Constants
 const CONTENT_TYPE_SNAPSHOT = 'snapshot';
 
@@ -162,7 +133,8 @@ class HominioDB {
     private _isCreatingDoc: boolean = false;
     private _lastError: string | null = null;
     private _isInitializingDoc: boolean = false; // Flag to prevent persistence during creation
-    private _suppressNotifications: boolean = false; // <<< ADDED FLAG
+    private _suppressNotifications: boolean = false;
+    private _needsNotification: boolean = false; // <<< ADDED FLAG for deferred notification
 
     // Store the local peer info for potential use (though Loro peerId needs to be numeric)
     private _localUserId: string | null = null;
@@ -288,8 +260,8 @@ class HominioDB {
             });
         });
 
-        // <<< Use controlled notification >>>
-        this._notifyIfAllowed();
+        // <<< Call internal trigger >>>
+        this._triggerNotification();
 
         return { snapshotCid };
     }
@@ -503,8 +475,8 @@ class HominioDB {
                 });
             });
 
-            // <<< Use controlled notification >>>
-            this._notifyIfAllowed();
+            // <<< Call internal trigger >>>
+            this._triggerNotification();
 
             return snapshotCid; // Return the new snapshot CID
 
@@ -777,7 +749,7 @@ class HominioDB {
                 updatedDoc.updatedAt = new Date().toISOString(); // Update timestamp
                 const docsStorage = getDocsStorage();
                 await docsStorage.put(pubKey, new TextEncoder().encode(JSON.stringify(updatedDoc)));
-                this._notifyIfAllowed();
+                this._triggerNotification();
             }
 
         } catch (err) {
@@ -984,8 +956,8 @@ class HominioDB {
             const deleted = await docsStorage.delete(pubKey);
 
             if (deleted) {
-                // <<< Use controlled notification >>>
-                this._notifyIfAllowed();
+                // <<< Call internal trigger >>>
+                this._triggerNotification();
             }
 
             return deleted; // Return success based on storage deletion
@@ -1219,9 +1191,9 @@ class HominioDB {
                 metadataWasUpdated = true; // Mark that metadata changed
             }
 
-            // <<< Use controlled notification ONLY if metadata changed >>>
+            // <<< Call internal trigger ONLY if metadata changed >>>
             if (metadataWasUpdated) {
-                this._notifyIfAllowed();
+                this._triggerNotification();
             }
 
             return updateCid;
@@ -1493,17 +1465,47 @@ class HominioDB {
     /** Starts a batch operation, suppressing notifications */
     public startBatchOperation(): void {
         this._suppressNotifications = true;
+        this._needsNotification = false;
     }
 
-    /** Ends a batch operation, allowing notifications */
+    /** Ends a batch operation, allowing notifications and firing deferred ones */
     public endBatchOperation(): void {
+        const wasSuppressed = this._suppressNotifications;
         this._suppressNotifications = false;
+        if (wasSuppressed && this._needsNotification) {
+            this._needsNotification = false;
+            console.log("[HominioDB endBatchOperation] Firing deferred notification."); // DEBUG
+            if (notificationDebounceTimer) clearTimeout(notificationDebounceTimer);
+            notificationDebounceTimer = setTimeout(() => {
+                console.log("[HominioDB - Deferred] Firing debounced notification."); // DEBUG
+                docChangeNotifier.update(n => n + 1);
+            }, NOTIFICATION_DEBOUNCE_MS);
+        }
     }
 
-    /** Internal method to trigger notification ONLY if not suppressed */
-    private _notifyIfAllowed(): void {
-        if (!this._suppressNotifications) {
-            triggerDocChangeNotification();
+    /** Internal trigger method with suppression check */
+    private _triggerNotification(): void {
+        if (!browser) return;
+
+        if (this._suppressNotifications) {
+            console.log("[_triggerNotification] Suppressed, setting needsNotification flag."); // DEBUG
+            this._needsNotification = true;
+            return;
+        }
+
+        // If not suppressed, proceed with the debounced notification
+        try {
+            if (notificationDebounceTimer) {
+                clearTimeout(notificationDebounceTimer);
+            }
+            notificationDebounceTimer = setTimeout(() => {
+                console.log("[_triggerNotification - Immediate] Firing debounced notification."); // DEBUG
+                docChangeNotifier.update(n => n + 1);
+            }, NOTIFICATION_DEBOUNCE_MS);
+        } catch (err) {
+            console.error("Error in _triggerNotification:", err);
+            // Fallback
+            setTimeout(() => { try { docChangeNotifier.update(n => n + 1); } catch (e) { console.error("Critical error in fallback notification:", e); } }, 10);
         }
     }
 }

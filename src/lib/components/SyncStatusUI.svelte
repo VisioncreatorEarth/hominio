@@ -3,7 +3,7 @@
 	import { getContext } from 'svelte';
 	import type { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
 	import { browser } from '$app/environment';
-	import { hominioDB, triggerDocChangeNotification } from '$lib/KERNEL/hominio-db';
+	import { hominioDB } from '$lib/KERNEL/hominio-db';
 	import { closeStorage } from '$lib/KERNEL/hominio-storage';
 	import { hominioIndexing } from '$lib/KERNEL/hominio-indexing';
 
@@ -61,8 +61,6 @@
 
 				deleteRequest.onsuccess = () => {
 					console.log("✅ IndexedDB 'hominio-docs' deleted successfully.");
-					// Trigger reactivity *before* reloading
-					triggerDocChangeNotification();
 					// Reload the page to reflect the changes and ensure clean state
 					window.location.reload();
 				};

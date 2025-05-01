@@ -1,5 +1,5 @@
 import { LoroDoc, LoroMap, LoroText, LoroList } from 'loro-crdt';
-import { hominioDB, triggerDocChangeNotification } from './hominio-db';
+import { hominioDB /*, triggerDocChangeNotification */ } from './hominio-db';
 import { canWrite, canDelete, type CapabilityUser, canCreate } from './hominio-caps';
 import type { LeafRecord, LeafValue } from '$db/seeding/leaf.data'; // Use only LeafValue union type
 import type { SchemaRecord } from '$db/seeding/schema.data';
@@ -309,7 +309,7 @@ export async function executeMutation(
 
     // --- Phase 2: Commit (Persistent Storage) --- 
     try {
-        let requiresNotification = false; // Keep flag for final notification
+        // let requiresNotification = false; // REMOVE UNUSED FLAG
 
         // <<< Start Batch Operation >>>
         hominioDB.startBatchOperation();
@@ -394,13 +394,13 @@ export async function executeMutation(
                 // Persist using the internal method
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 await (hominioDB as any)._persistNewDocument(user, finalPubKey, owner, doc);
-                requiresNotification = true; // Mark that a change occurred
+                // requiresNotification = true; // REMOVE UNUSED FLAG ASSIGNMENT
             } else {
                 // Update existing doc (key is the actual targetPubKey)
                 // Ensure refs in updated docs are also using final keys if needed
                 // (The update logic in step 3 handles this)
                 await hominioDB.updateDocument(user, key, doc);
-                requiresNotification = true; // Mark that a change occurred
+                // requiresNotification = true; // REMOVE UNUSED FLAG ASSIGNMENT
             }
         }
 
@@ -421,10 +421,14 @@ export async function executeMutation(
         hominioDB.endBatchOperation();
 
         // <<< Trigger ONE Notification AFTER batch and indexing >>>
-        if (requiresNotification || deletesToPersist.size > 0) { // Trigger if creates/updates happened OR deletes happened
-            console.log('[Mutation Engine] Triggering final notification after batch commit and indexing.'); // DEBUG
-            triggerDocChangeNotification();
-        }
+        // REMOVE explicit call - endBatchOperation handles notification if needed
+        /*
+        // REMOVE Check using unused flag
+        // if (requiresNotification || deletesToPersist.size > 0) { 
+        //     console.log('[Mutation Engine] Triggering final notification after batch commit and indexing.'); // DEBUG
+        //     triggerDocChangeNotification(); 
+        // }
+        */
 
         return { status: 'success', generatedPubKeys: finalGeneratedPubKeys };
 

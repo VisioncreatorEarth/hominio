@@ -1,6 +1,6 @@
 import { writable, get } from 'svelte/store';
 import { hominio } from '$lib/KERNEL/hominio-client';
-import { hominioDB, docChangeNotifier, triggerDocChangeNotification, type Docs } from '$lib/KERNEL/hominio-db';
+import { hominioDB, docChangeNotifier, type Docs } from '$lib/KERNEL/hominio-db';
 import { browser } from '$app/environment';
 import { canWrite, canDelete, type CapabilityUser } from './hominio-caps';
 import { getContentStorage } from '$lib/KERNEL/hominio-storage';
@@ -320,21 +320,6 @@ export class HominioSync {
             }
             this.setSyncStatus(false);
             this.updatePendingChangesCount(); // Update count after sync attempt
-
-            // Always trigger a docChangeNotifier update after sync
-            setTimeout(() => {
-                try {
-                    if (typeof triggerDocChangeNotification === 'function') {
-                        triggerDocChangeNotification();
-                    } else {
-                        console.error("triggerDocChangeNotification is not available");
-                        docChangeNotifier.update(n => n + 1);
-                    }
-                } catch (e) {
-                    console.error("Error triggering doc change notification:", e);
-                    docChangeNotifier.update(n => n + 1);
-                }
-            }, 100);
         }
     }
 
