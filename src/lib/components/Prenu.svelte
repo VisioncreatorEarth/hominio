@@ -10,6 +10,7 @@
 	} from '$lib/KERNEL/hominio-mutate';
 	import { closeModal } from '$lib/KERNEL/modalStore'; // To close modal on success
 	import type { IndexLeafType } from '$lib/KERNEL/index-registry'; // <-- Import type at top level
+	import { canCreatePersonConcept } from '$lib/KERNEL/hominio-caps'; // <-- Import the capability check
 
 	// --- Component State ---
 	let personName = $state('');
@@ -17,9 +18,13 @@
 	let schemaError = $state<string | null>(null);
 	let prenuSchemaId = $state<string | null>(null);
 	let cnemeSchemaId = $state<string | null>(null);
+	let ponseSchemaId = $state<string | null>(null);
 	let isMutating = $state(false);
 	let mutationError = $state<string | null>(null);
 	let currentUser = $state<CapabilityUser | null>(null);
+	let isCheckingCapability = $state(false); // <-- State for the capability check
+	let canActuallyCreate = $state<boolean | null>(null); // <-- State for capability result (null = not checked)
+	let capabilityCheckError = $state<string | null>(null); // <-- State for capability check errors
 
 	// --- Get User Context ---
 	type GetCurrentUserFn = typeof getMeType;
@@ -100,12 +105,13 @@
 				// STEP 4: Get specific schema pubkeys
 				prenuSchemaId = schemaMap['prenu'] ?? null;
 				cnemeSchemaId = schemaMap['cneme'] ?? null;
+				ponseSchemaId = schemaMap['ponse'] ?? null;
 
-				if (!prenuSchemaId || !cnemeSchemaId) {
-					const missing = ['prenu', 'cneme'].filter((k) => !schemaMap[k]).join(', ');
+				if (!prenuSchemaId || !cnemeSchemaId || !ponseSchemaId) {
+					const missing = ['prenu', 'cneme', 'ponse'].filter((k) => !schemaMap[k]).join(', ');
 					throw new Error(`Could not find required schema pubkeys: ${missing}`);
 				}
-				console.log('[Prenu Component] Successfully loaded prenu/cneme schema IDs.');
+				console.log('[Prenu Component] Successfully loaded prenu/cneme/ponse schema IDs.');
 			} else {
 				throw new Error("'schemas' index document query returned invalid data.");
 			}
@@ -114,30 +120,74 @@
 			schemaError = err instanceof Error ? err.message : 'Unknown error loading schemas.';
 			prenuSchemaId = null;
 			cnemeSchemaId = null;
+			ponseSchemaId = null;
 		} finally {
 			isSchemaLoading = false;
+			// --- Trigger capability check AFTER schemas are loaded ---
+			if (!schemaError && currentUser) {
+				await checkCreationCapability(currentUser);
+			}
 		}
 	}
 
-	// --- Create Person Mutation Logic ---
+	// --- NEW: Capability Check Function ---
+	async function checkCreationCapability(user: CapabilityUser) {
+		isCheckingCapability = true;
+		capabilityCheckError = null;
+		canActuallyCreate = null;
+		try {
+			console.log(`[Prenu Capability Check] Checking if user ${user.id} can create a person...`);
+			canActuallyCreate = await canCreatePersonConcept(user);
+			if (canActuallyCreate === false) {
+				console.log(
+					`[Prenu Capability Check] Result: User ${user.id} cannot create (likely already owns one).`
+				);
+			} else if (canActuallyCreate === true) {
+				console.log(`[Prenu Capability Check] Result: User ${user.id} can create.`);
+			}
+		} catch (err) {
+			console.error('[Prenu Capability Check] Error:', err);
+			capabilityCheckError = `Capability check failed: ${err instanceof Error ? err.message : 'Unknown error'}`;
+			canActuallyCreate = false; // Fail safe
+		} finally {
+			isCheckingCapability = false;
+		}
+	}
+
+	// --- Create Person Mutation Logic --- (Pre-check removed)
 	async function handleCreatePerson() {
 		if (!personName.trim()) {
 			mutationError = 'Please enter a name.';
 			return;
 		}
-		if (!currentUser) {
-			mutationError = 'Cannot create person: User not logged in.';
+		const currentUserId = currentUser?.id;
+		if (!currentUserId) {
+			mutationError = 'Cannot create person: User not logged in or ID missing.';
 			return;
 		}
-		if (!prenuSchemaId || !cnemeSchemaId) {
+		if (!prenuSchemaId || !cnemeSchemaId || !ponseSchemaId) {
 			mutationError = 'Cannot create person: Schema information not loaded correctly.';
 			console.error('Create person failed: Schema pubkeys not available.', {
 				prenuSchemaId,
-				cnemeSchemaId
+				cnemeSchemaId,
+				ponseSchemaId
 			});
 			return;
 		}
 
+		// --- REMOVED PRE-CHECK QUERY ---
+		// The check is now done onMount via checkCreationCapability
+
+		// Ensure the capability check passed before proceeding
+		if (canActuallyCreate !== true) {
+			mutationError = capabilityCheckError
+				? `Cannot create: ${capabilityCheckError}`
+				: 'Cannot create person. You might already own one, or the capability check failed.';
+			console.warn('[Prenu Mutation] Creation blocked due to failed capability check.');
+			return;
+		}
+
+		// Now proceed with the actual mutation
 		isMutating = true;
 		mutationError = null;
 		console.log('Creating person:', personName);
@@ -156,6 +206,15 @@
 				placeholder: '$$personName',
 				data: { type: 'LoroText', value: personName.trim() }
 			};
+
+			// --- Create User ID Leaf ---
+			const userIdLeafOp: CreateMutationOperation = {
+				operation: 'create',
+				type: 'Leaf',
+				placeholder: '$$userIdLeaf',
+				data: { type: 'LoroText', value: currentUserId } // Store the actual user ID
+			};
+			// -------------------------
 
 			const prenuCompositeOp: CreateMutationOperation = {
 				operation: 'create',
@@ -182,8 +241,30 @@
 				}
 			};
 
+			// --- Create ponse Composite ---
+			const ponseCompositeOp: CreateMutationOperation = {
+				operation: 'create',
+				type: 'Composite',
+				placeholder: '$$ponseLink',
+				data: {
+					schemaId: ponseSchemaId, // Use the fetched ponse schema ID
+					places: {
+						x1: '$$userIdLeaf', // Link to the new User ID Leaf
+						x2: '$$newPerson' // Link to the new Person Concept Leaf
+					}
+				}
+			};
+			// -----------------------------
+
 			const request: MutateHqlRequest = {
-				mutations: [personLeafOp, nameLeafOp, prenuCompositeOp, cnemeCompositeOp]
+				mutations: [
+					personLeafOp,
+					nameLeafOp,
+					userIdLeafOp, // <-- Add User ID Leaf creation
+					prenuCompositeOp,
+					cnemeCompositeOp,
+					ponseCompositeOp // <-- Add Ponse Composite creation
+				]
 			};
 			const result = await executeMutationInstance(request, currentUser);
 
@@ -205,7 +286,7 @@
 
 	// --- Lifecycle ---
 	onMount(() => {
-		loadSchemaPubKeys();
+		loadSchemaPubKeys(); // This now also triggers checkCreationCapability
 	});
 </script>
 
@@ -219,7 +300,18 @@
 			<strong>Error loading schemas:</strong>
 			{schemaError}
 		</div>
-	{:else}
+	{:else if isCheckingCapability}
+		<p class="text-sm text-gray-500">Checking creation permissions...</p>
+	{:else if capabilityCheckError}
+		<div class="rounded border border-red-400 bg-red-100 p-3 text-sm text-red-700">
+			<strong>Error checking permissions:</strong>
+			{capabilityCheckError}
+		</div>
+	{:else if canActuallyCreate === false}
+		<div class="rounded border border-yellow-400 bg-yellow-50 p-3 text-sm text-yellow-700">
+			You already have a person concept linked to your account. You cannot create another.
+		</div>
+	{:else if canActuallyCreate === true}
 		<div class="space-y-3">
 			<div>
 				<label for="personName" class="mb-1 block text-sm font-medium text-gray-700"
@@ -232,7 +324,7 @@
 					placeholder="Enter name"
 					class="w-full rounded-md border border-gray-300 px-3 py-2 text-gray-900 shadow-sm focus:border-[#174C6B] focus:ring-[#174C6B]"
 					required
-					disabled={isMutating}
+					disabled={isMutating || !canActuallyCreate}
 				/>
 			</div>
 
@@ -243,7 +335,7 @@
 			<button
 				on:click={handleCreatePerson}
 				class="w-full rounded-md bg-[#153243] px-4 py-2 text-sm font-semibold text-[#DDD4C9] shadow-sm transition-colors hover:bg-[#174C6B] focus:ring-2 focus:ring-[#153243] focus:ring-offset-2 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-				disabled={isMutating || !personName.trim()}
+				disabled={isMutating || !personName.trim() || !canActuallyCreate}
 			>
 				{#if isMutating}Creating...{:else}Create Person{/if}
 			</button>

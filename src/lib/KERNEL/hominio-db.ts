@@ -1115,7 +1115,6 @@ class HominioDB {
             const allUpdateCids = [...new Set([...baseUpdates, ...localUpdates])]; // Combine and deduplicate
 
             if (allUpdateCids.length > 0) {
-                // console.log(`[getLoroDoc] Applying ${allUpdateCids.length} total updates for ${pubKey}...`); // Optional debug
                 for (const updateCid of allUpdateCids) {
                     try {
                         const updateData = await contentStorage.get(updateCid);
@@ -1480,7 +1479,6 @@ class HominioDB {
         this._suppressNotifications = false;
         if (wasSuppressed && this._needsNotification) {
             this._needsNotification = false;
-            console.log("[HominioDB endBatchOperation] Firing deferred notification (which includes indexing)..."); // DEBUG
             this._triggerNotification();
         }
     }
@@ -1490,15 +1488,12 @@ class HominioDB {
         if (!browser) return;
 
         if (this._suppressNotifications) {
-            console.log("[_triggerNotification] Suppressed, setting needsNotification flag."); // DEBUG
             this._needsNotification = true;
             return;
         }
 
         // --- Trigger Indexing FIRST (if not suppressed) ---
-        console.log("[_triggerNotification] Triggering indexing cycle..."); // DEBUG
         hominioIndexing.startIndexingCycle().catch(err => {
-            // Prevent indexing errors from stopping notifications
             console.error('[_triggerNotification] Error triggering indexing cycle:', err);
         });
         // --------------------------------------------------
@@ -1509,7 +1504,6 @@ class HominioDB {
                 clearTimeout(notificationDebounceTimer);
             }
             notificationDebounceTimer = setTimeout(() => {
-                console.log("[_triggerNotification - Immediate] Firing debounced notification."); // DEBUG
                 docChangeNotifier.update(n => n + 1);
             }, NOTIFICATION_DEBOUNCE_MS);
         } catch (err) {

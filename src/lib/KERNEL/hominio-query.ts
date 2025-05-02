@@ -299,7 +299,6 @@ async function processFindStep(
     step: LoroHqlFindStep,
     context: QueryContext
 ): Promise<QueryContext> {
-    console.log(`[processFindStep ENTRY] Step: ${JSON.stringify(step)}`); // Log step entry
     const updatedContext = { ...context };
     const stepResults: StepResultItem[] = [];
 
@@ -358,22 +357,15 @@ async function processFindStep(
         const placeKey = (Object.keys(step.target).find(k => k.startsWith('x') && step.target[k as PlaceKey]) as PlaceKey | undefined);
         const placeValue = placeKey ? resolveValue(step.target[placeKey], context) : undefined;
 
-        // <<< Add Logging for specific place find >>>
-        console.log(`[processFindStep DEBUG] Specific Place Find - Schema: ${schemaId}, PlaceKey: ${placeKey}, PlaceValue: ${placeValue}`);
 
         if (placeKey && placeValue) {
-            // Log before calling the core find function
-            console.log(`[processFindStep DEBUG] Calling findCompositeDocsBySchemaAndPlace(${schemaId}, ${placeKey}, ${placeValue})`);
             try {
                 foundComposites = await findCompositeDocsBySchemaAndPlace(schemaId, placeKey, placeValue);
-                // Log the direct result of the find function
-                console.log(`[processFindStep DEBUG] findCompositeDocsBySchemaAndPlace returned ${foundComposites.length} composites.`);
             } catch (findError) {
                 console.error(`[processFindStep ERROR] Error calling findCompositeDocsBySchemaAndPlace:`, findError);
                 foundComposites = []; // Ensure it's an empty array on error
             }
         } else {
-            console.log(`[processFindStep DEBUG] Skipping findCompositeDocsBySchemaAndPlace because placeKey or placeValue is missing.`);
             foundComposites = [];
         }
 
@@ -413,7 +405,6 @@ async function processFindStep(
     }
 
     // --- Extract Variables --- 
-    console.log(`[processFindStep DEBUG] Processing ${foundComposites.length} found composites for variable extraction.`); // Log before extraction loop
     for (const composite of foundComposites) {
         const compositePubKey = composite.pubkey;
         const compositeData = getDataFromDoc(composite.doc) as { schemaId: string; places: Record<PlaceKey, string> } | undefined;
@@ -438,7 +429,6 @@ async function processFindStep(
     if (step.resultVariable) {
         updatedContext[step.resultVariable] = step.return === 'first' ? (stepResults[0] ?? null) : stepResults;
     }
-    console.log(`[processFindStep EXIT] Step results count: ${stepResults.length}, Context updated for: ${step.resultVariable ?? 'none'}`); // Log step exit
 
     return updatedContext;
 }
@@ -769,14 +759,9 @@ async function processSelectStep(
                                 // Prefixing could be added here if needed: e.g., groupContext[`schemaInfo_${schemaVarKey}`] = schemaVarValue;
                                 groupContext[schemaVarKey] = schemaVarValue;
                             }
-                        } else {
-                            console.log(`[Query Engine SELECT DEBUG - ${otherVarName}] No matching item found for ${schemaIdToFind}.`);
                         }
                     }
-                } // End if(otherVarName === 'schemaInfo')
-
-                // --- END Specific Correlation Logic --- 
-
+                }
             }
         }
     }
@@ -929,10 +914,6 @@ async function resolveSingleLeafValue(
                         } else {
                             console.warn(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Found cneme composite ${cnemeComp.pubkey}, but it has no x2 value.`); // DEBUG
                         }
-                    } else if (relatedCnemeComposites.length > 1) {
-                        console.warn(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Found multiple (${relatedCnemeComposites.length}) 'cneme' composites with this concept in x1. Cannot resolve ambiguously.`); // DEBUG
-                    } else {
-                        console.log(`[Query Engine Resolve DEBUG] Concept ${pubkey}: No related 'cneme' composite found with this concept in x1.`); // DEBUG
                     }
                 } catch (secondaryLookupError) {
                     console.error(`[Query Engine Resolve DEBUG] Concept ${pubkey}: Error during secondary lookup:`, secondaryLookupError); // DEBUG
@@ -1126,8 +1107,6 @@ export async function executeQuery(
     query: LoroHqlQueryExtended, // Only accept the new steps-based format
     user: CapabilityUser | null = null
 ): Promise<QueryResult[]> {
-    // <<< Add Logging Here >>>
-    console.log(`[executeQuery ENTRY] Received query: ${JSON.stringify(query)}, User: ${user?.id ?? 'null'}`);
 
     let context: QueryContext = {}; // Use defined type
     let finalResults: QueryResult[] = [];
@@ -1218,13 +1197,8 @@ export async function executeQuery(
     }
 }
 
-// --- Removed Old Helper Functions ---
-
 /**
  * Creates a reactive query.
- * TODO: Update this function to work reliably with the new LoroHqlQueryExtended format.
- * The current implementation might work if executeQuery handles the new format,
- * but the queryDefinitionStore type needs to be updated.
  */
 export function processReactiveQuery(
     getCurrentUserFn: typeof getMeType,
@@ -1234,13 +1208,11 @@ export function processReactiveQuery(
     // <<< DEBUG: Identify the source component (if possible) >>>
     const queryDefStringForId = JSON.stringify(get(queryDefinitionStore));
     const queryIdentifier = queryDefStringForId.length > 50 ? queryDefStringForId.substring(0, 50) + '...' : queryDefStringForId;
-    console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Setting up reactive query.`);
 
     if (!browser) {
         // --- Server-Side Rendering (SSR) Handling --- 
         const initialQuery = get(queryDefinitionStore);
         const ssrUser = getCurrentUserFn();
-        console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] SSR - Initial Query: ${!!initialQuery}, User: ${ssrUser?.id ?? 'null'}`);
         return readable<QueryResult[] | null | undefined>(undefined, (set) => {
             if (!initialQuery) { console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] SSR - No initial query, setting empty.`); set([]); return; }
             executeQuery(initialQuery, ssrUser)
@@ -1251,7 +1223,6 @@ export function processReactiveQuery(
 
     // --- Client-Side Reactive Logic --- 
     return readable<QueryResult[] | null | undefined>(undefined, (set) => {
-        console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Client - Readable store subscribed.`);
         let debounceTimer: NodeJS.Timeout | null = null;
         const DEBOUNCE_MS = 50;
         let lastSessionState: string | null = null;
@@ -1259,18 +1230,14 @@ export function processReactiveQuery(
         let currentResults: QueryResult[] | null | undefined = undefined;
 
         const triggerDebouncedQuery = (reason: string) => { // <<< DEBUG: Add reason
-            console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] triggerDebouncedQuery called. Reason: ${reason}`);
             const currentQueryDefinition = get(queryDefinitionStore);
             // Ensure we only proceed if the definition is valid (has steps)
             if (!currentQueryDefinition || !Array.isArray(currentQueryDefinition.steps)) {
-                console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Query definition invalid or missing steps. Clearing timer.`);
                 if (debounceTimer) clearTimeout(debounceTimer); debounceTimer = null;
                 if (currentResults !== undefined && currentResults !== null && currentResults.length > 0) {
-                    console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Setting empty array (invalid query).`);
                     set([]);
                     currentResults = [];
                 } else if (currentResults === undefined) {
-                    console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Setting empty array (initial invalid query).`);
                     set([]); // Set to empty array if loading was interrupted by invalid query
                     currentResults = [];
                 }
@@ -1280,7 +1247,6 @@ export function processReactiveQuery(
 
             const queryDefString = JSON.stringify(currentQueryDefinition);
             const queryChanged = lastQueryDefinitionString !== queryDefString;
-            console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Query changed: ${queryChanged}`);
             lastQueryDefinitionString = queryDefString;
 
             // <<< MODIFIED LOGIC >>>
@@ -1288,67 +1254,52 @@ export function processReactiveQuery(
             // even if the query string itself hasn't changed and we have previous results.
             // The underlying data might have changed.
             if (reason !== 'Document Change Notifier' && !queryChanged && currentResults !== undefined) {
-                console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Not a doc change, query not changed, and results exist. Skipping debounce.`);
                 return; // Skip if not a doc change AND query is same AND results exist
             }
             // <<< END MODIFIED LOGIC >>>
 
             if (debounceTimer) {
-                console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Clearing existing debounce timer.`);
                 clearTimeout(debounceTimer);
             }
             if (currentResults === undefined || queryChanged) {
                 // Only set loading if not already loading
                 if (currentResults !== undefined) {
-                    console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Setting state to undefined (loading...).`);
                     set(undefined);
                 }
             }
 
-            console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Setting debounce timer (${DEBOUNCE_MS}ms).`);
             debounceTimer = setTimeout(async () => {
-                console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Debounce timer expired. Executing query.`);
                 const currentUser = getCurrentUserFn();
                 const latestQueryDefinition = get(queryDefinitionStore);
                 const latestQueryDefString = JSON.stringify(latestQueryDefinition);
 
-                console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] User ID for execution: ${currentUser?.id ?? 'null'}`);
-                console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Query for execution: ${latestQueryDefString.substring(0, 100)}...`);
 
                 // Re-validate query before execution
                 if (!latestQueryDefinition || !Array.isArray(latestQueryDefinition.steps) || latestQueryDefString !== lastQueryDefinitionString) {
-                    console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Query became stale or invalid during debounce. Aborting execution.`);
                     return;
                 }
 
                 try {
                     // Set to undefined only if not already undefined (prevents flicker if query is fast)
                     if (currentResults !== undefined) {
-                        console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Setting state to undefined before async executeQuery.`);
                         set(undefined);
                     }
                     currentResults = undefined;
 
                     const results = await executeQuery(latestQueryDefinition, currentUser);
-                    console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] executeQuery returned ${results.length} results.`);
 
                     // Check if query changed *again* during async execution
                     if (JSON.stringify(get(queryDefinitionStore)) !== lastQueryDefinitionString) {
-                        console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Query became stale during async execution. Ignoring results.`);
                         return;
                     }
-                    console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Setting final results (${results.length} items).`);
                     set(results);
                     currentResults = results;
                 } catch (error) {
                     console.error(`[processReactiveQuery DEBUG ${queryIdentifier}] Error during executeQuery:`, error);
                     // Check staleness before setting error state
                     if (JSON.stringify(get(queryDefinitionStore)) === lastQueryDefinitionString) {
-                        console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Setting state to null (error).`);
                         set(null);
                         currentResults = null;
-                    } else {
-                        console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Query became stale during error, ignoring error state.`);
                     }
                 }
             }, DEBOUNCE_MS);
@@ -1379,20 +1330,16 @@ export function processReactiveQuery(
         lastSessionState = JSON.stringify(initialSessionData?.data?.user?.id ?? null);
         lastQueryDefinitionString = JSON.stringify(get(queryDefinitionStore));
         currentResults = undefined; // Start in loading state
-        console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Initial State - User: ${lastSessionState}, Query: ${lastQueryDefinitionString.substring(0, 50)}...`);
 
         // Trigger initial query execution if valid
         if (get(queryDefinitionStore) && Array.isArray(get(queryDefinitionStore)?.steps)) {
-            console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Triggering initial query execution.`);
             triggerDebouncedQuery('Initial Mount');
         } else {
-            console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Initial query invalid, setting empty array.`);
             set([]); // Set empty array if initial query is invalid
             currentResults = [];
         }
 
         return () => {
-            console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] Unsubscribing readable store.`);
             unsubscribeQueryDef();
             unsubscribeNotifier();
             unsubscribeSession();

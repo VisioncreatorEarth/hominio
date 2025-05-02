@@ -226,9 +226,6 @@ export async function executeMutation(
                 case 'update': {
                     const targetPubKey = op.targetPubKey;
 
-                    // <<< Log Update Operation Details >>>
-                    console.log(`[Mutation UPDATE ENTRY] Target: ${targetPubKey}, Data: ${JSON.stringify(op.data)}`);
-
                     // 1. Permission Check
                     const docMeta = await hominioDB.getDocument(targetPubKey);
                     if (!docMeta) throw new Error(`Document not found for update: ${targetPubKey}`);
@@ -237,18 +234,13 @@ export async function executeMutation(
                     // 2. Get or Load LoroDoc
                     let docToUpdate: LoroDoc | null | undefined = preparedDocs.get(targetPubKey);
                     if (!docToUpdate) {
-                        console.log(`[Mutation UPDATE DEBUG] LoroDoc ${targetPubKey} not prepared, loading from DB.`); // Log loading
                         docToUpdate = await hominioDB.getLoroDoc(targetPubKey);
                         if (!docToUpdate) throw new Error(`Failed to load LoroDoc for update: ${targetPubKey}`);
-                        console.log(`[Mutation UPDATE DEBUG] LoroDoc ${targetPubKey} loaded successfully.`); // Log success
                         preparedDocs.set(targetPubKey, docToUpdate); // Store loaded doc
-                    } else {
-                        console.log(`[Mutation UPDATE DEBUG] LoroDoc ${targetPubKey} found in preparedDocs.`); // Log cache hit
                     }
 
                     // 3. Apply Changes to In-Memory Doc
                     if (op.type === 'Composite' && 'places' in op.data && op.data.places) {
-                        console.log(`[Mutation UPDATE DEBUG] Applying Composite places update to ${targetPubKey}.`); // Log place update attempt
                         const dataMap = docToUpdate.getMap('data');
                         if (!dataMap) {
                             console.error(`[Mutation UPDATE ERROR] Failed to get 'data' map for ${targetPubKey}.`);
@@ -256,17 +248,14 @@ export async function executeMutation(
                         }
                         const placesMap = dataMap.get('places');
                         if (placesMap instanceof LoroMap) {
-                            console.log(`[Mutation UPDATE DEBUG] Got 'places' map for ${targetPubKey}. Current value:`, placesMap.toJSON()); // Log current places
                             for (const place in op.data.places) {
                                 let value = op.data.places[place as keyof typeof op.data.places];
                                 // Resolve placeholder using TEMP map if present in update data
                                 if (typeof value === 'string' && value.startsWith('$$')) {
                                     value = placeholderToTempKey[value] ?? value; // Use temp key if found
                                 }
-                                console.log(`[Mutation UPDATE DEBUG] Setting place '${place}' to '${value}' on ${targetPubKey}.`); // Log set operation
                                 placesMap.set(place, value ?? null);
                             }
-                            console.log(`[Mutation UPDATE DEBUG] 'places' map updated for ${targetPubKey}. New value:`, placesMap.toJSON()); // Log updated places
                         } else {
                             console.warn(`[Mutation UPDATE WARNING] Target doc ${targetPubKey} data.places is not a LoroMap or is missing.`);
                             // Optionally throw error if places map is strictly required
@@ -276,7 +265,6 @@ export async function executeMutation(
                     else {
                         console.warn("[Mutation UPDATE WARNING] Update operation doesn't match expected Composite/places structure.", op); // Log if update data is unexpected
                     }
-                    // console.warn("[Mutation Engine] TODO: Implement FULL LoroDoc update logic for UPDATE"); // Removed TODO
 
                     // 4. Mark for Phase 2 Persistence
                     if (!updatesToPersist.has(targetPubKey)) {
@@ -446,7 +434,7 @@ export async function executeMutation(
         /*
         // REMOVE Check using unused flag
         // if (requiresNotification || deletesToPersist.size > 0) { 
-        //     console.log('[Mutation Engine] Triggering final notification after batch commit and indexing.'); // DEBUG
+        //     REMOVED: console.log('[Mutation Engine] Triggering final notification after batch commit and indexing.'); // DEBUG
         //     triggerDocChangeNotification(); 
         // }
         */

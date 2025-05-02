@@ -208,19 +208,16 @@
 				}
 			]
 		};
-		console.log('[LeafQueries] Generated Related Composites Query:', JSON.stringify(query));
 		return query;
 	}
 
 	// <<< NEW: Effect to update related composites query when selection changes >>>
 	$effect(() => {
-		console.log('Selected Leaf ID changed, updating related composites query:', selectedLeafId);
 		relatedCompositesQueryStore.set(createQueryForRelatedComposites(selectedLeafId));
 	});
 
 	// --- Functions ---
 	function selectLeaf(id: string) {
-		console.log('Selecting leaf with id:', id);
 		selectedLeafId = id;
 		const leaves = get(allLeavesReadable);
 		if (leaves) {

@@ -27,7 +27,7 @@
 	/*
 	function showModal() {
 		openModal(HelloEarth, { message: 'World (from +page)' });
-	}
+		}
 	*/
 </script>
 
