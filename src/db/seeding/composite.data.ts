@@ -78,4 +78,29 @@ export const initialComposites: CompositeRecord[] = [
             places: { x1: '@task1', x2: '@status_notstarted' } // Defaulting task1 to not started
         }
     },
+
+    // --- NEW: Link Tags to Task 1 using ckaji ---
+    {
+        pubkey: '@ckaji/task1_urgent',
+        metadata: { type: 'Composite' },
+        data: {
+            schemaId: '@schema/ckaji',
+            places: {
+                x1: '@task1',
+                x2: '@tag/urgent'
+            }
+        }
+    },
+    {
+        pubkey: '@ckaji/task1_frontend',
+        metadata: { type: 'Composite' },
+        data: {
+            schemaId: '@schema/ckaji',
+            places: {
+                x1: '@task1',
+                x2: '@tag/frontend'
+            }
+        }
+    },
+    // --- END NEW TAG LINKS ---
 ];

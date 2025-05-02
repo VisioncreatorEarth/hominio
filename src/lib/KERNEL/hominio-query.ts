@@ -31,11 +31,16 @@ export type QueryContext = Record<string, unknown>;
 export interface StepResultItem {
     _sourceKey?: unknown; // Key linking back to the source (e.g., pubkey from 'from', or index in source array)
     variables: Record<string, unknown>; // Extracted variables for this item
-    // primaryResult?: unknown; // Optional: The main document or composite link object itself?
 }
 
+// <<< NEW TYPE: Represents possible structures entering a JOIN step >>>
+// It can be a direct result from FIND/GET (with .variables)
+// or a processed result from a previous JOIN/RESOLVE (flat structure)
+type JoinInputItem = StepResultItem | QueryResult; // QueryResult is Record<string, unknown>
+// <<< END NEW TYPE >>>
+
 // Define possible step actions
-type HqlStepAction = 'find' | 'get' | 'select' | 'setVar' | 'iterateIndex' | 'resolve' | 'join';
+type HqlStepAction = 'find' | 'get' | 'select' | 'setVar' | 'iterateIndex' | 'resolve' | 'join' | 'aggregate';
 
 // Base interface for a query step
 interface LoroHqlStepBase {
@@ -167,6 +172,23 @@ interface LoroHqlJoinStep extends LoroHqlStepBase {
 }
 // <<< END NEW STEP DEFINITION >>>
 
+// <<< START NEW STEP DEFINITION: aggregate >>>
+interface AggregateFieldRule {
+    sourceField: string;        // Field name in the input items
+    operation: 'collect' | 'first'; // How to aggregate this field
+}
+
+interface LoroHqlAggregateStep extends LoroHqlStepBase {
+    action: 'aggregate';
+    fromVariable: string;       // Variable in context holding the flat array to aggregate
+    groupByKey: string;         // Field name within the input items to group by (e.g., 'taskId')
+    aggregateFields: {          // Defines how to handle other fields
+        [outputFieldName: string]: AggregateFieldRule;
+    };
+    resultVariable: string;       // Required: Name for the array of aggregated items
+}
+// <<< END NEW STEP DEFINITION >>>
+
 // --- Resolve and Enrich Steps Removed ---
 
 // Union type for any step
@@ -177,7 +199,8 @@ type LoroHqlStep =
     | LoroHqlSelectStep
     | LoroHqlIterateIndexStep
     | LoroHqlResolveStep
-    | LoroHqlJoinStep; // Add Join step
+    | LoroHqlJoinStep
+    | LoroHqlAggregateStep; // <-- Add Aggregate step
 
 // Redefined top-level query using steps
 export interface LoroHqlQueryExtended {
@@ -1028,10 +1051,20 @@ async function processJoinStep(
     context: QueryContext
 ): Promise<QueryContext> {
     const updatedContext = { ...context };
-    const leftArray = context[step.left.variable] as StepResultItem[] | undefined;
-    const rightArray = context[step.right.variable] as StepResultItem[] | undefined;
+    // Use the new union type for inputs
+    const leftArray = context[step.left.variable] as JoinInputItem[] | undefined;
+    const rightArray = context[step.right.variable] as JoinInputItem[] | undefined;
     const joinType = step.type ?? 'inner';
     const joinedResults: QueryResult[] = [];
+
+    // <<< JOIN DEBUG LOGS START >>>
+    const isTagJoin = step.left.variable === 'baseTaskInfo' && step.right.variable === 'taskTagLinks';
+    if (isTagJoin) {
+        console.log(`[Query Engine JOIN DEBUG - Tags] Entering join step.`);
+        console.log(`  - Left Array (${step.left.variable}, key: ${step.left.key}):`, JSON.stringify(leftArray));
+        console.log(`  - Right Array (${step.right.variable}, key: ${step.right.key}):`, JSON.stringify(rightArray));
+    }
+    // <<< JOIN DEBUG LOGS END >>>
 
     if (!Array.isArray(leftArray) || !Array.isArray(rightArray)) {
         console.warn(
@@ -1042,36 +1075,87 @@ async function processJoinStep(
     }
 
     // Build a map from the right array for efficient lookup (inner/left join)
-    const rightMap = new Map<unknown, StepResultItem[]>();
+    const rightMap = new Map<unknown, JoinInputItem[]>(); // Value is array of JoinInputItem
     for (const rightItem of rightArray) {
-        if (typeof rightItem !== 'object' || !rightItem || !('variables' in rightItem)) continue;
-        const rightKey = rightItem.variables[step.right.key];
-        if (rightKey === undefined) continue;
-
-        if (!rightMap.has(rightKey)) {
-            rightMap.set(rightKey, []);
+        let rightKey: unknown;
+        if (typeof rightItem === 'object' && rightItem !== null) {
+            // Explicit type guard
+            if ('variables' in rightItem && typeof rightItem.variables === 'object' && rightItem.variables !== null) {
+                // Cast to StepResultItem within this block
+                rightKey = (rightItem as StepResultItem).variables[step.right.key];
+            } else {
+                // Cast to QueryResult (flat structure) within this block
+                rightKey = (rightItem as QueryResult)[step.right.key];
+            }
+            if (rightKey !== undefined) {
+                if (!rightMap.has(rightKey)) {
+                    rightMap.set(rightKey, []);
+                }
+                rightMap.get(rightKey)!.push(rightItem);
+            }
         }
-        rightMap.get(rightKey)!.push(rightItem);
     }
 
     // Iterate through the left array and perform the join
     for (const leftItem of leftArray) {
-        if (typeof leftItem !== 'object' || !leftItem || !('variables' in leftItem)) continue;
-        const leftKey = leftItem.variables[step.left.key];
+        let leftKey: unknown;
+        if (typeof leftItem === 'object' && leftItem !== null) {
+            // Explicit type guard
+            if ('variables' in leftItem && typeof leftItem.variables === 'object' && leftItem.variables !== null) {
+                // Cast to StepResultItem within this block
+                leftKey = (leftItem as StepResultItem).variables[step.left.key];
+            } else {
+                // Cast to QueryResult (flat structure) within this block
+                leftKey = (leftItem as QueryResult)[step.left.key];
+            }
+        }
+
+        // <<< JOIN DEBUG LOGS START >>>
+        if (isTagJoin) {
+            console.log(`[Query Engine JOIN DEBUG - Tags] Processing left item with key ${step.left.key}=${leftKey}`);
+        }
+        // <<< JOIN DEBUG LOGS END >>>
 
         const matchingRightItems = leftKey !== undefined ? rightMap.get(leftKey) : undefined;
+
+        // <<< JOIN DEBUG LOGS START >>>
+        if (isTagJoin) {
+            if (matchingRightItems && matchingRightItems.length > 0) {
+                console.log(`  - Found ${matchingRightItems.length} matching right item(s) for key ${leftKey}`);
+            } else {
+                console.log(`  - Found NO matching right item(s) for key ${leftKey}`);
+            }
+        }
+        // <<< JOIN DEBUG LOGS END >>>
 
         if (matchingRightItems && matchingRightItems.length > 0) {
             // Inner join: process matches
             for (const rightItem of matchingRightItems) {
                 const joinedItem: QueryResult = {};
                 for (const [outputKey, sourceDef] of Object.entries(step.select)) {
+                    // FIX: Use explicit casts based on type guard
                     if (sourceDef.source.startsWith('left.')) {
                         const varName = sourceDef.source.substring(5);
-                        joinedItem[outputKey] = leftItem.variables[varName];
+                        if (typeof leftItem === 'object' && leftItem !== null) {
+                            if ('variables' in leftItem && typeof leftItem.variables === 'object' && leftItem.variables !== null) {
+                                joinedItem[outputKey] = (leftItem as StepResultItem).variables[varName];
+                            } else {
+                                joinedItem[outputKey] = (leftItem as QueryResult)[varName];
+                            }
+                        } else {
+                            joinedItem[outputKey] = undefined;
+                        }
                     } else if (sourceDef.source.startsWith('right.')) {
                         const varName = sourceDef.source.substring(6);
-                        joinedItem[outputKey] = rightItem.variables[varName];
+                        if (typeof rightItem === 'object' && rightItem !== null) {
+                            if ('variables' in rightItem && typeof rightItem.variables === 'object' && rightItem.variables !== null) {
+                                joinedItem[outputKey] = (rightItem as StepResultItem).variables[varName];
+                            } else {
+                                joinedItem[outputKey] = (rightItem as QueryResult)[varName];
+                            }
+                        } else {
+                            joinedItem[outputKey] = undefined;
+                        }
                     } else {
                         console.warn(`[Query Engine JOIN] Invalid source '${sourceDef.source}' in select. Must start with 'left.' or 'right.'.`);
                     }
@@ -1084,7 +1168,16 @@ async function processJoinStep(
             for (const [outputKey, sourceDef] of Object.entries(step.select)) {
                 if (sourceDef.source.startsWith('left.')) {
                     const varName = sourceDef.source.substring(5);
-                    joinedItem[outputKey] = leftItem.variables[varName];
+                    // FIX: Use explicit casts based on type guard
+                    if (typeof leftItem === 'object' && leftItem !== null) {
+                        if ('variables' in leftItem && typeof leftItem.variables === 'object' && leftItem.variables !== null) {
+                            joinedItem[outputKey] = (leftItem as StepResultItem).variables[varName];
+                        } else {
+                            joinedItem[outputKey] = (leftItem as QueryResult)[varName];
+                        }
+                    } else {
+                        joinedItem[outputKey] = undefined;
+                    }
                 } else {
                     // Right side fields are null/undefined in a left join with no match
                     joinedItem[outputKey] = undefined;
@@ -1096,6 +1189,69 @@ async function processJoinStep(
     }
 
     updatedContext[step.resultVariable] = joinedResults;
+    return updatedContext;
+}
+// <<< END NEW STEP PROCESSING FUNCTION >>>
+
+// <<< START NEW STEP PROCESSING FUNCTION: processAggregateStep >>>
+async function processAggregateStep(
+    step: LoroHqlAggregateStep,
+    context: QueryContext
+): Promise<QueryContext> {
+    const updatedContext = { ...context };
+    const inputData = context[step.fromVariable] as QueryResult[] | undefined;
+    const groupMap = new Map<unknown, QueryResult>();
+
+    if (!Array.isArray(inputData)) {
+        console.warn(
+            `[Query Engine AGGREGATE] Input variable '${step.fromVariable}' is not an array. Skipping aggregation.`
+        );
+        updatedContext[step.resultVariable] = [];
+        return updatedContext;
+    }
+
+    for (const item of inputData) {
+        if (typeof item !== 'object' || item === null) continue;
+
+        const groupKey = item[step.groupByKey];
+        if (groupKey === undefined) continue; // Skip items missing the group key
+
+        if (!groupMap.has(groupKey)) {
+            // First item for this group - initialize the aggregated object
+            const newGroupItem: QueryResult = {};
+            // Include the group key itself
+            newGroupItem[step.groupByKey] = groupKey;
+
+            for (const [outputField, rule] of Object.entries(step.aggregateFields)) {
+                const sourceValue = item[rule.sourceField];
+                if (rule.operation === 'first') {
+                    newGroupItem[outputField] = sourceValue;
+                } else if (rule.operation === 'collect') {
+                    // Initialize array and add the first value (if it exists)
+                    newGroupItem[outputField] = sourceValue !== undefined && sourceValue !== null ? [sourceValue] : [];
+                } else {
+                    console.warn(`[Query Engine AGGREGATE] Unsupported operation '${rule.operation}' for field '${outputField}'.`);
+                }
+            }
+            groupMap.set(groupKey, newGroupItem);
+        } else {
+            // Existing group - update collected arrays
+            const existingGroupItem = groupMap.get(groupKey)!;
+            for (const [outputField, rule] of Object.entries(step.aggregateFields)) {
+                if (rule.operation === 'collect') {
+                    const sourceValue = item[rule.sourceField];
+                    const currentArray = existingGroupItem[outputField] as unknown[];
+                    // Add sourceValue if it exists and is not already in the array
+                    if (sourceValue !== undefined && sourceValue !== null && !currentArray.includes(sourceValue)) {
+                        currentArray.push(sourceValue);
+                    }
+                } // 'first' operation fields are already set from the first item
+            }
+        }
+    }
+
+    // Convert map values to array
+    updatedContext[step.resultVariable] = Array.from(groupMap.values());
     return updatedContext;
 }
 // <<< END NEW STEP PROCESSING FUNCTION >>>
@@ -1161,6 +1317,9 @@ export async function executeQuery(
                     break;
                 case 'join':
                     context = await processJoinStep(step as LoroHqlJoinStep, context);
+                    break;
+                case 'aggregate':
+                    context = await processAggregateStep(step as LoroHqlAggregateStep, context);
                     break;
                 default: {
                     const unknownAction = (step as LoroHqlStepBase)?.action ?? 'unknown';

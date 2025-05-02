@@ -45,6 +45,7 @@
 	let gunkaPubKey = $state<string | null>(null);
 	let cnemePubKey = $state<string | null>(null);
 	let ponsePubKey = $state<string | null>(null);
+	let ckajiPubKey = $state<string | null>(null);
 
 	// Type for the actual map inside the schemas index
 	type SchemaRegistryMap = Record<string, string>;
@@ -143,9 +144,12 @@
 				gunkaPubKey = schemaMap['gunka'] ?? null;
 				cnemePubKey = schemaMap['cneme'] ?? null;
 				ponsePubKey = schemaMap['ponse'] ?? null;
+				ckajiPubKey = schemaMap['ckaji'] ?? null;
 
-				if (!tciniPubKey || !gunkaPubKey || !cnemePubKey) {
-					const missing = ['tcini', 'gunka', 'cneme'].filter((k) => !schemaMap[k]).join(', ');
+				if (!tciniPubKey || !gunkaPubKey || !cnemePubKey || !ponsePubKey || !ckajiPubKey) {
+					const missing = ['tcini', 'gunka', 'cneme', 'ponse', 'ckaji']
+						.filter((k) => !schemaMap[k])
+						.join(', ');
 					throw new Error(`Could not find required schema pubkeys in 'schemas' index: ${missing}`);
 				}
 				schemaError = null; // Clear error on success
@@ -161,6 +165,7 @@
 			gunkaPubKey = null;
 			cnemePubKey = null;
 			ponsePubKey = null;
+			ckajiPubKey = null;
 		} finally {
 			isSchemaLoading = false;
 		}
@@ -169,9 +174,10 @@
 	// --- Reactive Query Construction ---
 	$effect(() => {
 		if (tciniPubKey && gunkaPubKey && cnemePubKey && !isSchemaLoading && !schemaError) {
-			console.log('[Todos] Constructing dynamic query with fetched schema IDs.');
+			console.log('[Todos] Constructing query with aggregate step.');
 			const dynamicTodosQuery: LoroHqlQueryExtended = {
 				steps: [
+					// Step 1: Find Task Status Links (tcini: task -> status)
 					{
 						action: 'find',
 						target: { schema: tciniPubKey },
@@ -182,16 +188,29 @@
 						resultVariable: 'taskStatusLinks',
 						return: 'array'
 					},
+					// Step 2: Find Task Assignment Links (gunka: worker -> task)
 					{
 						action: 'find',
 						target: { schema: gunkaPubKey },
 						variables: {
 							workerVar: { source: 'link.x1' },
-							assignedTaskVar: { source: 'link.x2' }
+							assignedTaskVar: { source: 'link.x2' } // Task is x2 in gunka
 						},
 						resultVariable: 'taskAssignmentLinks',
 						return: 'array'
 					},
+					// Step 3: Find Task Tag Links (ckaji: task -> tag)
+					{
+						action: 'find',
+						target: { schema: ckajiPubKey! },
+						variables: {
+							taskForTagVar: { source: 'link.x1' },
+							tagLeafVar: { source: 'link.x2' }
+						},
+						resultVariable: 'taskTagLinks',
+						return: 'array'
+					},
+					// Step 4: Join task status and assignments
 					{
 						action: 'join',
 						left: { variable: 'taskStatusLinks', key: 'taskVar' },
@@ -202,11 +221,26 @@
 							statusLeafId: { source: 'left.statusLeafVar' },
 							workerId: { source: 'right.workerVar' }
 						},
-						resultVariable: 'joinedTaskInfo'
+						resultVariable: 'baseTaskInfo'
 					},
+					// Step 5: Join Tags onto Base Info
+					{
+						action: 'join',
+						left: { variable: 'baseTaskInfo', key: 'taskId' },
+						right: { variable: 'taskTagLinks', key: 'taskForTagVar' },
+						type: 'left',
+						select: {
+							taskId: { source: 'left.taskId' },
+							statusLeafId: { source: 'left.statusLeafId' },
+							workerId: { source: 'left.workerId' },
+							tagLeafId: { source: 'right.tagLeafVar' }
+						},
+						resultVariable: 'taskWithTagsInfo'
+					},
+					// Step 6: Resolve Names and Status (and Tag)
 					{
 						action: 'resolve',
-						fromVariable: 'joinedTaskInfo',
+						fromVariable: 'taskWithTagsInfo',
 						resolveFields: {
 							taskName: {
 								type: 'resolveLeafValue',
@@ -225,9 +259,30 @@
 								pubkeyVar: 'statusLeafId',
 								fallbackVar: 'statusLeafId',
 								valueField: 'value'
+							},
+							tag: {
+								type: 'resolveLeafValue',
+								pubkeyVar: 'tagLeafId',
+								valueField: 'value',
+								fallbackVar: 'tagLeafId'
 							}
 						},
-						resultVariable: 'resolvedTodos'
+						resultVariable: 'resolvedTodosWithTags' // Flat list result
+					},
+					// Step 7: Aggregate tags into an array
+					{
+						action: 'aggregate',
+						fromVariable: 'resolvedTodosWithTags',
+						groupByKey: 'taskId',
+						aggregateFields: {
+							taskName: { sourceField: 'taskName', operation: 'first' },
+							workerName: { sourceField: 'workerName', operation: 'first' },
+							status: { sourceField: 'status', operation: 'first' },
+							statusLeafId: { sourceField: 'statusLeafId', operation: 'first' },
+							workerId: { sourceField: 'workerId', operation: 'first' },
+							tags: { sourceField: 'tag', operation: 'collect' } // Collect tags
+						},
+						resultVariable: 'aggregatedTodos' // Final result variable
 					}
 				]
 			};
@@ -299,7 +354,7 @@
 						steps: [
 							{
 								action: 'find',
-								target: { schema: ponsePubKey, x1: matchingUserIdLeaf._sourceKey }, // Find by user ID leaf pubkey in x1
+								target: { schema: ponsePubKey!, x1: matchingUserIdLeaf._sourceKey }, // Added non-null assertion for ponsePubKey
 								variables: {
 									personConceptPubKeyVar: { source: 'link.x2' } // Get x2
 								},
@@ -310,15 +365,24 @@
 					};
 					const linkResult = await executeQuery(findLinkAgainQuery, user);
 
+					// Robust check for the result structure before accessing
 					if (
 						linkResult &&
 						Array.isArray(linkResult) &&
 						linkResult.length > 0 &&
-						linkResult[0]?.variables?.personConceptPubKeyVar
+						linkResult[0] && // Check item exists
+						typeof linkResult[0].variables === 'object' &&
+						linkResult[0].variables !== null &&
+						'personConceptPubKeyVar' in linkResult[0].variables &&
+						typeof linkResult[0].variables.personConceptPubKeyVar === 'string' // Check type
 					) {
-						// Assert type after checking existence
-						personPubKey = (linkResult[0].variables as { personConceptPubKeyVar: string })
-							.personConceptPubKeyVar;
+						personPubKey = linkResult[0].variables.personConceptPubKeyVar;
+					} else {
+						// Log if structure is not as expected
+						console.warn(
+							'[findUserPersonConceptPubKey] Query result structure for link is unexpected:',
+							linkResult
+						);
 					}
 				}
 			}
@@ -731,35 +795,6 @@
 		}
 	});
 
-	// --- Kanban Grouping ---
-	let groupedTodos = $derived.by(() => {
-		console.log(
-			'[Todos $derived] Grouping todos. Input count:',
-			todos.length,
-			'Data:',
-			JSON.stringify(todos)
-		);
-		const groups: { [key: string]: QueryResult[] } = {
-			'not-started': [],
-			'in-progress': [],
-			completed: []
-		};
-		for (const todo of todos) {
-			const status = todo.status as string;
-			console.log(`[Todos $derived] Processing todo ${todo.taskId}, status: '${status}'`);
-			if (groups[status]) {
-				groups[status].push(todo);
-				console.log(
-					`[Todos $derived] Added ${todo.taskId} to group '${status}'. Group size: ${groups[status].length}`
-				);
-			} else {
-				console.warn(`[Todos $derived] Todo with unknown status found: '${status}'`, todo);
-			}
-		}
-		console.log('[Todos $derived] Final groups:', JSON.stringify(groups));
-		return groups;
-	});
-
 	// --- Dnd Handling ---
 	const statuses = [STATUS_NOT_STARTED_ID, STATUS_IN_PROGRESS_ID, STATUS_COMPLETED_ID];
 
@@ -860,12 +895,13 @@
 
 	{#if !isSchemaLoading && !isLoadingQueryData && !queryError}
 		<div class="grid flex-1 grid-cols-3 gap-4 overflow-hidden">
+			<!-- Not Started Column -->
 			<div class="flex flex-col overflow-hidden rounded-lg bg-white p-4 shadow">
 				<div class="mb-3 flex items-center justify-between">
 					<h3 class="font-semibold text-[#153243]">Todo</h3>
-					<span class="ml-2 rounded-md bg-[#DDD4C9] px-2 py-0.5 text-xs font-medium text-[#153243]"
-						>{groupedTodos['not-started'].length}</span
-					>
+					<span class="ml-2 rounded-md bg-[#DDD4C9] px-2 py-0.5 text-xs font-medium text-[#153243]">
+						{todos.filter((t) => t.status === 'not-started').length}
+					</span>
 				</div>
 				<ul
 					class="flex-1 space-y-3 overflow-y-auto pr-1"
@@ -874,8 +910,8 @@
 						callbacks: { onDrop: handleDrop }
 					}}
 				>
-					{#each groupedTodos['not-started'] as item (item.taskId)}
-						{#if item.taskId}
+					{#each todos as item (item.taskId)}
+						{#if item.status === 'not-started'}
 							{@const taskName = typeof item.taskName === 'string' ? item.taskName : '(No Name)'}
 							{@const workerName =
 								typeof item.workerName === 'string' ? item.workerName : '(No Worker)'}
@@ -888,6 +924,19 @@
 							>
 								<p class="mb-1 font-semibold text-[#153243]">{taskName}</p>
 								<p class="text-xs text-gray-500">Assignee: {workerName}</p>
+								{#if item.tags && Array.isArray(item.tags) && item.tags.length > 0}
+									<div class="mt-2 flex flex-wrap gap-1">
+										{#each item.tags as tag}
+											{#if tag}
+												<span
+													class="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-800"
+												>
+													{tag}
+												</span>
+											{/if}
+										{/each}
+									</div>
+								{/if}
 								<button
 									on:click={() => deleteTodo(item)}
 									class="absolute top-1 right-1 rounded-full p-1 text-[#D38F7A] opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 focus:opacity-100 focus:outline-none"
@@ -915,12 +964,13 @@
 				</ul>
 			</div>
 
+			<!-- In Progress Column -->
 			<div class="flex flex-col overflow-hidden rounded-lg bg-white p-4 shadow">
 				<div class="mb-3 flex items-center justify-between">
 					<h3 class="font-semibold text-[#153243]">In Progress</h3>
-					<span class="ml-2 rounded-md bg-[#DDD4C9] px-2 py-0.5 text-xs font-medium text-[#153243]"
-						>{groupedTodos['in-progress'].length}</span
-					>
+					<span class="ml-2 rounded-md bg-[#DDD4C9] px-2 py-0.5 text-xs font-medium text-[#153243]">
+						{todos.filter((t) => t.status === 'in-progress').length}
+					</span>
 				</div>
 				<ul
 					class="flex-1 space-y-3 overflow-y-auto pr-1"
@@ -929,8 +979,8 @@
 						callbacks: { onDrop: handleDrop }
 					}}
 				>
-					{#each groupedTodos['in-progress'] as item (item.taskId)}
-						{#if item.taskId}
+					{#each todos as item (item.taskId)}
+						{#if item.status === 'in-progress'}
 							{@const taskName = typeof item.taskName === 'string' ? item.taskName : '(No Name)'}
 							{@const workerName =
 								typeof item.workerName === 'string' ? item.workerName : '(No Worker)'}
@@ -943,6 +993,19 @@
 							>
 								<p class="mb-1 font-semibold text-[#153243]">{taskName}</p>
 								<p class="text-xs text-gray-500">Assignee: {workerName}</p>
+								{#if item.tags && Array.isArray(item.tags) && item.tags.length > 0}
+									<div class="mt-2 flex flex-wrap gap-1">
+										{#each item.tags as tag}
+											{#if tag}
+												<span
+													class="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-800"
+												>
+													{tag}
+												</span>
+											{/if}
+										{/each}
+									</div>
+								{/if}
 								<button
 									on:click={() => deleteTodo(item)}
 									class="absolute top-1 right-1 rounded-full p-1 text-[#D38F7A] opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 focus:opacity-100 focus:outline-none"
@@ -970,12 +1033,13 @@
 				</ul>
 			</div>
 
+			<!-- Done Column -->
 			<div class="flex flex-col overflow-hidden rounded-lg bg-[#f5f1e8] p-4 shadow">
 				<div class="mb-3 flex items-center justify-between">
 					<h3 class="font-semibold text-[#153243]">Done</h3>
-					<span class="ml-2 rounded-md bg-[#DDD4C9] px-2 py-0.5 text-xs font-medium text-[#153243]"
-						>{groupedTodos['completed'].length}</span
-					>
+					<span class="ml-2 rounded-md bg-[#DDD4C9] px-2 py-0.5 text-xs font-medium text-[#153243]">
+						{todos.filter((t) => t.status === 'completed').length}
+					</span>
 				</div>
 				<ul
 					class="flex-1 space-y-3 overflow-y-auto pr-1"
@@ -984,8 +1048,8 @@
 						callbacks: { onDrop: handleDrop }
 					}}
 				>
-					{#each groupedTodos['completed'] as item (item.taskId)}
-						{#if item.taskId}
+					{#each todos as item (item.taskId)}
+						{#if item.status === 'completed'}
 							{@const taskName = typeof item.taskName === 'string' ? item.taskName : '(No Name)'}
 							{@const workerName =
 								typeof item.workerName === 'string' ? item.workerName : '(No Worker)'}
@@ -998,6 +1062,19 @@
 							>
 								<p class="mb-1 font-semibold text-gray-500 line-through">{taskName}</p>
 								<p class="text-xs text-gray-400 line-through">Assignee: {workerName}</p>
+								{#if item.tags && Array.isArray(item.tags) && item.tags.length > 0}
+									<div class="mt-2 flex flex-wrap gap-1">
+										{#each item.tags as tag}
+											{#if tag}
+												<span
+													class="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-800 line-through"
+												>
+													{tag}
+												</span>
+											{/if}
+										{/each}
+									</div>
+								{/if}
 								<button
 									on:click={() => deleteTodo(item)}
 									class="absolute top-1 right-1 rounded-full p-1 text-[#D38F7A] opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 focus:opacity-100 focus:outline-none"

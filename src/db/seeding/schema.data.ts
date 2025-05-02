@@ -225,45 +225,87 @@ export const ponseSchema: SchemaRecord = {
     data: {
         schemaId: '@schema/ponse',
         name: 'ponse',
-        places: { x1: 'possessor', x2: 'possession' },
+        places: {
+            x1: 'owner', // entity possessing (e.g., user ID leaf)
+            x2: 'possessed' // entity possessed (e.g., person concept leaf)
+        },
         translations: {
             en: {
-                purpose: 'Links a possessor/owner (x1) to their possession(s) (x2). Used here to link a UserID Leaf to a Person Concept Leaf.',
+                purpose: 'Indicates ownership or possession.',
                 prompt: `
 *Details:*
-    - x1: The Leaf representing the owner (e.g., a Leaf containing a User ID string).
-    - x2: The Leaf representing the item being possessed (e.g., the Person Concept Leaf).
-*Usage Example:*
-    - 'ponse(@leaf_user123, @concept_person_abc)' -> The entity represented by @leaf_user123 owns/possesses the entity @concept_person_abc.
+    - x1: The entity that possesses or owns something.
+    - x2: The entity that is possessed or owned.
+*Usage Examples:*
+    1. User Ownership: 'ponse(@user_id_leaf_abc, @person_concept_xyz)' -> User ABC owns Person XYZ.
                 `,
                 places: {
-                    x1: { title: 'Owner Leaf', description: 'Leaf representing the possessor (e.g., User ID Leaf)' },
-                    x2: { title: 'Possession Leaf', description: 'Leaf representing the owned item (e.g., Person Concept)' }
+                    x1: { title: 'Owner', description: 'Entity possessing the item' },
+                    x2: { title: 'Possessed Item', description: 'Entity that is owned' }
+                }
+            }
+            // Add 'de' translation if needed
+        }
+    }
+};
+
+// --- NEW SCHEMA: ckaji (Property/Tag Association) ---
+export const ckajiSchema: SchemaRecord = {
+    pubkey: '@schema/ckaji',
+    metadata: { type: 'Schema' },
+    data: {
+        schemaId: '@schema/ckaji',
+        name: 'ckaji',
+        places: {
+            x1: 'entity',   // The thing having the property
+            x2: 'property'  // The property/tag itself
+        },
+        translations: {
+            en: {
+                purpose: 'Associates an entity with a specific property, quality, trait, feature, or tag.',
+                prompt: `
+*Details:*
+    - x1: The entity that possesses the property/quality.
+    - x2: The specific property, quality, trait, or tag applied to x1. Often a simple text value or concept.
+*Usage Examples:*
+    1. Tagging a Task: 'ckaji(@task1, @tag_urgent)' -> Task 1 has the tag "urgent".
+    2. Describing a Person: 'ckaji(@person_xyz, @trait_creative)' -> Person XYZ has the trait "creative".
+    3. Feature Flag: 'ckaji(@user_abc, @feature_beta_access)' -> User ABC has beta access.
+                `,
+                places: {
+                    x1: { title: 'Entity', description: 'The item possessing the property/tag.' },
+                    x2: { title: 'Property/Tag', description: 'The specific quality, feature, or tag applied.' }
                 }
             },
             de: {
-                purpose: 'Verknüpft einen Besitzer (x1) mit seinem Besitz (x2). Wird hier verwendet, um ein UserID-Leaf mit einem Personenkonzept-Leaf zu verknüpfen.',
+                purpose: 'Verbindet eine Entität mit einer spezifischen Eigenschaft, Qualität, Merkmal, Feature oder einem Tag.',
                 prompt: `
 *Details:*
-    - x1: Das Leaf, das den Besitzer repräsentiert (z. B. ein Leaf mit einer User-ID).
-    - x2: Das Leaf, das den besessenen Gegenstand repräsentiert (z. B. das Personenkonzept-Leaf).
-*Anwendungsbeispiel:*
-    - 'ponse(@leaf_user123, @concept_person_abc)' -> Die durch @leaf_user123 repräsentierte Entität besitzt die Entität @concept_person_abc.
+    - x1: Die Entität, die die Eigenschaft/Qualität besitzt.
+    - x2: Die spezifische Eigenschaft, Qualität, Merkmal oder der Tag, der auf x1 angewendet wird. Oft ein einfacher Textwert oder ein Konzept.
+*Anwendungsbeispiele:*
+    1. Aufgabe markieren: 'ckaji(@task1, @tag_urgent)' -> Aufgabe 1 hat das Tag "dringend".
+    2. Person beschreiben: 'ckaji(@person_xyz, @trait_creative)' -> Person XYZ hat die Eigenschaft "kreativ".
+    3. Feature-Flag: 'ckaji(@user_abc, @feature_beta_access)' -> Benutzer ABC hat Beta-Zugriff.
                 `,
                 places: {
-                    x1: { title: 'Besitzer-Leaf', description: 'Leaf, das den Besitzer repräsentiert (z.B. User-ID-Leaf)' },
-                    x2: { title: 'Besitz-Leaf', description: 'Leaf, das das besessene Element repräsentiert (z.B. Personenkonzept)' }
+                    x1: { title: 'Entität', description: 'Das Element, das die Eigenschaft/den Tag besitzt.' },
+                    x2: { title: 'Eigenschaft/Tag', description: 'Die spezifische Qualität, das Merkmal oder der angewendete Tag.' }
                 }
             }
         }
     }
 };
+// --- END NEW SCHEMA ---
 
-// Renamed from initialSelbri - Now contains all defined schemas
-export const initialSchemas: SchemaRecord[] = [
-    gunkaSchema,
-    prenuSchema,
-    cnemeSchema,
-    tciniSchema,
-    ponseSchema // Add the new one
+/**
+ * Array containing all predefined Schema Records for seeding.
+ */
+export const allSchemaRecords: SchemaRecord[] = [
+    cnemeSchema, // Name
+    tciniSchema, // Status
+    gunkaSchema, // Work
+    prenuSchema, // Person
+    ponseSchema, // Possession/Ownership
+    ckajiSchema  // Property/Tag <-- Add new schema
 ];

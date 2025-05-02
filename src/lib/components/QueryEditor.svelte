@@ -102,6 +102,7 @@
 					// STEP 5: Get specific schema pubkeys from the map
 					const tciniPubKey = schemaRegistryMap['tcini'] ?? 'TCINI_PUBKEY_NOT_FOUND';
 					const gunkaPubKey = schemaRegistryMap['gunka'] ?? 'GUNKA_PUBKEY_NOT_FOUND'; // Get gunka key
+					const ckajiPubKey = schemaRegistryMap['ckaji'] ?? 'CKAJI_PUBKEY_NOT_FOUND'; // <-- Get ckaji key
 
 					// STEP 6: Construct the default query (more complex version)
 					// Query Explanation:
@@ -135,45 +136,94 @@
 								resultVariable: 'taskAssignmentLinks',
 								return: 'array'
 							},
-							// Step 3: Join task status and assignments
 							{
+								// Step 3: Find Task Tag Links (ckaji: task -> tag)
+								action: 'find',
+								target: { schema: ckajiPubKey },
+								variables: {
+									taskForTagVar: { source: 'link.x1' },
+									tagLeafVar: { source: 'link.x2' }
+								},
+								resultVariable: 'taskTagLinks',
+								return: 'array'
+							},
+							{
+								// Step 4: Join task status and assignments
 								action: 'join',
 								left: { variable: 'taskStatusLinks', key: 'taskVar' },
 								right: { variable: 'taskAssignmentLinks', key: 'assignedTaskVar' },
+								type: 'left', // Keep tasks even if unassigned
 								select: {
-									taskId: { source: 'left.taskVar' }, // Explicitly select taskId from left side
+									taskId: { source: 'left.taskVar' },
 									statusLeafId: { source: 'left.statusLeafVar' },
-									workerId: { source: 'right.workerVar' }
+									workerId: { source: 'right.workerVar' } // May be null
 								},
-								resultVariable: 'joinedTaskInfo' // Result of the join
+								resultVariable: 'baseTaskInfo'
 							},
 							{
-								// Step 4: Resolve Names and Status
+								// Step 5: Join Tags onto Base Info
+								action: 'join',
+								left: { variable: 'baseTaskInfo', key: 'taskId' },
+								right: { variable: 'taskTagLinks', key: 'taskForTagVar' },
+								type: 'left', // Keep tasks even without tags
+								select: {
+									taskId: { source: 'left.taskId' },
+									statusLeafId: { source: 'left.statusLeafId' },
+									workerId: { source: 'left.workerId' },
+									tagLeafId: { source: 'right.tagLeafVar' } // May be null
+								},
+								resultVariable: 'taskWithTagsInfo' // Holds IDs for final resolve
+							},
+							{
+								// Step 6: Resolve Names and Status (and Tag)
 								action: 'resolve',
-								fromVariable: 'joinedTaskInfo', // Use the joined results
+								fromVariable: 'taskWithTagsInfo', // Use the tag-joined results
 								resolveFields: {
 									taskName: {
 										type: 'resolveLeafValue',
-										pubkeyVar: 'taskId', // Use taskId from joined data
+										pubkeyVar: 'taskId',
 										fallbackVar: 'taskId',
-										excludeType: 'Concept' // Use cneme lookup for tasks
+										excludeType: 'Concept'
 									},
 									workerName: {
 										type: 'resolveLeafValue',
 										pubkeyVar: 'workerId',
 										fallbackVar: 'workerId',
-										excludeType: 'Concept' // Use cneme lookup for workers
+										excludeType: 'Concept'
 									},
 									status: {
 										type: 'resolveLeafValue',
 										pubkeyVar: 'statusLeafId',
 										fallbackVar: 'statusLeafId',
-										valueField: 'value' // Get the text value directly
-										// No excludeType needed for status leaves
+										valueField: 'value'
+									},
+									tag: {
+										type: 'resolveLeafValue',
+										pubkeyVar: 'tagLeafId',
+										valueField: 'value',
+										fallbackVar: 'tagLeafId' // Use ID as fallback
 									}
 								},
-								resultVariable: 'resolvedTodos' // Final results
+								resultVariable: 'resolvedTodosWithTags' // Final results variable name
+							},
+							// --- NEW Step 7: Aggregate tags into an array ---
+							{
+								action: 'aggregate',
+								fromVariable: 'resolvedTodosWithTags', // Input is the flat list
+								groupByKey: 'taskId', // Group by task ID
+								aggregateFields: {
+									// Take the first value for fields that are constant within the group
+									taskName: { sourceField: 'taskName', operation: 'first' },
+									workerName: { sourceField: 'workerName', operation: 'first' },
+									status: { sourceField: 'status', operation: 'first' },
+									statusLeafId: { sourceField: 'statusLeafId', operation: 'first' }, // Keep IDs if needed
+									workerId: { sourceField: 'workerId', operation: 'first' },
+									// Collect tag values into an array called 'tags'
+									tags: { sourceField: 'tag', operation: 'collect' }
+								},
+								resultVariable: 'aggregatedTodos' // Final aggregated result
 							}
+							// --- END NEW Step 7 ---
 						]
 					};
 					// Set the queryText store with the formatted JSON string

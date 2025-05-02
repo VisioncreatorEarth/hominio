@@ -8,7 +8,7 @@ import { GENESIS_HOMINIO, GENESIS_PUBKEY } from './constants';
 
 // Import data from seeding files
 import { initialLeaves } from './seeding/leaf.data';
-import { initialSchemas } from './seeding/schema.data';
+import { allSchemaRecords } from './seeding/schema.data';
 import { initialComposites } from './seeding/composite.data';
 import type { LeafRecord } from './seeding/leaf.data';
 import type { SchemaRecord } from './seeding/schema.data';
@@ -384,7 +384,7 @@ async function main() {
         console.log("\n--- Pre-generating Content PubKeys ---");
         const allContentRecords = [
             ...initialLeaves,
-            ...initialSchemas,
+            ...allSchemaRecords,
             ...initialComposites
         ];
         for (const record of allContentRecords) {
@@ -475,7 +475,7 @@ async function main() {
 
         // 3. Prepare Schema records using their pre-generated keys
         console.log("\n--- Preparing Schema Records ---");
-        for (const schema of initialSchemas) {
+        for (const schema of allSchemaRecords) {
             const generatedPubKey = generatedKeys.get(schema.pubkey); // Get pre-generated key
             if (!generatedPubKey) {
                 console.error(`❌ ERROR: Could not find pre-generated key for Schema record: ${schema.pubkey}`);

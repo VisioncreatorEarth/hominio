@@ -82,6 +82,18 @@ const staticLeaves: LeafRecord[] = [
         metadata: { type: 'Leaf' },
         data: { type: 'LoroText', value: 'Alice' }
     },
+    // --- NEW: Tag Leaves ---
+    {
+        pubkey: '@tag/urgent',
+        metadata: { type: 'Leaf' },
+        data: { type: 'LoroText', value: 'urgent' }
+    },
+    {
+        pubkey: '@tag/frontend',
+        metadata: { type: 'Leaf' },
+        data: { type: 'LoroText', value: 'frontend' }
+    }
+    // --- END NEW TAGS ---
 ];
 
 // --- Dynamic Prompt Leaves ---
