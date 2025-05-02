@@ -1,4 +1,7 @@
 <script lang="ts">
+	// import { openModal } from '$lib/KERNEL/modalStore'; // Removed
+	// import HelloEarth from '$lib/components/HelloEarth.svelte'; // Removed
+
 	// import { authClient } from '$lib/KERNEL/hominio-auth'; // No longer needed here
 	// import { goto } from '$app/navigation'; // No longer needed here
 
@@ -19,6 +22,13 @@
 	*/
 
 	// handleGoogleSignIn function removed (moved to layout)
+
+	// showModal function removed (moved to layout)
+	/*
+	function showModal() {
+		openModal(HelloEarth, { message: 'World (from +page)' });
+	}
+	*/
 </script>
 
 <div class="bg-custom-beige text-custom-blue min-h-screen w-full font-sans">
@@ -44,6 +54,8 @@
 			What if your time and expertise didn't just pay the bills, but earned you a stake in something
 			bigger?
 		</p>
+
+		<!-- Google Sign In Button removed (handled in layout) -->
 
 		<!-- Footer/Spacing element -->
 		<div class="h-24"></div>

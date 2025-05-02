@@ -11,6 +11,11 @@
 	import { type Snippet } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { hominioIndexing } from '$lib/KERNEL/hominio-indexing';
+	import Modal from '$lib/components/Modal.svelte';
+	import { openModal } from '$lib/KERNEL/modalStore';
+	import HelloEarth from '$lib/components/HelloEarth.svelte';
+	import type { ComponentType } from 'svelte';
+	import Prenu from '$lib/components/Prenu.svelte';
 
 	// Get the session store from the auth client
 	const sessionStore = authClient.useSession();
@@ -85,6 +90,12 @@
 		} finally {
 			loading = false;
 		}
+	}
+
+	// Function to open the person creation modal
+	function showModal() {
+		// Open Prenu.svelte - it fetches its own schema IDs
+		openModal(Prenu as unknown as ComponentType, {}); // Cast via unknown
 	}
 
 	// Toggle modal state
@@ -250,10 +261,22 @@
 					/>
 				</svg>
 			</button>
+
+			<!-- Example Modal Trigger Button (Bottom Left) -->
+			<button
+				onclick={showModal}
+				class="fixed bottom-4 left-4 z-50 rounded-full border border-gray-300 bg-white/80 px-4 py-2 text-xs text-gray-700 shadow-lg backdrop-blur-sm transition-colors hover:bg-gray-100"
+				title="Open Example Modal"
+			>
+				Modal
+			</button>
 		{/if}
 
 		{#if isCallActive}
 			<CallInterface {callStatus} onEndCall={handleEndCall} />
 		{/if}
+
+		<!-- Render the Modal component here -->
+		<Modal />
 	</div>
 </div>
