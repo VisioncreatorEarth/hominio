@@ -1,5 +1,5 @@
 import { LoroDoc, LoroMap, LoroText, LoroList } from 'loro-crdt';
-import { hominioDB /*, triggerDocChangeNotification */ } from './hominio-db';
+import { hominioDB } from './hominio-db';
 import { canWrite, canDelete, type CapabilityUser, canCreate } from './hominio-caps';
 import type { LeafRecord, LeafValue } from '$db/seeding/leaf.data'; // Use only LeafValue union type
 import type { SchemaRecord } from '$db/seeding/schema.data';

@@ -44,6 +44,7 @@
 	let tciniPubKey = $state<string | null>(null);
 	let gunkaPubKey = $state<string | null>(null);
 	let cnemePubKey = $state<string | null>(null);
+	let ponsePubKey = $state<string | null>(null);
 
 	// Type for the actual map inside the schemas index
 	type SchemaRegistryMap = Record<string, string>;
@@ -141,6 +142,7 @@
 				tciniPubKey = schemaMap['tcini'] ?? null;
 				gunkaPubKey = schemaMap['gunka'] ?? null;
 				cnemePubKey = schemaMap['cneme'] ?? null;
+				ponsePubKey = schemaMap['ponse'] ?? null;
 
 				if (!tciniPubKey || !gunkaPubKey || !cnemePubKey) {
 					const missing = ['tcini', 'gunka', 'cneme'].filter((k) => !schemaMap[k]).join(', ');
@@ -158,6 +160,7 @@
 			tciniPubKey = null;
 			gunkaPubKey = null;
 			cnemePubKey = null;
+			ponsePubKey = null;
 		} finally {
 			isSchemaLoading = false;
 		}
@@ -237,6 +240,103 @@
 		}
 	});
 
+	// --- NEW Helper: Find User's Person Concept PubKey ---
+	async function findUserPersonConceptPubKey(): Promise<string | null> {
+		const user = currentUser;
+		if (!user || !ponsePubKey) {
+			console.error('[findUserPersonConceptPubKey] User or ponsePubKey not available.');
+			return null;
+		}
+
+		const findPersonQuery: LoroHqlQueryExtended = {
+			steps: [
+				{
+					action: 'find',
+					target: { schema: ponsePubKey },
+					variables: {
+						userIdLeafPubKeyVar: { source: 'link.x1' },
+						personConceptPubKeyVar: { source: 'link.x2' }
+					},
+					resultVariable: 'ponseLinks',
+					return: 'array'
+				},
+				{
+					action: 'get',
+					from: {
+						variable: 'ponseLinks',
+						sourceKey: 'userIdLeafPubKeyVar',
+						targetDocType: 'Leaf'
+					},
+					fields: { userIdValue: { field: 'self.data.value' } }, // Extract the value
+					resultVariable: 'userIdLeafDetails'
+				}
+			]
+		};
+
+		try {
+			const result = await executeQuery(findPersonQuery, user);
+
+			// We need to correlate ponseLinks and userIdLeafDetails.
+			// executeQuery currently returns the result of the LAST step ('userIdLeafDetails').
+			// TODO: Query engine needs enhancement to return multiple variables or join results effectively.
+			// For now, we'll re-fetch the ponseLinks based on the found user ID leaves.
+
+			let personPubKey: string | null = null;
+
+			if (result && Array.isArray(result)) {
+				const userIdDetails = result as {
+					_sourceKey: string;
+					variables: { userIdValue: string };
+				}[];
+				const matchingUserIdLeaf = userIdDetails.find(
+					(item) => item.variables.userIdValue === user.id
+				);
+
+				if (matchingUserIdLeaf) {
+					// Found the leaf with the user's ID. Now find the corresponding ponse link.
+					// Re-execute find to get the personConceptPubKeyVar
+					const findLinkAgainQuery: LoroHqlQueryExtended = {
+						steps: [
+							{
+								action: 'find',
+								target: { schema: ponsePubKey, x1: matchingUserIdLeaf._sourceKey }, // Find by user ID leaf pubkey in x1
+								variables: {
+									personConceptPubKeyVar: { source: 'link.x2' } // Get x2
+								},
+								resultVariable: 'foundLink',
+								return: 'first'
+							}
+						]
+					};
+					const linkResult = await executeQuery(findLinkAgainQuery, user);
+
+					if (
+						linkResult &&
+						Array.isArray(linkResult) &&
+						linkResult.length > 0 &&
+						linkResult[0]?.variables?.personConceptPubKeyVar
+					) {
+						// Assert type after checking existence
+						personPubKey = (linkResult[0].variables as { personConceptPubKeyVar: string })
+							.personConceptPubKeyVar;
+					}
+				}
+			}
+
+			if (!personPubKey) {
+				console.warn(
+					`[findUserPersonConceptPubKey] Could not find person concept linked to user ${user.id}`
+				);
+				return null;
+			}
+
+			return personPubKey;
+		} catch (err) {
+			console.error('[findUserPersonConceptPubKey] Error querying for person concept:', err);
+			return null;
+		}
+	}
+
 	// --- Refactored addTodo (Uses dynamic Schema IDs) ---
 	async function addTodo() {
 		if (!newTodoText.trim()) return;
@@ -245,14 +345,32 @@
 			mutationError = 'Cannot add todo: User not logged in.';
 			return;
 		}
-		if (!tciniPubKey || !cnemePubKey) {
-			mutationError = 'Cannot add todo: Schema information not loaded yet.';
-			console.error('Add todo failed: Schema pubkeys not available.', { tciniPubKey, cnemePubKey });
+		// Check all required schema keys including gunka and ponse
+		if (!tciniPubKey || !gunkaPubKey || !cnemePubKey || !ponsePubKey) {
+			mutationError =
+				'Cannot add todo: Required schema information (tcini, gunka, cneme, ponse) not loaded yet.';
+			console.error('Add todo failed: Schema pubkeys not available.', {
+				tciniPubKey,
+				gunkaPubKey,
+				cnemePubKey,
+				ponsePubKey
+			});
 			return;
 		}
+
 		isAdding = true;
 		mutationError = null;
-		console.log('Adding todo:', newTodoText);
+
+		// Find the user's person concept to use as the worker
+		const workerPubKey = await findUserPersonConceptPubKey();
+		if (!workerPubKey) {
+			mutationError =
+				'Cannot add todo: Could not find the person concept linked to your user account. Please create one first.';
+			isAdding = false;
+			return;
+		}
+
+		console.log(`Adding todo '${newTodoText}' with worker (person concept): ${workerPubKey}`);
 
 		try {
 			const taskLeafOp: CreateMutationOperation = {
@@ -297,8 +415,29 @@
 				}
 			};
 
+			// --- NEW: Link worker (user's person concept) to task using gunka ---
+			const gunkaCompositeOp: CreateMutationOperation = {
+				operation: 'create',
+				type: 'Composite',
+				placeholder: '$$gunkaLink',
+				data: {
+					schemaId: gunkaPubKey, // Use the fetched gunka schema ID
+					places: {
+						x1: workerPubKey, // Link to the found person concept pubkey
+						x2: '$$newTask' // Link to the new task concept leaf
+					}
+				}
+			};
+			// --- END NEW ---
+
 			const request: MutateHqlRequest = {
-				mutations: [taskLeafOp, taskNameLeafOp, cnemeCompositeOp, tciniCompositeOp]
+				mutations: [
+					taskLeafOp,
+					taskNameLeafOp,
+					cnemeCompositeOp,
+					tciniCompositeOp,
+					gunkaCompositeOp // <-- Add Gunka Composite creation
+				]
 			};
 			const result = await executeMutationInstance(request, user);
 
