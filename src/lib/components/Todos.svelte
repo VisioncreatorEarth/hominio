@@ -651,21 +651,24 @@
 	});
 </script>
 
-<div class="flex h-full flex-col overflow-hidden bg-[#f8f4ed] p-4">
-	<h2 class="mb-4 text-xl font-semibold text-[#0a2a4e]">Todo Kanban</h2>
+<div class="flex h-full flex-col overflow-hidden bg-[#f8f4ed] p-6">
+	<h1 class="mb-1 text-2xl font-bold text-[#153243]">Kanban Board</h1>
+	<p class="mb-6 text-sm text-gray-500">
+		Drag and drop tasks between columns to reorder them in the board.
+	</p>
 
-	<form class="mb-4 flex items-center gap-2" on:submit|preventDefault={addTodo}>
+	<form class="mb-6 flex items-center gap-2" on:submit|preventDefault={addTodo}>
 		<input
 			type="text"
 			bind:value={newTodoText}
 			placeholder="What needs to be done?"
-			class="flex-grow rounded-l border border-gray-300 bg-white px-3 py-2 text-[#0a2a4e] transition-shadow focus:border-[#a7b7cb] focus:ring-2 focus:ring-[#c5d4e8] focus:outline-none"
+			class="flex-grow rounded-md border border-gray-300 bg-white px-3 py-2 text-[#153243] transition-shadow focus:border-[#a7b7cb] focus:ring-2 focus:ring-[#c5d4e8] focus:outline-none"
 			required
 			disabled={isAdding || isSchemaLoading}
 		/>
 		<button
 			type="submit"
-			class="rounded-r bg-[#0a2a4e] px-4 py-2 text-[#f8f4ed] transition-colors hover:bg-[#1e3a5e] focus:ring-2 focus:ring-[#0a2a4e] focus:ring-offset-2 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+			class="rounded-md bg-[#153243] px-4 py-2 text-[#DDD4C9] transition-colors hover:bg-[#174C6B] focus:ring-2 focus:ring-[#153243] focus:ring-offset-2 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
 			disabled={isAdding || isSchemaLoading}
 		>
 			{#if isAdding}
@@ -680,7 +683,7 @@
 
 	{#if mutationError}
 		<div
-			class="relative mb-4 rounded border border-red-400 bg-red-100 px-4 py-3 text-red-700"
+			class="relative mb-4 rounded border border-[#D38F7A] bg-[#fceded] px-4 py-3 text-[#D38F7A]"
 			role="alert"
 		>
 			<strong class="font-bold">Mutation Error:</strong>
@@ -690,7 +693,7 @@
 				on:click={() => (mutationError = null)}
 			>
 				<svg
-					class="h-6 w-6 fill-current text-red-500"
+					class="h-6 w-6 fill-current text-[#D38F7A]"
 					role="button"
 					xmlns="http://www.w3.org/2000/svg"
 					viewBox="0 0 20 20"
@@ -708,7 +711,7 @@
 		<div class="py-4 text-center text-gray-500">Loading todos...</div>
 	{:else if queryError}
 		<div
-			class="relative mb-4 rounded border border-orange-400 bg-orange-100 px-4 py-3 text-orange-700"
+			class="relative mb-4 rounded border border-[#DBAD75] bg-[#fff8ed] px-4 py-3 text-[#DBAD75]"
 			role="alert"
 		>
 			<strong class="font-bold">Error:</strong>
@@ -718,10 +721,15 @@
 
 	{#if !isSchemaLoading && !isLoadingQueryData && !queryError}
 		<div class="grid flex-1 grid-cols-3 gap-4 overflow-hidden">
-			<div class="flex flex-col overflow-hidden rounded bg-gray-100 p-3 shadow">
-				<h3 class="mb-3 text-center font-semibold text-gray-700">Not Started</h3>
+			<div class="flex flex-col overflow-hidden rounded-lg bg-white p-4 shadow">
+				<div class="mb-3 flex items-center justify-between">
+					<h3 class="font-semibold text-[#153243]">Todo</h3>
+					<span class="ml-2 rounded-md bg-[#DDD4C9] px-2 py-0.5 text-xs font-medium text-[#153243]"
+						>{groupedTodos['not-started'].length}</span
+					>
+				</div>
 				<ul
-					class="flex-1 space-y-2 overflow-y-auto pr-1"
+					class="flex-1 space-y-3 overflow-y-auto pr-1"
 					use:droppable={{
 						container: STATUS_NOT_STARTED_ID,
 						callbacks: { onDrop: handleDrop }
@@ -733,17 +741,17 @@
 							{@const workerName =
 								typeof item.workerName === 'string' ? item.workerName : '(No Worker)'}
 							<li
-								class="group relative cursor-grab rounded border border-gray-300 bg-white p-2 shadow-sm"
+								class="group relative cursor-grab rounded-lg border border-gray-200 bg-gray-50 p-3 shadow-sm"
 								use:draggable={{
 									container: STATUS_NOT_STARTED_ID,
 									dragData: item
 								}}
 							>
-								<p class="text-sm font-medium text-[#0a2a4e]">{taskName}</p>
+								<p class="mb-1 font-semibold text-[#153243]">{taskName}</p>
 								<p class="text-xs text-gray-500">Assignee: {workerName}</p>
 								<button
 									on:click={() => deleteTodo(item)}
-									class="absolute top-1 right-1 rounded-full p-1 text-red-500 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-100 hover:text-red-700 focus:opacity-100 focus:outline-none"
+									class="absolute top-1 right-1 rounded-full p-1 text-[#D38F7A] opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 focus:opacity-100 focus:outline-none"
 									aria-label="Delete todo"
 								>
 									<svg
@@ -768,10 +776,15 @@
 				</ul>
 			</div>
 
-			<div class="flex flex-col overflow-hidden rounded bg-yellow-50 p-3 shadow">
-				<h3 class="mb-3 text-center font-semibold text-yellow-800">In Progress</h3>
+			<div class="flex flex-col overflow-hidden rounded-lg bg-white p-4 shadow">
+				<div class="mb-3 flex items-center justify-between">
+					<h3 class="font-semibold text-[#153243]">In Progress</h3>
+					<span class="ml-2 rounded-md bg-[#DDD4C9] px-2 py-0.5 text-xs font-medium text-[#153243]"
+						>{groupedTodos['in-progress'].length}</span
+					>
+				</div>
 				<ul
-					class="flex-1 space-y-2 overflow-y-auto pr-1"
+					class="flex-1 space-y-3 overflow-y-auto pr-1"
 					use:droppable={{
 						container: STATUS_IN_PROGRESS_ID,
 						callbacks: { onDrop: handleDrop }
@@ -783,17 +796,17 @@
 							{@const workerName =
 								typeof item.workerName === 'string' ? item.workerName : '(No Worker)'}
 							<li
-								class="group relative cursor-grab rounded border border-yellow-300 bg-white p-2 shadow-sm"
+								class="group relative cursor-grab rounded-lg border border-gray-200 bg-gray-50 p-3 shadow-sm"
 								use:draggable={{
 									container: STATUS_IN_PROGRESS_ID,
 									dragData: item
 								}}
 							>
-								<p class="text-sm font-medium text-[#0a2a4e]">{taskName}</p>
+								<p class="mb-1 font-semibold text-[#153243]">{taskName}</p>
 								<p class="text-xs text-gray-500">Assignee: {workerName}</p>
 								<button
 									on:click={() => deleteTodo(item)}
-									class="absolute top-1 right-1 rounded-full p-1 text-red-500 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-100 hover:text-red-700 focus:opacity-100 focus:outline-none"
+									class="absolute top-1 right-1 rounded-full p-1 text-[#D38F7A] opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 focus:opacity-100 focus:outline-none"
 									aria-label="Delete todo"
 								>
 									<svg
@@ -818,10 +831,15 @@
 				</ul>
 			</div>
 
-			<div class="flex flex-col overflow-hidden rounded bg-green-50 p-3 shadow">
-				<h3 class="mb-3 text-center font-semibold text-green-800">Completed</h3>
+			<div class="flex flex-col overflow-hidden rounded-lg bg-[#f5f1e8] p-4 shadow">
+				<div class="mb-3 flex items-center justify-between">
+					<h3 class="font-semibold text-[#153243]">Done</h3>
+					<span class="ml-2 rounded-md bg-[#DDD4C9] px-2 py-0.5 text-xs font-medium text-[#153243]"
+						>{groupedTodos['completed'].length}</span
+					>
+				</div>
 				<ul
-					class="flex-1 space-y-2 overflow-y-auto pr-1"
+					class="flex-1 space-y-3 overflow-y-auto pr-1"
 					use:droppable={{
 						container: STATUS_COMPLETED_ID,
 						callbacks: { onDrop: handleDrop }
@@ -833,17 +851,17 @@
 							{@const workerName =
 								typeof item.workerName === 'string' ? item.workerName : '(No Worker)'}
 							<li
-								class="group relative cursor-grab rounded border border-green-300 bg-white p-2 opacity-75 shadow-sm"
+								class="group relative cursor-grab rounded-lg border border-gray-200 bg-gray-50 p-3 opacity-75 shadow-sm"
 								use:draggable={{
 									container: STATUS_COMPLETED_ID,
 									dragData: item
 								}}
 							>
-								<p class="text-sm font-medium text-gray-500 line-through">{taskName}</p>
+								<p class="mb-1 font-semibold text-gray-500 line-through">{taskName}</p>
 								<p class="text-xs text-gray-400 line-through">Assignee: {workerName}</p>
 								<button
 									on:click={() => deleteTodo(item)}
-									class="absolute top-1 right-1 rounded-full p-1 text-red-500 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-100 hover:text-red-700 focus:opacity-100 focus:outline-none"
+									class="absolute top-1 right-1 rounded-full p-1 text-[#D38F7A] opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 focus:opacity-100 focus:outline-none"
 									aria-label="Delete todo"
 								>
 									<svg
