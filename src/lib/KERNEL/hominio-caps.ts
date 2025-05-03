@@ -4,8 +4,6 @@ import { GENESIS_HOMINIO } from '../../db/constants'; // Import from centralized
 import type { LoroMap } from 'loro-crdt'; // <-- Import LoroMap for type casting
 import type { LoroHqlQueryExtended } from '$lib/KERNEL/hominio-query'; // <-- Import type directly
 
-// --- Types ---
-
 // Basic representation of a user for capability checks
 export interface CapabilityUser {
     id: string;
@@ -19,8 +17,6 @@ export enum HominioAbility {
     DELETE = 'delete',
     CREATE = 'create' // Add CREATE capability
 }
-
-// --- Core Check Function --- UPDATED SIGNATURE & LOGIC
 
 /**
  * Checks if a user has a specific ability on a given document.
@@ -71,7 +67,6 @@ export function can(
     }
 }
 
-// --- Helper Functions --- UPDATED SIGNATURES
 
 /**
  * Convenience helper to check if a user can read a document.
@@ -128,15 +123,11 @@ export async function canCreatePersonConcept(user: CapabilityUser | null): Promi
     // 2. Asynchronous ownership check via HQL query
     try {
         console.log(`[canCreatePersonConcept] Performing ownership check for user: ${userId}`);
-        // Dynamic imports to mitigate circular dependency at module load time
-        // Import values
+
         const queryModule = await import('$lib/KERNEL/hominio-query');
         const executeQuery = queryModule.executeQuery;
         const indexRegistryModule = await import('$lib/KERNEL/index-registry');
         const getIndexLeafPubKey = indexRegistryModule.getIndexLeafPubKey;
-        // Import types needed for the query definition
-        // REMOVED: type LoroHqlQueryExtended = queryModule.LoroHqlQueryExtended;
-        // type IndexLeafType = indexRegistryModule.IndexLeafType; // Not strictly needed if only using getIndexLeafPubKey
 
         // Find the ponse schema ID first
         const schemasIndexKey = await getIndexLeafPubKey('schemas');
