@@ -27,7 +27,7 @@ export const initialComposites: CompositeRecord[] = [
         metadata: { type: 'Composite' },
         data: {
             schemaId: '@schema/gunka',
-            places: { x1: '@person1', x2: '@task1', x3: '@project1' } // Using person1
+            places: { x1: '@person1', x2: '@task1', x3: '@goal1' } // Using person1, renamed x3 from @project1
         }
     },
 
@@ -43,11 +43,11 @@ export const initialComposites: CompositeRecord[] = [
 
     // Name Composites for Entities (using @schema/cneme: x1=Entity, x2=Name Leaf)
     {
-        pubkey: '@composite/proj1_cneme_name',
+        pubkey: '@composite/goal1_cneme_name', // Renamed from @composite/proj1_cneme_name
         metadata: { type: 'Composite' },
         data: {
             schemaId: '@schema/cneme',
-            places: { x1: '@project1', x2: '@project1_name' }
+            places: { x1: '@goal1', x2: '@goal1_name' } // Renamed x1, x2
         }
     },
     {

@@ -33,7 +33,7 @@ export interface LeafRecord {
 const staticLeaves: LeafRecord[] = [
     // Entities (conceptual entities use 'Concept' type)
     {
-        pubkey: '@project1',
+        pubkey: '@goal1',
         metadata: { type: 'Leaf' }, // Updated metadata
         data: { type: 'Concept' }    // Updated data structure and type
     },
@@ -68,9 +68,9 @@ const staticLeaves: LeafRecord[] = [
 
     // --- Name Leaves for Entities  ---
     {
-        pubkey: '@project1_name',
+        pubkey: '@goal1_name',
         metadata: { type: 'Leaf' },
-        data: { type: 'LoroText', value: 'Project: Website' }
+        data: { type: 'LoroText', value: "Learn Homino Query Language" }
     },
     {
         pubkey: '@task1_name',

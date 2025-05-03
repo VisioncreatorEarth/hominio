@@ -37,6 +37,7 @@
 	let isAdding = $state(false);
 	let currentUser = $state<CapabilityUser | null>(null);
 	let todos = $state<QueryResult[]>([]);
+	let selectedGoalId = $state<string | null>(null);
 
 	// --- Schema PubKey State ---
 	let isSchemaLoading = $state(true);
@@ -58,6 +59,19 @@
 		getCurrentUser,
 		queryStore
 	);
+
+	// --- NEW: Goal List State and Query ---
+	let goalList = $state<QueryResult[]>([]);
+	let isGoalListLoading = $state(true);
+	let goalListError = $state<string | null>(null);
+
+	const goalListQueryStore = writable<LoroHqlQueryExtended | null>(null);
+
+	const goalListReadable: Readable<QueryResult[] | null | undefined> = processReactiveQuery(
+		getCurrentUser,
+		goalListQueryStore
+	);
+	// --- END NEW ---
 
 	// --- Fetch Schemas on Mount ---
 	onMount(async () => {
@@ -194,7 +208,8 @@
 						target: { schema: gunkaPubKey },
 						variables: {
 							workerVar: { source: 'link.x1' },
-							assignedTaskVar: { source: 'link.x2' } // Task is x2 in gunka
+							assignedTaskVar: { source: 'link.x2' },
+							goalIdVar: { source: 'link.x3' }
 						},
 						resultVariable: 'taskAssignmentLinks',
 						return: 'array'
@@ -219,7 +234,8 @@
 						select: {
 							taskId: { source: 'left.taskVar' },
 							statusLeafId: { source: 'left.statusLeafVar' },
-							workerId: { source: 'right.workerVar' }
+							workerId: { source: 'right.workerVar' },
+							goalId: { source: 'right.goalIdVar' }
 						},
 						resultVariable: 'baseTaskInfo'
 					},
@@ -233,6 +249,7 @@
 							taskId: { source: 'left.taskId' },
 							statusLeafId: { source: 'left.statusLeafId' },
 							workerId: { source: 'left.workerId' },
+							goalId: { source: 'left.goalId' },
 							tagLeafId: { source: 'right.tagLeafVar' }
 						},
 						resultVariable: 'taskWithTagsInfo'
@@ -265,6 +282,12 @@
 								pubkeyVar: 'tagLeafId',
 								valueField: 'value',
 								fallbackVar: 'tagLeafId'
+							},
+							goalName: {
+								type: 'resolveLeafValue',
+								pubkeyVar: 'goalId',
+								fallbackVar: 'goalId',
+								excludeType: 'Concept'
 							}
 						},
 						resultVariable: 'resolvedTodosWithTags' // Flat list result
@@ -280,18 +303,89 @@
 							status: { sourceField: 'status', operation: 'first' },
 							statusLeafId: { sourceField: 'statusLeafId', operation: 'first' },
 							workerId: { sourceField: 'workerId', operation: 'first' },
-							tags: { sourceField: 'tag', operation: 'collect' } // Collect tags
+							tags: { sourceField: 'tag', operation: 'collect' },
+							goalName: { sourceField: 'goalName', operation: 'first' },
+							goalId: { sourceField: 'goalId', operation: 'first' }
 						},
 						resultVariable: 'aggregatedTodos' // Final result variable
 					}
 				]
 			};
 			queryStore.set(dynamicTodosQuery);
+
+			// <<< NEW: Construct Goal List Query >>>
+			const goalListQuery: LoroHqlQueryExtended = {
+				steps: [
+					// 1. Find all gunka links to get goal IDs (x3)
+					{
+						action: 'find',
+						target: { schema: gunkaPubKey! },
+						variables: {
+							goalId: { source: 'link.x3' }
+						},
+						resultVariable: 'gunkaLinks',
+						return: 'array'
+					},
+					// 2. Find all cneme links (entity -> nameLeaf)
+					{
+						action: 'find',
+						target: { schema: cnemePubKey! },
+						variables: {
+							entityId: { source: 'link.x1' },
+							nameLeafId: { source: 'link.x2' }
+						},
+						resultVariable: 'nameLinks',
+						return: 'array'
+					},
+					// 3. Join gunkaLinks (goals) with nameLinks on goal ID = entity ID
+					{
+						action: 'join',
+						left: { variable: 'gunkaLinks', key: 'goalId' },
+						right: { variable: 'nameLinks', key: 'entityId' },
+						type: 'inner', // Only keep goals that have names
+						select: {
+							goalId: { source: 'left.goalId' },
+							nameLeafId: { source: 'right.nameLeafId' }
+						},
+						resultVariable: 'goalsWithNameLeaves'
+					},
+					// 4. Resolve the name leaf ID to get the actual goal name string
+					{
+						action: 'resolve',
+						fromVariable: 'goalsWithNameLeaves',
+						resolveFields: {
+							goalName: {
+								type: 'resolveLeafValue',
+								pubkeyVar: 'nameLeafId',
+								fallbackVar: 'nameLeafId', // Fallback to ID if resolution fails
+								valueField: 'value' // Get the string value
+								// No excludeType needed here, we expect a LoroText leaf
+							}
+						},
+						resultVariable: 'resolvedGoalNames'
+					},
+					// 5. Aggregate to get unique goals
+					{
+						action: 'aggregate',
+						fromVariable: 'resolvedGoalNames',
+						groupByKey: 'goalId',
+						aggregateFields: {
+							goalName: { sourceField: 'goalName', operation: 'first' }
+							// goalId is already the group key
+						},
+						resultVariable: 'goalList' // Final result
+					}
+				]
+			};
+			goalListQueryStore.set(goalListQuery);
+			// <<< END NEW >>>
 		} else if (!isSchemaLoading && schemaError) {
 			console.log('[Todos] Schema loading failed, setting queryStore to null.');
 			queryStore.set(null);
+			goalListQueryStore.set(null); // <<< NEW: Clear goal list query too
 		} else if (!tciniPubKey || !gunkaPubKey || !cnemePubKey) {
 			queryStore.set(null);
+			goalListQueryStore.set(null); // <<< NEW: Clear goal list query too
 		}
 	});
 
@@ -488,7 +582,9 @@
 					schemaId: gunkaPubKey, // Use the fetched gunka schema ID
 					places: {
 						x1: workerPubKey, // Link to the found person concept pubkey
-						x2: '$$newTask' // Link to the new task concept leaf
+						x2: '$$newTask', // Link to the new task concept leaf
+						// Conditionally add x3 based on the selected goal filter
+						...(selectedGoalId && { x3: selectedGoalId })
 					}
 				}
 			};
@@ -795,6 +891,34 @@
 		}
 	});
 
+	// --- NEW: Effect for goal list readable store ---
+	$effect(() => {
+		const currentGoalResults = $goalListReadable;
+
+		if (currentGoalResults === undefined) {
+			isGoalListLoading = true;
+			goalListError = null;
+		} else if (currentGoalResults === null) {
+			isGoalListLoading = false;
+			goalListError = schemaError ?? 'Goal list query execution failed.';
+			if (goalList.length > 0) goalList = [];
+		} else {
+			isGoalListLoading = false;
+			goalListError = null;
+			const currentGoalsString = JSON.stringify(goalList);
+			const newResultsString = JSON.stringify(currentGoalResults);
+			if (currentGoalsString !== newResultsString) {
+				goalList = currentGoalResults;
+			}
+		}
+	});
+	// --- END NEW ---
+
+	// --- Computed: Filtered Todos ---
+	const filteredTodos = $derived(
+		todos.filter((todo) => selectedGoalId === null || todo.goalId === selectedGoalId)
+	);
+
 	// --- Dnd Handling ---
 	const statuses = [STATUS_NOT_STARTED_ID, STATUS_IN_PROGRESS_ID, STATUS_COMPLETED_ID];
 
@@ -825,284 +949,342 @@
 	});
 </script>
 
-<div class="flex h-full flex-col overflow-hidden bg-[#f8f4ed] p-6">
-	<h1 class="mb-1 text-2xl font-bold text-[#153243]">Kanban Board</h1>
-	<p class="mb-6 text-sm text-gray-500">
-		Drag and drop tasks between columns to reorder them in the board.
-	</p>
+<div class="flex h-full flex-row overflow-hidden bg-[#f8f4ed]">
+	<!-- Sidebar -->
+	<aside class="w-64 flex-shrink-0 border-r border-gray-200 bg-white p-4 shadow-md">
+		<h2 class="mb-4 text-lg font-semibold text-[#153243]">Goals</h2>
+		{#if isGoalListLoading}
+			<p class="text-sm text-gray-500">Loading goals...</p>
+		{:else if goalListError}
+			<p class="text-sm text-red-600">Error: {goalListError}</p>
+		{:else if goalList.length === 0}
+			<p class="text-sm text-gray-500">No goals found.</p>
+		{:else}
+			<ul class="space-y-1">
+				<!-- All Goals Button -->
+				<li>
+					<button
+						class="w-full truncate rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-gray-100 {selectedGoalId ===
+						null
+							? 'bg-blue-100 font-semibold text-blue-800'
+							: 'text-gray-700'}"
+						on:click={() => (selectedGoalId = null)}
+					>
+						All Goals
+					</button>
+				</li>
+				<!-- Goal List -->
+				{#each goalList as goal (goal.goalId)}
+					<li>
+						<button
+							class="w-full truncate rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-gray-100 {selectedGoalId ===
+							goal.goalId
+								? 'bg-blue-100 font-semibold text-blue-800'
+								: 'text-gray-700'}"
+							on:click={() => (selectedGoalId = goal.goalId as string)}
+						>
+							{goal.goalName ?? '(Unnamed Goal)'}
+						</button>
+					</li>
+				{/each}
+			</ul>
+		{/if}
+	</aside>
 
-	<form class="mb-6 flex items-center gap-2" on:submit|preventDefault={addTodo}>
-		<input
-			type="text"
-			bind:value={newTodoText}
-			placeholder="What needs to be done?"
-			class="flex-grow rounded-md border border-gray-300 bg-white px-3 py-2 text-[#153243] transition-shadow focus:border-[#a7b7cb] focus:ring-2 focus:ring-[#c5d4e8] focus:outline-none"
-			required
-			disabled={isAdding || isSchemaLoading}
-		/>
-		<button
-			type="submit"
-			class="rounded-md bg-[#153243] px-4 py-2 text-[#DDD4C9] transition-colors hover:bg-[#174C6B] focus:ring-2 focus:ring-[#153243] focus:ring-offset-2 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-			disabled={isAdding || isSchemaLoading}
-		>
-			{#if isAdding}
-				Adding...
-			{:else if isSchemaLoading}
-				Loading...
-			{:else}
-				Add Todo
-			{/if}
-		</button>
-	</form>
+	<!-- Main Content -->
+	<div class="flex flex-1 flex-col overflow-hidden p-6">
+		<h1 class="mb-1 text-2xl font-bold text-[#153243]">Kanban Board</h1>
+		<p class="mb-6 text-sm text-gray-500">
+			Drag and drop tasks between columns to change their status.
+		</p>
 
-	{#if mutationError}
-		<div
-			class="relative mb-4 rounded border border-[#D38F7A] bg-[#fceded] px-4 py-3 text-[#D38F7A]"
-			role="alert"
-		>
-			<strong class="font-bold">Mutation Error:</strong>
-			<span class="block sm:inline">{mutationError}</span>
+		<form class="mb-6 flex items-center gap-2" on:submit|preventDefault={addTodo}>
+			<input
+				type="text"
+				bind:value={newTodoText}
+				placeholder="What needs to be done?"
+				class="flex-grow rounded-md border border-gray-300 bg-white px-3 py-2 text-[#153243] transition-shadow focus:border-[#a7b7cb] focus:ring-2 focus:ring-[#c5d4e8] focus:outline-none"
+				required
+				disabled={isAdding || isSchemaLoading}
+			/>
 			<button
-				class="absolute top-0 right-0 bottom-0 px-4 py-3"
-				on:click={() => (mutationError = null)}
+				type="submit"
+				class="rounded-md bg-[#153243] px-4 py-2 text-[#DDD4C9] transition-colors hover:bg-[#174C6B] focus:ring-2 focus:ring-[#153243] focus:ring-offset-2 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+				disabled={isAdding || isSchemaLoading}
 			>
-				<svg
-					class="h-6 w-6 fill-current text-[#D38F7A]"
-					role="button"
-					xmlns="http://www.w3.org/2000/svg"
-					viewBox="0 0 20 20"
-					><title>Close</title><path
-						d="M14.348 14.849a1.2 1.2 0 0 1-1.697 0L10 11.819l-2.651 3.029a1.2 1.2 0 1 1-1.697-1.697l2.758-3.15-2.759-3.152a1.2 1.2 0 1 1 1.697-1.697L10 8.183l2.651-3.031a1.2 1.2 0 1 1 1.697 1.697l-2.758 3.152 2.758 3.15a1.2 1.2 0 0 1 0 1.698z"
-					/></svg
-				>
+				{#if isAdding}
+					Adding...
+				{:else if isSchemaLoading}
+					Loading...
+				{:else}
+					Add Todo
+				{/if}
 			</button>
-		</div>
-	{/if}
+		</form>
 
-	{#if isSchemaLoading}
-		<div class="py-4 text-center text-gray-500">Loading schema definitions...</div>
-	{:else if isLoadingQueryData}
-		<div class="py-4 text-center text-gray-500">Loading todos...</div>
-	{:else if queryError}
-		<div
-			class="relative mb-4 rounded border border-[#DBAD75] bg-[#fff8ed] px-4 py-3 text-[#DBAD75]"
-			role="alert"
-		>
-			<strong class="font-bold">Error:</strong>
-			<span class="block sm:inline">{queryError}</span>
-		</div>
-	{/if}
-
-	{#if !isSchemaLoading && !isLoadingQueryData && !queryError}
-		<div class="grid flex-1 grid-cols-3 gap-4 overflow-hidden">
-			<!-- Not Started Column -->
-			<div class="flex flex-col overflow-hidden rounded-lg bg-white p-4 shadow">
-				<div class="mb-3 flex items-center justify-between">
-					<h3 class="font-semibold text-[#153243]">Todo</h3>
-					<span class="ml-2 rounded-md bg-[#DDD4C9] px-2 py-0.5 text-xs font-medium text-[#153243]">
-						{todos.filter((t) => t.status === 'not-started').length}
-					</span>
-				</div>
-				<ul
-					class="flex-1 space-y-3 overflow-y-auto pr-1"
-					use:droppable={{
-						container: STATUS_NOT_STARTED_ID,
-						callbacks: { onDrop: handleDrop }
-					}}
+		{#if mutationError}
+			<div
+				class="relative mb-4 rounded border border-[#D38F7A] bg-[#fceded] px-4 py-3 text-[#D38F7A]"
+				role="alert"
+			>
+				<strong class="font-bold">Mutation Error:</strong>
+				<span class="block sm:inline">{mutationError}</span>
+				<button
+					class="absolute top-0 right-0 bottom-0 px-4 py-3"
+					on:click={() => (mutationError = null)}
 				>
-					{#each todos as item (item.taskId)}
-						{#if item.status === 'not-started'}
-							{@const taskName = typeof item.taskName === 'string' ? item.taskName : '(No Name)'}
-							{@const workerName =
-								typeof item.workerName === 'string' ? item.workerName : '(No Worker)'}
-							<li
-								class="group relative cursor-grab rounded-lg border border-gray-200 bg-gray-50 p-3 shadow-sm"
-								use:draggable={{
-									container: STATUS_NOT_STARTED_ID,
-									dragData: item
-								}}
-							>
-								<p class="mb-1 font-semibold text-[#153243]">{taskName}</p>
-								<p class="text-xs text-gray-500">Assignee: {workerName}</p>
-								{#if item.tags && Array.isArray(item.tags) && item.tags.length > 0}
-									<div class="mt-2 flex flex-wrap gap-1">
-										{#each item.tags as tag}
-											{#if tag}
-												<span
-													class="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-800"
-												>
-													{tag}
-												</span>
-											{/if}
-										{/each}
-									</div>
-								{/if}
-								<button
-									on:click={() => deleteTodo(item)}
-									class="absolute top-1 right-1 rounded-full p-1 text-[#D38F7A] opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 focus:opacity-100 focus:outline-none"
-									aria-label="Delete todo"
-								>
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										class="h-4 w-4"
-										fill="none"
-										viewBox="0 0 24 24"
-										stroke="currentColor"
-										stroke-width="2"
-										><path
-											stroke-linecap="round"
-											stroke-linejoin="round"
-											d="M6 18L18 6M6 6l12 12"
-										/></svg
-									>
-								</button>
-							</li>
-						{/if}
-					{:else}
-						<p class="text-center text-xs text-gray-400">Empty</p>
-					{/each}
-				</ul>
+					<svg
+						class="h-6 w-6 fill-current text-[#D38F7A]"
+						role="button"
+						xmlns="http://www.w3.org/2000/svg"
+						viewBox="0 0 20 20"
+						><title>Close</title><path
+							d="M14.348 14.849a1.2 1.2 0 0 1-1.697 0L10 11.819l-2.651 3.029a1.2 1.2 0 1 1-1.697-1.697l2.758-3.15-2.759-3.152a1.2 1.2 0 1 1 1.697-1.697L10 8.183l2.651-3.031a1.2 1.2 0 1 1 1.697 1.697l-2.758 3.152 2.758 3.15a1.2 1.2 0 0 1 0 1.698z"
+						/></svg
+					>
+				</button>
 			</div>
+		{/if}
 
-			<!-- In Progress Column -->
-			<div class="flex flex-col overflow-hidden rounded-lg bg-white p-4 shadow">
-				<div class="mb-3 flex items-center justify-between">
-					<h3 class="font-semibold text-[#153243]">In Progress</h3>
-					<span class="ml-2 rounded-md bg-[#DDD4C9] px-2 py-0.5 text-xs font-medium text-[#153243]">
-						{todos.filter((t) => t.status === 'in-progress').length}
-					</span>
-				</div>
-				<ul
-					class="flex-1 space-y-3 overflow-y-auto pr-1"
-					use:droppable={{
-						container: STATUS_IN_PROGRESS_ID,
-						callbacks: { onDrop: handleDrop }
-					}}
-				>
-					{#each todos as item (item.taskId)}
-						{#if item.status === 'in-progress'}
-							{@const taskName = typeof item.taskName === 'string' ? item.taskName : '(No Name)'}
-							{@const workerName =
-								typeof item.workerName === 'string' ? item.workerName : '(No Worker)'}
-							<li
-								class="group relative cursor-grab rounded-lg border border-gray-200 bg-gray-50 p-3 shadow-sm"
-								use:draggable={{
-									container: STATUS_IN_PROGRESS_ID,
-									dragData: item
-								}}
-							>
-								<p class="mb-1 font-semibold text-[#153243]">{taskName}</p>
-								<p class="text-xs text-gray-500">Assignee: {workerName}</p>
-								{#if item.tags && Array.isArray(item.tags) && item.tags.length > 0}
-									<div class="mt-2 flex flex-wrap gap-1">
-										{#each item.tags as tag}
-											{#if tag}
-												<span
-													class="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-800"
-												>
-													{tag}
-												</span>
-											{/if}
-										{/each}
-									</div>
-								{/if}
-								<button
-									on:click={() => deleteTodo(item)}
-									class="absolute top-1 right-1 rounded-full p-1 text-[#D38F7A] opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 focus:opacity-100 focus:outline-none"
-									aria-label="Delete todo"
-								>
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										class="h-4 w-4"
-										fill="none"
-										viewBox="0 0 24 24"
-										stroke="currentColor"
-										stroke-width="2"
-										><path
-											stroke-linecap="round"
-											stroke-linejoin="round"
-											d="M6 18L18 6M6 6l12 12"
-										/></svg
-									>
-								</button>
-							</li>
-						{/if}
-					{:else}
-						<p class="text-center text-xs text-gray-400">Empty</p>
-					{/each}
-				</ul>
+		{#if isSchemaLoading}
+			<div class="py-4 text-center text-gray-500">Loading schema definitions...</div>
+		{:else if isLoadingQueryData}
+			<div class="py-4 text-center text-gray-500">Loading todos...</div>
+		{:else if queryError}
+			<div
+				class="relative mb-4 rounded border border-[#DBAD75] bg-[#fff8ed] px-4 py-3 text-[#DBAD75]"
+				role="alert"
+			>
+				<strong class="font-bold">Error:</strong>
+				<span class="block sm:inline">{queryError}</span>
 			</div>
+		{/if}
 
-			<!-- Done Column -->
-			<div class="flex flex-col overflow-hidden rounded-lg bg-[#f5f1e8] p-4 shadow">
-				<div class="mb-3 flex items-center justify-between">
-					<h3 class="font-semibold text-[#153243]">Done</h3>
-					<span class="ml-2 rounded-md bg-[#DDD4C9] px-2 py-0.5 text-xs font-medium text-[#153243]">
-						{todos.filter((t) => t.status === 'completed').length}
-					</span>
-				</div>
-				<ul
-					class="flex-1 space-y-3 overflow-y-auto pr-1"
-					use:droppable={{
-						container: STATUS_COMPLETED_ID,
-						callbacks: { onDrop: handleDrop }
-					}}
-				>
-					{#each todos as item (item.taskId)}
-						{#if item.status === 'completed'}
-							{@const taskName = typeof item.taskName === 'string' ? item.taskName : '(No Name)'}
-							{@const workerName =
-								typeof item.workerName === 'string' ? item.workerName : '(No Worker)'}
-							<li
-								class="group relative cursor-grab rounded-lg border border-gray-200 bg-gray-50 p-3 opacity-75 shadow-sm"
-								use:draggable={{
-									container: STATUS_COMPLETED_ID,
-									dragData: item
-								}}
-							>
-								<p class="mb-1 font-semibold text-gray-500 line-through">{taskName}</p>
-								<p class="text-xs text-gray-400 line-through">Assignee: {workerName}</p>
-								{#if item.tags && Array.isArray(item.tags) && item.tags.length > 0}
-									<div class="mt-2 flex flex-wrap gap-1">
-										{#each item.tags as tag}
-											{#if tag}
-												<span
-													class="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-800 line-through"
-												>
-													{tag}
-												</span>
-											{/if}
-										{/each}
-									</div>
-								{/if}
-								<button
-									on:click={() => deleteTodo(item)}
-									class="absolute top-1 right-1 rounded-full p-1 text-[#D38F7A] opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 focus:opacity-100 focus:outline-none"
-									aria-label="Delete todo"
+		{#if !isSchemaLoading && !isLoadingQueryData && !queryError}
+			<div class="grid flex-1 grid-cols-3 gap-4 overflow-hidden">
+				<!-- Not Started Column -->
+				<div class="flex flex-col overflow-hidden rounded-lg bg-white p-4 shadow">
+					<div class="mb-3 flex items-center justify-between">
+						<h3 class="font-semibold text-[#153243]">Todo</h3>
+						<span
+							class="ml-2 rounded-md bg-[#DDD4C9] px-2 py-0.5 text-xs font-medium text-[#153243]"
+						>
+							{filteredTodos.filter((t) => t.status === 'not-started').length}
+						</span>
+					</div>
+					<ul
+						class="flex-1 space-y-3 overflow-y-auto pr-1"
+						use:droppable={{
+							container: STATUS_NOT_STARTED_ID,
+							callbacks: { onDrop: handleDrop }
+						}}
+					>
+						{#each filteredTodos as item (item.taskId)}
+							{#if item.status === 'not-started'}
+								{@const taskName = typeof item.taskName === 'string' ? item.taskName : '(No Name)'}
+								{@const workerName =
+									typeof item.workerName === 'string' ? item.workerName : '(No Worker)'}
+								{@const goalName = typeof item.goalName === 'string' ? item.goalName : '(No Goal)'}
+								<li
+									class="group relative cursor-grab rounded-lg border border-gray-200 bg-gray-50 p-3 shadow-sm"
+									use:draggable={{
+										container: STATUS_NOT_STARTED_ID,
+										dragData: item
+									}}
 								>
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										class="h-4 w-4"
-										fill="none"
-										viewBox="0 0 24 24"
-										stroke="currentColor"
-										stroke-width="2"
-										><path
-											stroke-linecap="round"
-											stroke-linejoin="round"
-											d="M6 18L18 6M6 6l12 12"
-										/></svg
+									<p class="mb-1 font-semibold text-[#153243]">{taskName}</p>
+									<p class="text-xs text-gray-500">Assignee: {workerName}</p>
+									<p class="text-xs text-gray-500">Goal: {goalName}</p>
+									{#if item.tags && Array.isArray(item.tags) && item.tags.length > 0}
+										<div class="mt-2 flex flex-wrap gap-1">
+											{#each item.tags as tag}
+												{#if tag}
+													<span
+														class="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-800"
+													>
+														{tag}
+													</span>
+												{/if}
+											{/each}
+										</div>
+									{/if}
+									<button
+										on:click={() => deleteTodo(item)}
+										class="absolute top-1 right-1 rounded-full p-1 text-[#D38F7A] opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 focus:opacity-100 focus:outline-none"
+										aria-label="Delete todo"
 									>
-								</button>
-							</li>
-						{/if}
-					{:else}
-						<p class="text-center text-xs text-gray-400">Empty</p>
-					{/each}
-				</ul>
+										<svg
+											xmlns="http://www.w3.org/2000/svg"
+											class="h-4 w-4"
+											fill="none"
+											viewBox="0 0 24 24"
+											stroke="currentColor"
+											stroke-width="2"
+											><path
+												stroke-linecap="round"
+												stroke-linejoin="round"
+												d="M6 18L18 6M6 6l12 12"
+											/></svg
+										>
+									</button>
+								</li>
+							{/if}
+						{:else}
+							<p class="text-center text-xs text-gray-400">Empty</p>
+						{/each}
+					</ul>
+				</div>
+
+				<!-- In Progress Column -->
+				<div class="flex flex-col overflow-hidden rounded-lg bg-white p-4 shadow">
+					<div class="mb-3 flex items-center justify-between">
+						<h3 class="font-semibold text-[#153243]">In Progress</h3>
+						<span
+							class="ml-2 rounded-md bg-[#DDD4C9] px-2 py-0.5 text-xs font-medium text-[#153243]"
+						>
+							{filteredTodos.filter((t) => t.status === 'in-progress').length}
+						</span>
+					</div>
+					<ul
+						class="flex-1 space-y-3 overflow-y-auto pr-1"
+						use:droppable={{
+							container: STATUS_IN_PROGRESS_ID,
+							callbacks: { onDrop: handleDrop }
+						}}
+					>
+						{#each filteredTodos as item (item.taskId)}
+							{#if item.status === 'in-progress'}
+								{@const taskName = typeof item.taskName === 'string' ? item.taskName : '(No Name)'}
+								{@const workerName =
+									typeof item.workerName === 'string' ? item.workerName : '(No Worker)'}
+								{@const goalName = typeof item.goalName === 'string' ? item.goalName : '(No Goal)'}
+								<li
+									class="group relative cursor-grab rounded-lg border border-gray-200 bg-gray-50 p-3 shadow-sm"
+									use:draggable={{
+										container: STATUS_IN_PROGRESS_ID,
+										dragData: item
+									}}
+								>
+									<p class="mb-1 font-semibold text-[#153243]">{taskName}</p>
+									<p class="text-xs text-gray-500">Assignee: {workerName}</p>
+									<p class="text-xs text-gray-500">Goal: {goalName}</p>
+									{#if item.tags && Array.isArray(item.tags) && item.tags.length > 0}
+										<div class="mt-2 flex flex-wrap gap-1">
+											{#each item.tags as tag}
+												{#if tag}
+													<span
+														class="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-800"
+													>
+														{tag}
+													</span>
+												{/if}
+											{/each}
+										</div>
+									{/if}
+									<button
+										on:click={() => deleteTodo(item)}
+										class="absolute top-1 right-1 rounded-full p-1 text-[#D38F7A] opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 focus:opacity-100 focus:outline-none"
+										aria-label="Delete todo"
+									>
+										<svg
+											xmlns="http://www.w3.org/2000/svg"
+											class="h-4 w-4"
+											fill="none"
+											viewBox="0 0 24 24"
+											stroke="currentColor"
+											stroke-width="2"
+											><path
+												stroke-linecap="round"
+												stroke-linejoin="round"
+												d="M6 18L18 6M6 6l12 12"
+											/></svg
+										>
+									</button>
+								</li>
+							{/if}
+						{:else}
+							<p class="text-center text-xs text-gray-400">Empty</p>
+						{/each}
+					</ul>
+				</div>
+
+				<!-- Done Column -->
+				<div class="flex flex-col overflow-hidden rounded-lg bg-[#f5f1e8] p-4 shadow">
+					<div class="mb-3 flex items-center justify-between">
+						<h3 class="font-semibold text-[#153243]">Done</h3>
+						<span
+							class="ml-2 rounded-md bg-[#DDD4C9] px-2 py-0.5 text-xs font-medium text-[#153243]"
+						>
+							{filteredTodos.filter((t) => t.status === 'completed').length}
+						</span>
+					</div>
+					<ul
+						class="flex-1 space-y-3 overflow-y-auto pr-1"
+						use:droppable={{
+							container: STATUS_COMPLETED_ID,
+							callbacks: { onDrop: handleDrop }
+						}}
+					>
+						{#each filteredTodos as item (item.taskId)}
+							{#if item.status === 'completed'}
+								{@const taskName = typeof item.taskName === 'string' ? item.taskName : '(No Name)'}
+								{@const workerName =
+									typeof item.workerName === 'string' ? item.workerName : '(No Worker)'}
+								{@const goalName = typeof item.goalName === 'string' ? item.goalName : '(No Goal)'}
+								<li
+									class="group relative cursor-grab rounded-lg border border-gray-200 bg-gray-50 p-3 opacity-75 shadow-sm"
+									use:draggable={{
+										container: STATUS_COMPLETED_ID,
+										dragData: item
+									}}
+								>
+									<p class="mb-1 font-semibold text-gray-500 line-through">{taskName}</p>
+									<p class="text-xs text-gray-400 line-through">Assignee: {workerName}</p>
+									<p class="text-xs text-gray-400 line-through">Goal: {goalName}</p>
+									{#if item.tags && Array.isArray(item.tags) && item.tags.length > 0}
+										<div class="mt-2 flex flex-wrap gap-1">
+											{#each item.tags as tag}
+												{#if tag}
+													<span
+														class="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-800 line-through"
+													>
+														{tag}
+													</span>
+												{/if}
+											{/each}
+										</div>
+									{/if}
+									<button
+										on:click={() => deleteTodo(item)}
+										class="absolute top-1 right-1 rounded-full p-1 text-[#D38F7A] opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 focus:opacity-100 focus:outline-none"
+										aria-label="Delete todo"
+									>
+										<svg
+											xmlns="http://www.w3.org/2000/svg"
+											class="h-4 w-4"
+											fill="none"
+											viewBox="0 0 24 24"
+											stroke="currentColor"
+											stroke-width="2"
+											><path
+												stroke-linecap="round"
+												stroke-linejoin="round"
+												d="M6 18L18 6M6 6l12 12"
+											/></svg
+										>
+									</button>
+								</li>
+							{/if}
+						{:else}
+							<p class="text-center text-xs text-gray-400">Empty</p>
+						{/each}
+					</ul>
+				</div>
 			</div>
-		</div>
-	{:else if !isSchemaLoading && !isLoadingQueryData && !queryError && todos.length === 0}
-		<div class="py-4 text-center text-gray-500">No todos found.</div>
-	{/if}
+		{:else if !isSchemaLoading && !isLoadingQueryData && !queryError && filteredTodos.length === 0}
+			<div class="py-4 text-center text-gray-500">
+				No todos found{selectedGoalId ? ' for the selected goal' : ''}.
+			</div>
+		{/if}
+	</div>
 </div>
