@@ -78,9 +78,35 @@ export class HominioSync {
             window.addEventListener('offline', this.handleOffline);
 
             // Defer initialization
-            setTimeout(() => {
+            setTimeout(async () => { // Make the callback async
                 try {
-                    this.updatePendingChangesCount(); // Initial count
+                    // --- Initial Pull Trigger ---
+                    if (GENESIS_PUBKEY && get(status).isOnline) { // Check if online
+                        console.log('[Sync Init] Checking for local @genesis document...');
+                        try {
+                            const genesisDoc = await hominioDB.getDocument(GENESIS_PUBKEY);
+                            if (!genesisDoc) {
+                                console.log('[Sync Init] @genesis document not found locally. Triggering initial pull...');
+                                await this.pullFromServer(); // Await the initial pull
+                                console.log('[Sync Init] Initial pull complete.');
+                            } else {
+                                console.log('[Sync Init] @genesis document found locally. Skipping initial pull.');
+                            }
+                        } catch (err) {
+                            console.error('[Sync Init] Error checking for local @genesis document:', err);
+                            // Decide if we should still attempt a pull on error? Let's try.
+                            console.log('[Sync Init] Attempting pull anyway due to error checking local @genesis.');
+                            await this.pullFromServer();
+                        }
+                    } else if (!get(status).isOnline) {
+                        console.log('[Sync Init] Offline. Skipping initial @genesis check and pull.');
+                    } else if (!GENESIS_PUBKEY) {
+                        console.log('[Sync Init] GENESIS_PUBKEY not defined. Skipping initial @genesis check and pull.');
+                    }
+                    // --- End Initial Pull Trigger ---
+
+
+                    this.updatePendingChangesCount(); // Initial count after potential pull
 
                     // Subscribe to DB changes
                     this.unsubscribeDbChanges = subscribeToDbChanges(() => {
@@ -97,7 +123,7 @@ export class HominioSync {
                         PERIODIC_CHECK_INTERVAL_MS
                     );
 
-                    // Initial check in case changes exist on load
+                    // Initial check in case changes exist on load or were pulled
                     this.periodicSyncCheck();
 
                 } catch (err) {
@@ -1041,7 +1067,7 @@ export class HominioSync {
                     let deleteSuccesses = 0;
                     let deleteFailures = 0;
                     // Delete in chunks to avoid overwhelming IndexedDB? Maybe not needed for simple deletes.
-                    const deletePromises = unreferencedCids.map(async (cidToDelete) => {
+                    const deletePromises = unreferencedCids.map(async (cidToDelete: string) => { // Add type annotation
                         try {
                             await contentStorage.delete(cidToDelete);
                             deleteSuccesses++;
