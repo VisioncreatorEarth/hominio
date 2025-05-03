@@ -1,37 +1,54 @@
 import { writable, get } from 'svelte/store';
 import { hominio } from '$lib/KERNEL/hominio-client';
-import { hominioDB, subscribeToDbChanges, type Docs } from './hominio-db';
+import { hominioDB, subscribeToDbChanges } from './hominio-db';
 import { browser } from '$app/environment';
-import { canWrite, canDelete, type CapabilityUser } from './hominio-caps';
+import { canWrite, canDelete } from './hominio-caps';
 import { getContentStorage } from '$lib/KERNEL/hominio-storage';
 import { getMe } from './hominio-auth';
 import { GENESIS_PUBKEY } from '$db/constants';
-import { updateIndexLeafRegistry, type IndexLeafType } from './index-registry';
+import { updateIndexLeafRegistry } from './index-registry';
 import { LoroMap } from 'loro-crdt';
 
-// Helper type for API response structure
-type ApiResponse<T> = {
-    data: T;
-    error: null | { status: number; value?: { message?: string;[key: string]: unknown }; };
+// --- Import Types from hominio-types.ts ---
+import type {
+    ApiResponse,
+    ServerDocData,
+    SyncStatus,
+    Docs,
+    IndexLeafType,
+    CapabilityUser
+} from './hominio-types';
+// Re-export types if needed
+export type {
+    ApiResponse,
+    ServerDocData,
+    SyncStatus,
 };
+// --- End Import Types ---
+
+// Helper type for API response structure
+// type ApiResponse<T> = {
+//     data: T;
+//     error: null | { status: number; value?: { message?: string;[key: string]: unknown }; };
+// };
 
 // Expected raw structure from API before mapping
-interface ServerDocData {
-    pubKey: string;
-    owner: string;
-    updatedAt: Date | string;
-    snapshotCid?: string | null;
-    updateCids?: string[] | null;
-}
+// interface ServerDocData {
+//     pubKey: string;
+//     owner: string;
+//     updatedAt: Date | string;
+//     snapshotCid?: string | null;
+//     updateCids?: string[] | null;
+// }
 
 // --- SyncStatus Interface ---
-interface SyncStatus {
-    isSyncing: boolean;
-    lastSynced: Date | null;
-    syncError: string | null;
-    pendingLocalChanges: number;
-    isOnline: boolean;
-}
+// interface SyncStatus {
+//     isSyncing: boolean;
+//     lastSynced: Date | null;
+//     syncError: string | null;
+//     pendingLocalChanges: number;
+//     isOnline: boolean;
+// }
 
 // --- Status Store ---
 const status = writable<SyncStatus>({

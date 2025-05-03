@@ -1,71 +1,49 @@
 import { LoroDoc, LoroMap, LoroText, LoroList } from 'loro-crdt';
 import { hominioDB } from './hominio-db';
 import { canWrite, canDelete, type CapabilityUser, canCreate } from './hominio-caps';
-import type { LeafRecord, LeafValue } from '$db/seeding/leaf.data'; // Use only LeafValue union type
-import type { SchemaRecord } from '$db/seeding/schema.data';
-import type { CompositeRecord } from '$db/seeding/composite.data'; // Removed CompositeId
 import { docIdService } from './docid-service'; // Needed for key generation
 
-// --- MUTATE_HQL Types --- 
+// --- Import Types from hominio-types.ts ---
+import type {
+    LeafRecord, // Need the full record for data access
+    LeafValue,
+    SchemaRecord,
+    CompositeRecord,
+    MutationOperationType,
+    MutationTargetType,
+    BaseMutationOperation,
+    CreateMutationOperation,
+    UpdateMutationOperation,
+    DeleteMutationOperation,
+    MutationOperation,
+    MutateHqlRequest,
+    MutationSuccessResult,
+    MutationErrorResult,
+    MutationResult
+} from './hominio-types';
+// Re-export types if needed
+export type {
+    MutationOperationType,
+    MutationTargetType,
+    BaseMutationOperation,
+    CreateMutationOperation,
+    UpdateMutationOperation,
+    DeleteMutationOperation,
+    MutationOperation,
+    MutateHqlRequest,
+    MutationSuccessResult,
+    MutationErrorResult,
+    MutationResult
+};
+// --- End Import Types ---
 
-export type MutationOperationType = 'create' | 'update' | 'delete';
-export type MutationTargetType = 'Leaf' | 'Schema' | 'Composite';
 
-// Base interface for mutation operations
-interface BaseMutationOperation {
-    operation: MutationOperationType;
-    type: MutationTargetType;
-    placeholder?: string; // Optional temporary ID (e.g., "$$newLeaf") for intra-mutation refs
-}
+// --- MUTATE_HQL Types --- MOVED TO hominio-types.ts
 
-// Create Operation
-export interface CreateMutationOperation extends BaseMutationOperation {
-    operation: 'create';
-    // Data structure depends on 'type'
-    data: LeafRecord['data'] | SchemaRecord['data'] | CompositeRecord['data'];
-    owner?: string; // Optional: defaults to the acting user
-}
-
-// Update Operation
-export interface UpdateMutationOperation extends BaseMutationOperation {
-    operation: 'update';
-    targetPubKey: string; // PubKey of the document to update
-    // Partial data to update. Structure depends on 'type'
-    data: Partial<LeafRecord['data']> | Partial<SchemaRecord['data']> | Partial<CompositeRecord['data']>;
-    placeholder?: undefined; // Cannot assign placeholder to an update
-}
-
-// Delete Operation
-export interface DeleteMutationOperation extends BaseMutationOperation {
-    operation: 'delete';
-    targetPubKey: string; // PubKey of the document to delete
-    placeholder?: undefined; // Cannot assign placeholder to a delete
-    // Optional: Specify dependency handling strategy?
-    // cascade?: boolean; // Example: true to attempt deleting referencing composites (requires careful permission checks)
-}
-
-// Union type for any mutation operation
-export type MutationOperation = CreateMutationOperation | UpdateMutationOperation | DeleteMutationOperation;
-
-// Top-level Mutation Request Structure
-export interface MutateHqlRequest {
-    mutations: MutationOperation[];
-}
-
-// Result of a successful mutation, mapping placeholders to actual pubkeys
-export interface MutationSuccessResult {
-    status: 'success';
-    generatedPubKeys: Record<string, string>; // Maps placeholder -> actual pubKey
-}
-
-// Result of a failed mutation
-export interface MutationErrorResult {
-    status: 'error';
-    message: string;
-    errorDetails?: unknown;
-}
-
-export type MutationResult = MutationSuccessResult | MutationErrorResult;
+// export type MutationOperationType = 'create' | 'update' | 'delete';
+// export type MutationTargetType = 'Leaf' | 'Schema' | 'Composite';
+// ... rest of moved type definitions ...
+// export type MutationResult = MutationSuccessResult | MutationErrorResult;
 
 
 // --- Mutation Engine Logic --- 

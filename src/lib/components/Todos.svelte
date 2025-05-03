@@ -1,10 +1,14 @@
 <script lang="ts">
 	import { onMount, onDestroy, getContext } from 'svelte';
 	import { writable, type Readable } from 'svelte/store';
-	import type { LoroHqlQueryExtended, QueryResult } from '$lib/KERNEL/hominio-svelte';
-	import type { MutateHqlRequest, CreateMutationOperation } from '$lib/KERNEL/hominio-mutate';
+	import type {
+		LoroHqlQueryExtended,
+		QueryResult,
+		MutateHqlRequest,
+		CreateMutationOperation,
+		IndexLeafType
+	} from '$lib/KERNEL/hominio-types';
 	import { GENESIS_PUBKEY } from '$db/constants';
-	import type { IndexLeafType } from '$lib/KERNEL/index-registry';
 	import { draggable, droppable, type DragDropState } from '@thisux/sveltednd';
 
 	// --- Get Hominio Facade from Context ---
@@ -37,7 +41,7 @@
 	let ckajiPubKey = $state<string | null>(null);
 
 	// Type for the actual map inside the schemas index
-	type SchemaRegistryMap = Record<string, string>;
+	// type SchemaRegistryMap = Record<string, string>;
 
 	// Store for the query JSON object - Start as null
 	const queryStore = writable<LoroHqlQueryExtended | null>(null);

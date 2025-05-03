@@ -2,9 +2,12 @@
 	import { writable, type Readable } from 'svelte/store';
 	import { getContext, onMount } from 'svelte';
 	import { GENESIS_PUBKEY } from '$db/constants';
-	import type { IndexLeafType } from '$lib/KERNEL/index-registry';
-	import type { LeafValue } from '$db/seeding/leaf.data';
-	import type { LoroHqlQueryExtended, QueryResult } from '$lib/KERNEL/hominio-svelte';
+	import type {
+		IndexLeafType,
+		LeafValue,
+		LoroHqlQueryExtended,
+		QueryResult
+	} from '$lib/KERNEL/hominio-types';
 
 	const o = getContext<typeof import('$lib/KERNEL/hominio-svelte').o>('o');
 

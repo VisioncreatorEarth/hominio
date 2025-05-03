@@ -1,34 +1,13 @@
-// Removed unused imports
+// Types moved to hominio-types.ts
 
-// Helper to get __dirname in ES modules
-// const __filename = fileURLToPath(import.meta.url); // Commented out as unused
-// const __dirname = dirname(__filename); // Commented out as unused
+// Import necessary types from the new central file
+import type { LeafId, Pubkey, LeafValueType, LeafValue, LeafValueIndex, LeafRecord } from '$lib/KERNEL/hominio-types'; // Corrected Path
+// Re-export types that might be used by other modules
+export type { LeafId, Pubkey, LeafValueType, LeafValue, LeafValueIndex, LeafRecord };
 
-// --- Updated Types ---
-export type LeafId = string;
-export type Pubkey = string;
+// NO TYPE DEFINITIONS SHOULD BE HERE
 
-export type LeafValueType = 'Concept' | 'LoroMap' | 'LoroText' | 'LoroList' | 'LoroMovableList' | 'LoroTree' | 'Index';
-
-type LeafValueMap = { type: 'LoroMap'; value: Record<string, unknown> };
-type LeafValueText = { type: 'LoroText'; value: string };
-type LeafValueList = { type: 'LoroList' | 'LoroMovableList'; value: unknown[] };
-type LeafValueTree = { type: 'LoroTree'; value: unknown };
-type LeafValueConcept = { type: 'Concept' }; // Capitalized
-export type LeafValueIndex = { type: 'Index'; value: Record<Pubkey, true> }; // New Index type
-
-export type LeafValue = LeafValueMap | LeafValueText | LeafValueList | LeafValueTree | LeafValueConcept | LeafValueIndex;
-
-export interface LeafRecord {
-    pubkey: Pubkey;
-    metadata: {
-        type: 'Leaf' | 'Index'; // Allow both Leaf and Index types
-    };
-    data: LeafValue;
-}
-// --- End Updated Types ---
-
-// --- Updated Data ---
+// --- Updated Data --- (Keep data definitions)
 // Define static Leaves first
 const staticLeaves: LeafRecord[] = [
     // Entities (conceptual entities use 'Concept' type)
@@ -97,7 +76,6 @@ const staticLeaves: LeafRecord[] = [
 ];
 
 // --- Dynamic Prompt Leaves ---
-// const documentationPath = resolve(__dirname, '../../../DOCUMENTATION'); // Removed unused const
 const promptLeafRecords: LeafRecord[] = []; // Renamed from promptSumtiRecords
 
 /* <<< COMMENTED OUT DYNAMIC PROMPT LOADING
@@ -149,6 +127,5 @@ try {
 >>> COMMENTED OUT DYNAMIC PROMPT LOADING */
 
 // Combine static and dynamic Leaves
-// Renamed export from initialSumti to initialLeaves
 export const initialLeaves: LeafRecord[] = [...staticLeaves, ...promptLeafRecords]; // promptLeafRecords will be empty now
 // --- End Updated Data ---

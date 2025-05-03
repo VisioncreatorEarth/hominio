@@ -14,7 +14,7 @@ interface MeData {
 
 // Function to generate a short random peer ID (alphanumeric)
 function generateShortPeerId(length = 10): string {
-    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const chars = '0123456789';
     const array = new Uint8Array(length);
     crypto.getRandomValues(array);
     let result = '';

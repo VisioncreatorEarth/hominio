@@ -1,4 +1,16 @@
-export type SchemaId = string;
+// Types moved to hominio-types.ts
+
+// Import necessary types from the new central file
+// import type { SchemaId, SchemaPlaceTranslation, SchemaLanguageTranslation, SchemaRecord } from './hominio-types';
+import type { SchemaId, SchemaPlaceTranslation, SchemaLanguageTranslation, SchemaRecord } from '$lib/KERNEL/hominio-types'; // Corrected Path
+// Re-export types that might be used by other modules
+export type { SchemaId, SchemaPlaceTranslation, SchemaLanguageTranslation, SchemaRecord };
+
+// REMOVE REDUNDANT TYPE DEFINITIONS
+// export type SchemaId = string;
+// export interface SchemaPlaceTranslation { ... }
+// export interface SchemaLanguageTranslation { ... }
+// export interface SchemaRecord { ... }
 
 // Represents documentation for a single place (x1-x5) within a specific language
 export interface SchemaPlaceTranslation {

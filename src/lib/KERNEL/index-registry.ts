@@ -1,10 +1,13 @@
+// Types moved to hominio-types.ts
+// import { writable, type Writable } from 'svelte/store'; // Keep svelte store imports if used elsewhere
 import { writable, type Writable } from 'svelte/store';
 import { hominioDB } from './hominio-db'; // Import hominioDB
 import { GENESIS_PUBKEY } from '../../db/constants'; // Import GENESIS_PUBKEY
 import { LoroMap } from 'loro-crdt'; // Import LoroMap for type checking
 
-// RENAMED type and updated values
-export type IndexLeafType = 'leaves' | 'schemas' | 'composites' | 'composites-by-component';
+// Import moved type
+import type { IndexLeafType } from './hominio-types';
+export type { IndexLeafType }; // Re-export if needed
 
 // In-memory cache of the registry, populated from @genesis or via update
 // RENAMED keys to match IndexLeafType

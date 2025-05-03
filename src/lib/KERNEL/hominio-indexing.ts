@@ -1,14 +1,19 @@
 import { type LoroDoc, LoroMap, LoroList } from 'loro-crdt';
-import {
-    hominioDB,
-    /* docChangeNotifier, */ type Docs,
-    type IndexingBacklogItem
-} from './hominio-db';
+import { hominioDB } from './hominio-db';
 import { hashService } from './hash-service';
-import { getIndexLeafPubKey, isIndexLeafDocument, type IndexLeafType } from './index-registry';
+import { getIndexLeafPubKey, isIndexLeafDocument } from './index-registry';
 import { getDataFromDoc, getLeafDoc } from './loro-engine';
-import type { CompositeRecord } from '../../db/seeding/composite.data';
-import type { PlaceKey } from './hominio-query';
+
+// --- Import Types from hominio-types.ts ---
+import type {
+    Docs,
+    IndexingBacklogItem,
+    IndexLeafType,
+    CompositeRecord,
+    PlaceKey
+} from './hominio-types';
+// Re-export types if needed (likely not needed from indexing)
+// --- End Import Types ---
 
 // Define other constants
 // const INDEXING_DEBOUNCE_MS = 1000; // Remove unused constant

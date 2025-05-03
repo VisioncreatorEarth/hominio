@@ -1,24 +1,14 @@
-import type { LeafId } from './leaf.data';
-import type { SchemaId } from './schema.data';
+// Types moved to hominio-types.ts
+// import type { LeafId } from './hominio-types';
+// import type { SchemaId } from './hominio-types';
+import type { LeafId, SchemaId } from '$lib/KERNEL/hominio-types'; // Corrected Path
 
-export type CompositeId = string;
+export type { LeafId, SchemaId }; // Re-export base types
 
-export interface CompositeRecord {
-    pubkey: CompositeId;
-    metadata: {
-        type: 'Composite';
-    };
-    data: {
-        schemaId: SchemaId;
-        places: {
-            x1?: LeafId;
-            x2?: LeafId;
-            x3?: LeafId;
-            x4?: LeafId;
-            x5?: LeafId;
-        };
-    };
-}
+// Keep initialComposites definition, it uses CompositeRecord which will be imported
+// import type { CompositeRecord } from './hominio-types';
+import type { CompositeRecord } from '$lib/KERNEL/hominio-types'; // Corrected Path
+export type { CompositeRecord }; // Re-export main type
 
 export const initialComposites: CompositeRecord[] = [
     // Task Assignments (gunka) - Structure: x1=Worker, x2=Task, x3=Project

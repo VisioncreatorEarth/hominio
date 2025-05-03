@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { hominioDB, subscribeToDbChanges, type Docs } from '$lib/KERNEL/hominio-db';
+	import { hominioDB, subscribeToDbChanges } from '$lib/KERNEL/hominio-db';
+	import type { Docs } from '$lib/KERNEL/hominio-types';
 	import { onMount } from 'svelte';
 	import { writable, type Writable } from 'svelte/store';
 

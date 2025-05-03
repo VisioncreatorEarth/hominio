@@ -7,10 +7,13 @@
 	// Remove direct hominio-auth import
 	// import { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
 	import { GENESIS_PUBKEY } from '$db/constants';
-	import type { IndexLeafType } from '$lib/KERNEL/index-registry';
+	// Update import for IndexLeafType
+	// import type { IndexLeafType } from '$lib/KERNEL/index-registry';
+	import type { IndexLeafType } from '$lib/KERNEL/hominio-types';
 
-	// Import types from facade
-	import type { LoroHqlQueryExtended, QueryResult } from '$lib/KERNEL/hominio-svelte';
+	// Import types from facade/central types
+	// import type { LoroHqlQueryExtended, QueryResult } from '$lib/KERNEL/hominio-svelte';
+	import type { LoroHqlQueryExtended, QueryResult } from '$lib/KERNEL/hominio-types';
 
 	// --- Get Hominio Facade from Context ---
 	const o = getContext<typeof import('$lib/KERNEL/hominio-svelte').o>('o');
@@ -36,7 +39,7 @@
 	const resultsStore = o.subscribe(queryStore);
 
 	// Type for the actual map inside the schemas index
-	type SchemaRegistryMap = Record<string, string>;
+	// type SchemaRegistryMap = Record<string, string>; // MOVED or imported if needed
 
 	// --- Fetch Meta Index and Set Default Query on Mount ---
 	onMount(async () => {

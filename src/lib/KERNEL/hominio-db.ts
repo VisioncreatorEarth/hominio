@@ -7,20 +7,32 @@ import { getContentStorage, getDocsStorage, initStorage } from './hominio-storag
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { canRead, canWrite, canDelete, canCreate } from './hominio-caps'; // Keep imports, acknowledge lint for now
 import type { CapabilityUser } from './hominio-caps';
-import type { ValidationRuleStructure } from './hominio-validate';
+// REMOVED unused ValidationRuleStructure import
+// import type { ValidationRuleStructure } from './hominio-validate';
 import { hominioIndexing } from './hominio-indexing';
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import type { LeafRecord, LeafValue } from '$db/seeding/leaf.data'; // Keep types
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import type { SchemaRecord } from '$db/seeding/schema.data'; // Keep types
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import type { CompositeRecord } from '$db/seeding/composite.data'; // Keep types
+// Imports from seeding files removed
+
+// --- Import Moved Types ---
+import type {
+    ListenerCallback,
+    Docs,
+    Content,
+    DocContentState,
+    InitialBridiData,
+    IndexingState,
+    IndexingBacklogItem
+    // REMOVED unused LoroJsonValue import
+    // LoroJsonValue
+} from './hominio-types';
+// Re-export types if needed by other modules relying on hominio-db
+export type { Docs, Content, DocContentState, IndexingState, IndexingBacklogItem };
+// --- End Import Moved Types ---
 
 // --- Reactivity Notifier REMOVED ---
 // export const docChangeNotifier = writable(0); // REMOVED
 
 // --- Framework-Agnostic Pub/Sub --- NEW
-type ListenerCallback = () => void;
+// type ListenerCallback = () => void; // MOVED
 const listeners: ListenerCallback[] = [];
 
 /**
@@ -59,99 +71,48 @@ function notifyListeners(): void {
 // Constants
 const CONTENT_TYPE_SNAPSHOT = 'snapshot';
 
-// Utility Types (mirrored from hominio-validate)
-type LoroJsonValue = string | number | boolean | null | LoroJsonObject | LoroJsonArray;
-interface LoroJsonObject { [key: string]: LoroJsonValue }
-type LoroJsonArray = LoroJsonValue[];
+// Utility Types (mirrored from hominio-validate) // REMOVED - Now in hominio-types.ts
+// type LoroJsonValue = string | number | boolean | null | LoroJsonObject | LoroJsonArray;
+// interface LoroJsonObject { [key: string]: LoroJsonValue }
+// type LoroJsonArray = LoroJsonValue[];
 
-// --- Constants for Backlog Queue ---
+// --- Constants for Backlog Queue --- // Ensure INDEXING_BACKLOG_KEY is defined or imported if needed
 const INDEXING_BACKLOG_KEY = '__indexing_backlog';
 
 // --- End Constants ---
 
-/**
+/** // REMOVED Docs Interface - Now in hominio-types.ts
  * Docs interface represents the document registry for tracking and searching
  */
-export interface Docs {
-    pubKey: string;
-    owner: string;
-    updatedAt: string;
-    snapshotCid?: string;
-    updateCids?: string[];
+// export interface Docs { ... }
 
-    // Local state tracking for sync
-    localState?: {
-        snapshotCid?: string;
-        updateCids?: string[];
-    };
-
-    // --- NEW LOCAL Indexing State ---
-    indexingState?: {
-        lastIndexedSnapshotCid?: string;
-        lastIndexedUpdateCidsHash?: string;
-        needsReindex?: boolean;
-        lastIndexedTimestamp?: string;
-        indexingError?: string | null;
-    };
-    // --- END NEW Indexing State ---
-}
-
-/**
+/** // REMOVED Content Interface - Now in hominio-types.ts
  * Content represents the binary content of a document with its metadata
  */
-export interface Content {
-    cid: string;
-    type: string;
-    raw: Uint8Array;
-    metadata: Record<string, unknown>;
-    createdAt: string;
-}
+// export interface Content { ... }
 
-/**
+/** // REMOVED DocContentState Interface - Now in hominio-types.ts
  * DocContentState represents the current loaded state of a document
  */
-export interface DocContentState {
-    content: unknown;
-    loading: boolean;
-    error: string | null;
-    sourceCid: string | null;
-    isLocalSnapshot: boolean;
-    appliedUpdates?: number;
-}
+// export interface DocContentState { ... }
 
 // Map to hold active Loro document instances
 const activeLoroDocuments = new Map<string, LoroDoc>();
 
-/**
+/** // REMOVED InitialBridiData Interface - Now in hominio-types.ts
  * Define the structure for initialBridiData
  */
-interface InitialBridiData {
-    gismu: 'bridi';
-    selbriRef: string;
-    sumtiData: Record<string, LoroJsonValue | string>;
-    selbriJavni: Record<string, ValidationRuleStructure> | undefined;
-}
+// interface InitialBridiData { ... }
 
-/**
+/** // REMOVED IndexingState Interface - Now in hominio-types.ts
  * Represents the indexing state of a document.
  */
-export interface IndexingState {
-    lastIndexedTimestamp?: string;
-    lastIndexedSnapshotCid?: string;
-    lastIndexedUpdateCidsHash?: string;
-    needsReindex: boolean;
-    indexingError?: string | null;
-}
+// export interface IndexingState { ... }
 
-/**
+/** // REMOVED IndexingBacklogItem Interface - Now in hominio-types.ts
  * Represents an item in the indexing backlog.
  */
-export interface IndexingBacklogItem {
-    pubKey: string;
-    addedTimestamp: string;
-    errorCount: number;
-    lastError: string;
-}
+// export interface IndexingBacklogItem { ... }
 
 /**
  * HominioDB class implements the Content layer functionality

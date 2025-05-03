@@ -1,6 +1,20 @@
 import { browser } from '$app/environment';
 import { openDB, type IDBPDatabase } from 'idb';
 
+// --- Import Types from hominio-types.ts ---
+import type {
+    StorageItem,
+    StorageAdapter,
+    StorageTransaction
+} from './hominio-types';
+// Re-export types if needed
+export type {
+    StorageItem,
+    StorageAdapter,
+    StorageTransaction
+};
+// --- End Import Types ---
+
 // Constants
 const DB_NAME = 'hominio-docs';
 const DB_VERSION = 1;
@@ -8,118 +22,17 @@ const DB_VERSION = 1;
 /**
  * StorageItem represents a single item in storage with its metadata
  */
-export interface StorageItem {
-    key: string;
-    value: Uint8Array;
-    metadata: Record<string, unknown>;
-    createdAt: string;
-}
+// export interface StorageItem { ... }
 
 /**
  * StorageAdapter interface defines the required operations for any storage implementation
  */
-export interface StorageAdapter {
-    /**
-     * Initialize the storage adapter
-     */
-    init(): Promise<void>;
-
-    /**
-     * Get a value by its key
-     * @param key The unique identifier for the item
-     * @returns The binary data or null if not found
-     */
-    get(key: string): Promise<Uint8Array | null>;
-
-    /**
-     * Store a value with its associated key and optional metadata
-     * @param key The unique identifier for the item
-     * @param value The binary data to store
-     * @param metadata Optional metadata associated with the value
-     */
-    put(key: string, value: Uint8Array, metadata?: Record<string, unknown>): Promise<void>;
-
-    /**
-     * Delete a value by its key
-     * @param key The unique identifier for the item to delete
-     * @returns True if the item was deleted, false if it didn't exist
-     */
-    delete(key: string): Promise<boolean>;
-
-    /**
-     * Get all items, optionally filtering by a key prefix
-     * @param prefix Optional key prefix to filter items
-     * @returns Array of storage items matching the criteria
-     */
-    getAll(prefix?: string): Promise<Array<StorageItem>>;
-
-    /**
-     * Get metadata for a specific item
-     * @param key The unique identifier for the item
-     * @returns The metadata or null if not found
-     */
-    getMetadata(key: string): Promise<Record<string, unknown> | null>;
-
-    /**
-     * Query items based on metadata
-     * @param filter Function that returns true for items to include
-     * @returns Array of keys for matching items
-     */
-    query(filter: (metadata: Record<string, unknown>) => boolean): Promise<string[]>;
-
-    /**
-     * Check if multiple keys exist efficiently.
-     * @param keys Array of keys to check.
-     * @returns A Set containing the keys that exist.
-     */
-    batchExists(keys: string[]): Promise<Set<string>>;
-
-    /**
-     * Put multiple items into storage efficiently.
-     * @param items Array of items to put.
-     */
-    batchPut(items: Array<{ key: string, value: Uint8Array, meta?: Record<string, unknown> }>): Promise<void>;
-
-    /**
-     * Create a transaction for batch operations
-     */
-    createTransaction(): StorageTransaction;
-
-    /**
-     * Close the storage connection
-     */
-    close(): void;
-}
+// export interface StorageAdapter { ... }
 
 /**
  * StorageTransaction interface for batch operations
  */
-export interface StorageTransaction {
-    /**
-     * Get a value within this transaction
-     */
-    get(key: string): Promise<Uint8Array | null>;
-
-    /**
-     * Put a value within this transaction
-     */
-    put(key: string, value: Uint8Array, metadata?: Record<string, unknown>): Promise<void>;
-
-    /**
-     * Delete a value within this transaction
-     */
-    delete(key: string): Promise<boolean>;
-
-    /**
-     * Complete the transaction
-     */
-    complete(): Promise<void>;
-
-    /**
-     * Abort the transaction
-     */
-    abort(): void;
-}
+// export interface StorageTransaction { ... }
 
 /**
  * IndexedDB implementation of the StorageAdapter interface

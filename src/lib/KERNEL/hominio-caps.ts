@@ -33,9 +33,6 @@ export function can(
     doc: Pick<Docs, 'owner'> | null // <<< UPDATED: Allow null for CREATE
 ): boolean {
 
-    // --- REMOVED Internal session fetching ---
-    // --- REMOVED Offline Check --- 
-
     // --- Simplified Online Logic --- 
     const targetOwner = doc?.owner;
     const userId = user?.id; // Use passed-in user

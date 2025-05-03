@@ -1,9 +1,12 @@
 <script lang="ts">
 	import { get, type Readable, writable } from 'svelte/store';
 	import { getContext } from 'svelte';
-	import type { LeafValue } from '$db/seeding/leaf.data';
-	import type { SchemaPlaceTranslation } from '$db/seeding/schema.data';
-	import type { LoroHqlQueryExtended, QueryResult } from '$lib/KERNEL/hominio-svelte';
+	import type {
+		LoroHqlQueryExtended,
+		QueryResult,
+		LeafValue,
+		SchemaPlaceTranslation
+	} from '$lib/KERNEL/hominio-types';
 
 	const o = getContext<typeof import('$lib/KERNEL/hominio-svelte').o>('o');
 

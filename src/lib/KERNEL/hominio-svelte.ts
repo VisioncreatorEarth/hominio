@@ -1,18 +1,31 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import { writable, readable, get, type Readable } from 'svelte/store';
 import { browser } from '$app/environment';
-import { hominioDB, subscribeToDbChanges } from './hominio-db'; // Import subscribe function
+import { subscribeToDbChanges } from './hominio-db'; // Import subscribe function
 // Import query executor and types for internal use
-import { executeQuery as coreExecuteQuery, type LoroHqlQueryExtended as CoreLoroHqlQueryExtended, type QueryResult as CoreQueryResult } from './hominio-query';
+import { executeQuery as coreExecuteQuery } from './hominio-query';
 // Re-export under original names
-export type { CoreLoroHqlQueryExtended as LoroHqlQueryExtended, CoreQueryResult as QueryResult };
-import { executeMutation as coreExecuteMutation, type MutateHqlRequest, type MutationResult } from './hominio-mutate';
+// export type { CoreLoroHqlQueryExtended as LoroHqlQueryExtended, CoreQueryResult as QueryResult };
+import { executeMutation as coreExecuteMutation } from './hominio-mutate';
 // Import and re-export auth tools
 import { authClient as coreAuthClient, getMe as coreGetMe } from './hominio-auth';
 // Remove individual re-exports
 // export { authClient, coreGetMe as getMe };
-import type { CapabilityUser } from './hominio-caps';
+// Remove direct caps import
+// import type { CapabilityUser } from './hominio-caps';
 /* eslint-enable @typescript-eslint/no-unused-vars */
+
+// --- Import Types from hominio-types.ts ---
+import type {
+    LoroHqlQueryExtended as CoreLoroHqlQueryExtended, // Keep alias
+    QueryResult as CoreQueryResult, // Keep alias
+    MutateHqlRequest,
+    MutationResult,
+    CapabilityUser
+} from './hominio-types';
+// Re-export under original names using imported types
+// export type { CoreLoroHqlQueryExtended as LoroHqlQueryExtended, CoreQueryResult as QueryResult };
+// --- End Import Types ---
 
 // --- Internal State ---
 
@@ -212,5 +225,9 @@ export const o = {
     me: coreGetMe,
     authClient: coreAuthClient
 };
+
+// --- Export renamed types needed externally ---
+// These need to be exported *after* the `o` object
+export type { CoreLoroHqlQueryExtended as LoroHqlQueryExtended, CoreQueryResult as QueryResult };
 
 // Add other facade functions as needed 

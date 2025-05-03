@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, getContext } from 'svelte';
+	// Remove direct auth/caps imports
 	// Remove direct hominio-auth import
 	// import type { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
 	import type { CapabilityUser } from '$lib/KERNEL/hominio-caps';

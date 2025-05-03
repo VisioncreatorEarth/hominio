@@ -7,7 +7,42 @@ import {
     getDataFromDoc,
 } from './loro-engine';
 import { canRead, type CapabilityUser } from '$lib/KERNEL/hominio-caps';
-import { getIndexLeafPubKey, type IndexLeafType } from './index-registry';
+import { getIndexLeafPubKey /* , type IndexLeafType */ } from './index-registry';
+
+// --- Import Types from hominio-types.ts ---
+import type {
+    PlaceKey,
+    LoroHqlMapValue,
+    QueryContext,
+    StepResultItem,
+    JoinInputItem,
+    HqlStepAction,
+    LoroHqlStepBase,
+    LoroHqlSetVarStep,
+    LoroHqlFindStep,
+    LoroHqlGetStep,
+    LoroHqlSelectStep,
+    LoroHqlIterateIndexStep,
+    ResolveLeafValueRule,
+    ResolveRule,
+    LoroHqlResolveStep,
+    LoroHqlJoinSource,
+    LoroHqlJoinStep,
+    AggregateFieldRule,
+    LoroHqlAggregateStep,
+    LoroHqlStep,
+    LoroHqlQueryExtended,
+    QueryResult,
+    IndexLeafType // Import IndexLeafType here
+} from './hominio-types';
+// Re-export types if needed by other modules
+export type {
+    PlaceKey,
+    LoroHqlQueryExtended,
+    QueryResult,
+    // Other query-specific types if needed (e.g., LoroHqlStep)
+};
+// --- End Import Types ---
 
 // FIX: Export PlaceKey
 export type PlaceKey = 'x1' | 'x2' | 'x3' | 'x4' | 'x5';
