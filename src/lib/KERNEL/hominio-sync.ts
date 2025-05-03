@@ -131,6 +131,11 @@ export class HominioSync {
 
         try {
             const localDocsToSync = await hominioDB.getDocumentsWithLocalChanges();
+
+            // <<< DEBUG LOG START >>>
+            console.log(`[Sync Debug] Documents identified with local changes:`, localDocsToSync.map(d => d.pubKey));
+            // <<< DEBUG LOG END >>>
+
             if (localDocsToSync.length === 0) {
                 this.setSyncStatus(false); // Ensure status is reset if nothing to sync
                 return;
@@ -153,69 +158,117 @@ export class HominioSync {
                     // Double-check local state is still valid before proceeding
                     const refreshedDoc = await hominioDB.getDocument(doc.pubKey);
                     if (!refreshedDoc) {
+                        console.warn(`[Push] Document ${doc.pubKey} disappeared during sync process. Skipping.`);
                         continue;
                     }
                     if (!refreshedDoc.localState ||
                         (!refreshedDoc.localState.snapshotCid &&
                             (!refreshedDoc.localState.updateCids || refreshedDoc.localState.updateCids.length === 0))) {
-                        continue;
+                        console.warn(`[Push] Local state for ${doc.pubKey} cleared during sync process. Skipping.`);
+                        continue; // Skip if local state cleared up
                     }
-
-                    // --- Restore Actual Server Interaction --- 
-                    let docExistsOnServer = false;
-                    try {
-                        const checkResult = await hominio.api.docs({ pubKey: doc.pubKey }).get();
-                        const response = checkResult as ApiResponse<unknown>; // Use defined type
-
-                        if (response.error && response.error.status !== 404) {
-                            console.error(`[Push] Server error checking existence for ${doc.pubKey}:`, response.error); // Keep Server error on check
-                            throw new Error(`Server error checking existence: ${response.error.value?.message ?? `Status ${response.error.status}`}`);
-                        }
-                        docExistsOnServer = !response.error; // Exists if no error or 404
-                    } catch (err) {
-                        console.warn(`[Push] Error checking existence for ${doc.pubKey}:`, err); // Keep Error on check
-                        docPushError = `Existence check failed for ${doc.pubKey}: ${err instanceof Error ? err.message : 'Unknown error'}`;
-                    }
-                    // --- End Server Existence Check ---
 
                     let needsLocalUpdate = false;
                     const syncedCids: { snapshot?: string; updates?: string[]; serverConsolidated?: boolean; newServerSnapshotCid?: string } = {};
 
-                    // --- Handle Initial Document Creation --- 
-                    if (!docExistsOnServer && refreshedDoc.localState?.snapshotCid) {
+                    // --- Priority 1: Handle Local Snapshot Existence ---
+                    if (refreshedDoc.localState?.snapshotCid) {
                         const localSnapshotCid = refreshedDoc.localState.snapshotCid;
+                        const localUpdateCids = refreshedDoc.localState.updateCids ?? [];
+
+                        // Fetch snapshot content
                         const snapshotData = await hominioDB.getRawContent(localSnapshotCid);
-
-                        if (snapshotData) {
-                            try {
-                                // @ts-expect-error Property 'post' does not exist on type '...' (Eden Treaty type inference issue)
-                                const createResult = await hominio.api.docs.post({
-                                    pubKey: doc.pubKey,
-                                    binarySnapshot: Array.from(snapshotData)
-                                });
-
-                                if (createResult.error) {
-                                    console.error(`[Push] Server error creating doc ${doc.pubKey}:`, createResult.error); // Keep Server error on create
-                                    throw new Error(`Server error creating doc ${doc.pubKey}: ${createResult.error.value?.message ?? 'Unknown error'}`);
-                                }
-
-                                docExistsOnServer = true; // Mark as existing now
-
-                                // Mark this snapshot as synced for local state update
-                                syncedCids.snapshot = localSnapshotCid;
-                                needsLocalUpdate = true;
-                            } catch (creationErr) {
-                                console.error(`[Push] Error creating doc ${doc.pubKey} on server:`, creationErr); // Keep Create error
-                                docPushError = `Document creation failed: ${creationErr instanceof Error ? creationErr.message : 'Unknown error'}`;
-                            }
-                        } else {
+                        if (!snapshotData) {
                             docPushError = `Local snapshot data missing for ${localSnapshotCid}`;
+                            continue; // Skip this doc
                         }
-                    }
-                    // --- End Initial Document Creation ---
 
-                    // --- Sync Updates (if exists/created and has local updates) ---
-                    if (docExistsOnServer && refreshedDoc.localState?.updateCids && refreshedDoc.localState.updateCids.length > 0) {
+                        // Fetch update content (if any)
+                        const updatesToUpload: Array<{ cid: string, type: string, binaryData: number[] }> = [];
+                        let missingUpdateData = false;
+                        for (const cid of localUpdateCids) {
+                            const updateData = await hominioDB.getRawContent(cid);
+                            if (updateData) {
+                                updatesToUpload.push({ cid, type: 'update', binaryData: Array.from(updateData) });
+                            } else {
+                                docPushError = `Local update data missing for ${cid}`;
+                                missingUpdateData = true;
+                                break; // Stop fetching updates if one is missing
+                            }
+                        }
+                        if (missingUpdateData) continue; // Skip this doc if required update data is missing
+
+                        // Prepare combined content upload list
+                        const contentItemsToUpload = [
+                            { cid: localSnapshotCid, type: 'snapshot', binaryData: Array.from(snapshotData) },
+                            ...updatesToUpload
+                        ];
+
+                        try {
+                            console.log(`[Push] Uploading snapshot ${localSnapshotCid} and ${updatesToUpload.length} updates for ${doc.pubKey}`);
+
+                            // Upload ALL content (snapshot + updates)
+                            // @ts-expect-error Property 'batch' does not exist (Eden Treaty inference issue)
+                            const contentResult = await hominio.api.content.batch.upload.post({ items: contentItemsToUpload });
+                            if (contentResult.error) {
+                                throw new Error(`Server error uploading content (snapshot/updates): ${contentResult.error.value?.message ?? `Status ${contentResult.error.status}`}`);
+                            }
+
+                            // Register snapshot + updates with the server
+                            // Assumes endpoint supports newSnapshotCid + updateCids
+                            console.log(`[Push] Registering snapshot ${localSnapshotCid} and updates for ${doc.pubKey}`);
+                            // @ts-expect-error Property 'update' does not exist (Eden Treaty inference issue) - Assume endpoint accepts { newSnapshotCid, updateCids }
+                            const registerResult = await hominio.api.docs({ pubKey: doc.pubKey }).update.batch.post({
+                                newSnapshotCid: localSnapshotCid,
+                                updateCids: updatesToUpload.map(u => u.cid)
+                            });
+                            if (registerResult.error) {
+                                // Handle potential 404 if the doc didn't exist on the server yet
+                                if (registerResult.error.status === 404) {
+                                    console.log(`[Push] Doc ${doc.pubKey} not found on server during snapshot registration. Attempting creation...`);
+                                    // @ts-expect-error Property 'post' does not exist (Eden Treaty inference issue)
+                                    const createResult = await hominio.api.docs.post({
+                                        pubKey: doc.pubKey,
+                                        binarySnapshot: Array.from(snapshotData) // Send the initial snapshot
+                                    });
+                                    if (createResult.error) {
+                                        throw new Error(`Server error creating doc ${doc.pubKey} after failed update: ${createResult.error.value?.message ?? `Status ${createResult.error.status}`}`);
+                                    }
+                                    // If creation succeeds, we might need to then register the updates separately if they existed
+                                    if (updatesToUpload.length > 0) {
+                                        console.log(`[Push] Registering updates for ${doc.pubKey} after successful creation.`);
+                                        // @ts-expect-error Property 'update' does not exist (Eden Treaty inference issue)
+                                        const updateAfterCreateResult = await hominio.api.docs({ pubKey: doc.pubKey }).update.batch.post({
+                                            updateCids: updatesToUpload.map(u => u.cid)
+                                        });
+                                        if (updateAfterCreateResult.error) {
+                                            // Log error but potentially proceed with local state update for snapshot
+                                            console.error(`[Push] Failed to register updates for ${doc.pubKey} after creation: ${updateAfterCreateResult.error.value?.message ?? `Status ${updateAfterCreateResult.error.status}`}. Snapshot sync state might be incomplete.`);
+                                            // Don't throw here, let local state update handle snapshot sync
+                                        }
+                                    }
+
+                                } else {
+                                    throw new Error(`Server error registering snapshot/updates: ${registerResult.error.value?.message ?? `Status ${registerResult.error.status}`}`);
+                                }
+                            }
+
+                            // Success! Mark CIDs for local state update
+                            syncedCids.snapshot = localSnapshotCid;
+                            syncedCids.updates = updatesToUpload.map(u => u.cid);
+                            needsLocalUpdate = true;
+                            console.log(`[Push] Successfully pushed snapshot ${localSnapshotCid} and ${updatesToUpload.length} updates for ${doc.pubKey}`);
+
+
+                        } catch (err) {
+                            console.error(`[Push] Error in snapshot/update push for ${doc.pubKey}:`, err);
+                            docPushError = `Snapshot/Update push failed: ${err instanceof Error ? err.message : 'Unknown error'}`;
+                        }
+
+                        // --- Priority 2: Handle Only Local Updates (No Local Snapshot) ---
+                    } else if (refreshedDoc.localState?.updateCids && refreshedDoc.localState.updateCids.length > 0) {
+                        console.log(`[Push] Handling updates only for ${doc.pubKey}`);
+                        // This is the original update logic block
                         const localUpdateCids = [...refreshedDoc.localState.updateCids]; // Copy array
                         const updatesToUpload: Array<{ cid: string, type: string, binaryData: number[] }> = [];
 
@@ -223,23 +276,38 @@ export class HominioSync {
                             const updateData = await hominioDB.getRawContent(cid);
                             if (updateData) {
                                 updatesToUpload.push({ cid, type: 'update', binaryData: Array.from(updateData) });
+                            } else {
+                                // If update data is missing, we cannot proceed with this doc
+                                docPushError = `Local update data missing for ${cid}`;
+                                break;
                             }
                         }
 
-                        if (updatesToUpload.length > 0) {
+                        // Only proceed if all required update data was found
+                        if (!docPushError && updatesToUpload.length > 0) {
                             try {
-                                // @ts-expect-error Property 'batch' does not exist on type '...' (Eden Treaty type inference issue)
+                                console.log(`[Push] Uploading ${updatesToUpload.length} updates for ${doc.pubKey}`);
+                                // Upload update content
+                                // @ts-expect-error Property 'batch' does not exist (Eden Treaty inference issue)
                                 const contentResult = await hominio.api.content.batch.upload.post({ items: updatesToUpload });
                                 if (contentResult.error) {
                                     console.error(`[Push] Server error uploading update content for ${doc.pubKey}:`, contentResult.error); // Keep Error uploading content
-                                    throw new Error(`Server error uploading update content: ${contentResult.error.value?.message ?? 'Unknown error'}`);
+                                    throw new Error(`Server error uploading update content: ${contentResult.error.value?.message ?? `Status ${contentResult.error.status}`}`);
                                 }
 
-                                // @ts-expect-error Property 'update' does not exist on type '...' (Eden Treaty type inference issue)
+                                // Register updates
+                                console.log(`[Push] Registering ${updatesToUpload.length} updates for ${doc.pubKey}`);
+                                // @ts-expect-error Property 'update' does not exist (Eden Treaty inference issue)
                                 const registerResult = await hominio.api.docs({ pubKey: doc.pubKey }).update.batch.post({ updateCids: updatesToUpload.map(u => u.cid) });
                                 if (registerResult.error) {
-                                    console.error(`[Push] Server error registering updates for ${doc.pubKey}:`, registerResult.error); // Keep Error registering updates
-                                    throw new Error(`Server error registering updates: ${registerResult.error.value?.message ?? 'Unknown error'}`);
+                                    // Handle 404 - this implies the base doc is missing, which shouldn't happen if only updates exist locally
+                                    if (registerResult.error.status === 404) {
+                                        console.error(`[Push] Doc ${doc.pubKey} not found on server when trying to register updates. Sync state inconsistent.`);
+                                        throw new Error(`Server missing base document ${doc.pubKey} required for updates.`);
+                                    } else {
+                                        console.error(`[Push] Server error registering updates for ${doc.pubKey}:`, registerResult.error); // Keep Error registering updates
+                                        throw new Error(`Server error registering updates: ${registerResult.error.value?.message ?? `Status ${registerResult.error.status}`}`);
+                                    }
                                 }
 
                                 // Check for Server-Side Consolidation
@@ -249,45 +317,58 @@ export class HominioSync {
                                 if (snapshotInfo?.success && snapshotInfo?.newSnapshotCid) {
                                     serverConsolidated = true;
                                     newServerSnapshotCid = snapshotInfo.newSnapshotCid;
-                                    syncedCids.snapshot = newServerSnapshotCid; // Server snapshot becomes the new base
+                                    // IMPORTANT: If server consolidated, the *new server snapshot* is the relevant one for local state.
+                                    syncedCids.snapshot = newServerSnapshotCid;
+                                    console.log(`[Push] Server consolidated updates for ${doc.pubKey} into new snapshot ${newServerSnapshotCid}`);
                                 }
 
                                 // Mark updates as successfully sent for local state update
                                 syncedCids.updates = updatesToUpload.map(u => u.cid);
                                 needsLocalUpdate = true;
 
-                                // Pass server consolidation flag
-                                syncedCids.serverConsolidated = serverConsolidated; // Add flag here
-                                // Pass the new server snapshot CID if consolidation occurred
+                                // Pass server consolidation flag and potential new snapshot CID
+                                syncedCids.serverConsolidated = serverConsolidated;
                                 syncedCids.newServerSnapshotCid = newServerSnapshotCid;
+
+                                console.log(`[Push] Successfully pushed ${updatesToUpload.length} updates for ${doc.pubKey}. Server consolidated: ${serverConsolidated}`);
 
                             } catch (err) {
                                 console.error(`[Push] Error pushing updates for ${doc.pubKey}:`, err); // Keep Error during update push
                                 docPushError = `Update push failed: ${err instanceof Error ? err.message : 'Unknown error'}`;
                             }
+                        } else if (!docPushError) {
+                            // This case means localState.updateCids existed but maybe data was missing or array became empty
+                            console.warn(`[Push] Skipping update push for ${doc.pubKey} - no valid update content found or error occurred fetching it.`);
                         }
-                    } else if (refreshedDoc.localState?.updateCids && refreshedDoc.localState.updateCids.length > 0) {
-                        // Do nothing if doc doesn't exist on server for update sync
+                    } else {
+                        // No local snapshot and no local updates - should have been caught by the initial check, but log just in case.
+                        console.warn(`[Push] Doc ${doc.pubKey} reached sync logic with no actionable local state.`);
                     }
-                    // --- End Sync Updates ---
+                    // --- End Sync Logic ---
+
 
                     // --- Update local state if anything was synced successfully ---
                     if (needsLocalUpdate && !docPushError) {
                         try {
+                            console.log(`[Push] Updating local state for ${doc.pubKey} after sync. Synced CIDs:`, JSON.stringify(syncedCids));
                             await hominioDB.updateDocStateAfterSync(doc.pubKey, {
-                                snapshotCid: syncedCids.snapshot,
+                                snapshotCid: syncedCids.snapshot, // Can be original local snapshot OR new server consolidated one
                                 updateCids: syncedCids.updates,
-                                serverConsolidated: syncedCids.serverConsolidated,
-                                newServerSnapshotCid: syncedCids.newServerSnapshotCid
+                                serverConsolidated: syncedCids.serverConsolidated, // Only true if ONLY updates were pushed AND server consolidated
+                                newServerSnapshotCid: syncedCids.newServerSnapshotCid // Only set if ONLY updates were pushed AND server consolidated
                             });
+                            console.log(`[Push] Local state updated for ${doc.pubKey}.`);
                         } catch (updateStateErr) {
                             console.error(`[Push] Error updating local state for ${doc.pubKey} after sync:`, updateStateErr); // Keep Error updating local state
+                            // If local state update fails, the changes might be pushed again later. This is safer than losing data.
+                            // We still set the overallPushError so the UI knows something went wrong.
                             docPushError = `Local state update failed: ${updateStateErr instanceof Error ? updateStateErr.message : 'Unknown error'}`;
                         }
                     } else if (docPushError) {
-                        // Logged error earlier, no state update needed
+                        console.error(`[Push] Not updating local state for ${doc.pubKey} due to push error: ${docPushError}`);
                     } else {
-                        // No sync operations performed or error occurred
+                        // No sync operations were needed or successfully performed
+                        // console.log(`[Push] No local state update needed for ${doc.pubKey}. Needs update: ${needsLocalUpdate}, Error: ${docPushError}`);
                     }
                     // --- End Local State Update ---
 
@@ -308,7 +389,9 @@ export class HominioSync {
             // After attempting to sync all docs, do a final recheck
             const stillPendingDocs = await hominioDB.getDocumentsWithLocalChanges();
             if (stillPendingDocs.length > 0) {
-                // Optional: Log if docs still pending after push attempt
+                console.warn(`[Push] ${stillPendingDocs.length} documents still have pending local changes after sync attempt.`);
+            } else {
+                console.log("[Push] All pending local changes processed (or skipped due to errors).");
             }
 
         } catch (err) { // Catch errors in the overall process (e.g., loading local changes)
@@ -362,15 +445,21 @@ export class HominioSync {
                 for (const result of response.data.results) {
                     if (result.exists) {
                         existingServerCids.add(result.cid);
+                    } else {
+                        console.warn(`[Pull Content] Server reported content CID ${result.cid} does not exist.`);
                     }
                 }
             } catch (err) {
                 console.error('[Pull Content] Failed to check content existence on server:', err); // Keep error
                 this.setSyncError(`Content check failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+                // Continue trying to fetch based on initial list, but log the check failure
             }
 
+            // Determine which CIDs to actually attempt fetching (those server *claims* to have)
+            const cidsToAttemptFetch = cidsToFetch.filter(cid => existingServerCids.has(cid));
+
             // 4. Fetch binary content for each existing CID (robustly)
-            const fetchPromises = Array.from(existingServerCids).map(async (cid) => {
+            const fetchPromises = cidsToAttemptFetch.map(async (cid) => {
                 try {
                     const contentItemMeta = contentItems.find(item => item.cid === cid)!;
                     // @ts-expect-error Eden Treaty doesn't fully type nested dynamic route GETs
@@ -379,6 +468,7 @@ export class HominioSync {
 
                     if (binaryResponse.error) {
                         if (binaryResponse.error.status === 404) {
+                            console.warn(`[Pull Content] Server returned 404 for content ${cid} despite claiming it exists.`);
                             return null;
                         }
                         throw new Error(`Server Error fetching content ${cid}: ${binaryResponse.error.value?.message ?? `Status ${binaryResponse.error.status}`}`);
@@ -387,6 +477,7 @@ export class HominioSync {
                         const binaryData = new Uint8Array(binaryResponse.data.binaryData);
                         return { cid, binaryData, meta: { type: contentItemMeta.type, documentPubKey: contentItemMeta.docPubKey } };
                     } else {
+                        console.warn(`[Pull Content] Server returned success for content ${cid} but no binaryData found.`);
                         return null;
                     }
                 } catch (err) {
@@ -664,6 +755,8 @@ export class HominioSync {
                     if (!get(status).syncError) {
                         this.setSyncError(`Content sync potentially incomplete: ${contentSyncErr instanceof Error ? contentSyncErr.message : 'Unknown error'}`);
                     }
+                    // Decide if we should abort the pull entirely or continue with potentially incomplete data?
+                    // Let's continue for now, but the error state will be set.
                 }
             }
 
@@ -671,13 +764,16 @@ export class HominioSync {
             const processMetadataSave = async (docsToSave: Docs[]) => {
                 for (const serverDocToSave of docsToSave) {
                     try {
+                        // Critical Check: Only save metadata if the required snapshot was successfully fetched/exists locally
                         if (serverDocToSave.snapshotCid && !successfullyFetchedCids.has(serverDocToSave.snapshotCid)) {
                             console.warn(`[Pull] Skipping metadata save for ${serverDocToSave.pubKey} because required snapshot ${serverDocToSave.snapshotCid} was not fetched/saved.`); // Keep warning
                             if (!get(status).syncError) {
                                 this.setSyncError(`Pull incomplete: Missing snapshot content for ${serverDocToSave.pubKey}`);
                             }
-                            continue;
+                            continue; // Skip saving this doc's metadata
                         }
+                        // Also check update CIDs? Maybe too strict, allow saving if snapshot is present?
+                        // Let's allow saving if snapshot is present, but updates might be missing.
                         await hominioDB.saveSyncedDocument(serverDocToSave);
                     } catch (saveErr) {
                         console.error(`[Pull] Failed to save synced doc metadata ${serverDocToSave.pubKey} locally:`, saveErr); // KEEP Error Log
@@ -693,36 +789,7 @@ export class HominioSync {
 
             // --- 6. Cleanup Logic --- 
             try {
-                const refreshedLocalDocs = await hominioDB.loadAllDocsReturn();
-                const stillReferencedCids = new Set<string>();
-                refreshedLocalDocs.forEach(doc => {
-                    if (doc.snapshotCid) stillReferencedCids.add(doc.snapshotCid);
-                    doc.updateCids?.forEach(cid => stillReferencedCids.add(cid));
-                    if (doc.localState?.snapshotCid) stillReferencedCids.add(doc.localState.snapshotCid);
-                    doc.localState?.updateCids?.forEach(cid => stillReferencedCids.add(cid));
-                });
-
-                const cidsInContentStore = (await getContentStorage().getAll()).map(item => item.key);
-
-                const unreferencedCids = cidsInContentStore.filter(
-                    (cid: string) => !stillReferencedCids.has(cid)
-                );
-
-                if (unreferencedCids.length > 0) {
-                    const contentStorage = getContentStorage();
-                    let deleteFailures = 0;
-                    for (const cidToDelete of unreferencedCids) {
-                        try {
-                            await contentStorage.delete(cidToDelete);
-                        } catch (deleteErr) {
-                            deleteFailures++;
-                            console.error("[Pull Cleanup] Deletion error (ignored):", deleteErr); // Log error minimally
-                        }
-                    }
-                    if (deleteFailures > 0) {
-                        console.warn(`[Pull Cleanup] ${deleteFailures} unreferenced items failed to delete.`); // Keep warning if needed
-                    }
-                }
+                await this.cleanupUnreferencedContent();
             } catch (cleanupErr) {
                 console.error("[Pull] Error during local content cleanup:", cleanupErr); // Keep error
             }
@@ -747,6 +814,56 @@ export class HominioSync {
     }
 
     /**
+     * Performs local content cleanup after a pull operation.
+     * Fetches all current doc metadata, identifies all referenced CIDs (including local state),
+     * gets all CIDs in the content store, and deletes unreferenced ones.
+     */
+    private async cleanupUnreferencedContent(): Promise<void> {
+        try {
+            const refreshedLocalDocs = await hominioDB.loadAllDocsReturn();
+            const stillReferencedCids = new Set<string>();
+            refreshedLocalDocs.forEach(doc => {
+                if (doc.snapshotCid) stillReferencedCids.add(doc.snapshotCid);
+                doc.updateCids?.forEach(cid => stillReferencedCids.add(cid));
+                // IMPORTANT: Include CIDs from localState as they are still needed!
+                if (doc.localState?.snapshotCid) stillReferencedCids.add(doc.localState.snapshotCid);
+                doc.localState?.updateCids?.forEach(cid => stillReferencedCids.add(cid));
+            });
+
+            const cidsInContentStore = (await getContentStorage().getAllKeys()) as string[]; // Assume getAllKeys returns string[]
+
+            const unreferencedCids = cidsInContentStore.filter(
+                (cid: string) => !stillReferencedCids.has(cid)
+            );
+
+            if (unreferencedCids.length > 0) {
+                console.log(`[Pull Cleanup] Found ${unreferencedCids.length} unreferenced content items to delete.`);
+                const contentStorage = getContentStorage();
+                let deleteFailures = 0;
+                const deletePromises = unreferencedCids.map(cidToDelete =>
+                    contentStorage.delete(cidToDelete).catch(deleteErr => {
+                        deleteFailures++;
+                        console.error(`[Pull Cleanup] Failed to delete CID ${cidToDelete}:`, deleteErr); // Log error minimally
+                    })
+                );
+                await Promise.all(deletePromises);
+
+                if (deleteFailures > 0) {
+                    console.warn(`[Pull Cleanup] ${deleteFailures} unreferenced items failed to delete.`); // Keep warning if needed
+                } else {
+                    console.log(`[Pull Cleanup] Successfully deleted ${unreferencedCids.length} unreferenced items.`);
+                }
+            } else {
+                console.log("[Pull Cleanup] No unreferenced content found to delete.");
+            }
+        } catch (cleanupErr) {
+            console.error("[Pull Cleanup] Unexpected error during cleanup process:", cleanupErr);
+            // Don't set global sync error for cleanup issues, just log it.
+        }
+    }
+
+
+    /**
      * Deletes a document locally and attempts deletion on the server.
      * Performs capability checks before proceeding.
      */
@@ -767,27 +884,33 @@ export class HominioSync {
                 throw new Error(`Permission denied to delete document ${pubKey}.`);
             }
 
-            // 3. Attempt Server Deletion
+            // 3. Attempt Server Deletion (ASYNC - don't wait)
             this.deleteDocumentOnServer(pubKey)
                 .then(serverSuccess => {
                     if (!serverSuccess) {
-                        console.warn(`[Sync Delete] Server deletion failed for ${pubKey}, proceeding locally.`); // Keep warn
+                        console.warn(`[Sync Delete] Server deletion reported failure for ${pubKey}, but proceeding locally.`); // Keep warn
+                    } else {
+                        console.log(`[Sync Delete] Server deletion successful for ${pubKey}.`);
                     }
                 })
                 .catch(err => {
-                    console.error(`[Sync Delete] Error during server deletion attempt for ${pubKey}:`, err); // Keep error
+                    // Log server error but proceed with local deletion
+                    console.error(`[Sync Delete] Error during server deletion attempt for ${pubKey} (ignored for local delete):`, err); // Keep error
                 });
 
-            // 4. Local Deletion (using hominioDB)
+            // 4. Local Deletion (using hominioDB) - Proceed regardless of server outcome for now
             const localDeleteSuccess = await hominioDB.deleteDocument(user, pubKey); // Pass user
             if (localDeleteSuccess) {
-                // Local delete successful
+                console.log(`[Sync Delete] Local deletion successful for ${pubKey}.`);
+                // Optionally trigger cleanup after local deletion
+                this.cleanupUnreferencedContent().catch(err => console.error("[Sync Delete] Post-delete cleanup failed:", err));
             } else {
+                // This is unexpected if capability check passed
                 console.error(`[Sync Delete] Local deletion failed for ${pubKey} even after capability check.`); // Keep error
-                return false;
+                throw new Error(`Local deletion failed unexpectedly for ${pubKey}.`);
             }
 
-            return true; // Return true indicating local success
+            return true; // Return true indicating local success (or doc didn't exist)
 
         } catch (err) {
             console.error(`[Sync Delete] Error deleting document ${pubKey}:`, err); // Keep error
@@ -800,9 +923,13 @@ export class HominioSync {
      * Private helper to call the server delete endpoint.
      */
     async deleteDocumentOnServer(pubKey: string): Promise<boolean> {
-        if (!browser || !get(status).isOnline) throw new Error('Offline: Cannot delete document on server.');
+        if (!browser || !get(status).isOnline) {
+            console.warn(`[Delete Server] Offline or not in browser. Cannot delete document ${pubKey} on server.`);
+            return false; // Indicate failure due to environment/network state
+        }
         try {
-            // REMOVED: @ts-expect-error Eden Treaty type inference issue - Keep: needed for dynamic route
+            console.log(`[Delete Server] Attempting to delete ${pubKey} on server...`);
+            // @ts-expect-error Eden Treaty type inference issue - Keep: needed for dynamic route
             const result = await hominio.api.docs({ pubKey }).delete();
             const response = result as ApiResponse<{ success: boolean; message?: string }>;
 
@@ -813,17 +940,21 @@ export class HominioSync {
                     errorMessage = errorValue.message;
                 }
                 if (response.error.status === 404) {
-                    console.warn(`Document ${pubKey} not found on server during delete, considering successful.`); // Keep warn
-                    return true;
+                    console.warn(`[Delete Server] Document ${pubKey} not found on server during delete, considering successful.`); // Keep warn
+                    return true; // Treat 404 as success for delete operation
                 }
-                throw new Error(`Server error deleting document: ${errorMessage} (Status: ${response.error.status})`);
+                // Throw other errors
+                throw new Error(`Server error deleting document ${pubKey}: ${errorMessage} (Status: ${response.error.status})`);
             }
 
-            return response.data?.success ?? false;
+            const success = response.data?.success ?? false;
+            console.log(`[Delete Server] Server response for deleting ${pubKey}: success=${success}`);
+            return success;
 
         } catch (err: unknown) {
-            console.error(`Error deleting document on server ${pubKey}:`, err); // Keep error
-            throw err; // Re-throw for caller
+            console.error(`[Delete Server] Error calling server delete for ${pubKey}:`, err); // Keep error
+            // Don't re-throw here, return false to indicate server failure
+            return false;
         }
     }
 
@@ -835,9 +966,14 @@ export class HominioSync {
         this.pullFromServer().finally(() => {
             // Then attempt to push any pending local changes
             const user = getMe();
-            if (get(status).pendingLocalChanges > 0) {
-                this.pushToServer(user);
-            }
+            this.updatePendingChangesCount().then(() => { // Ensure count is updated before checking
+                if (get(status).pendingLocalChanges > 0) {
+                    console.log(`[Sync Online] Pending changes found (${get(status).pendingLocalChanges}), initiating push...`);
+                    this.pushToServer(user);
+                } else {
+                    console.log("[Sync Online] No pending changes to push after pull.");
+                }
+            });
         });
     };
 
