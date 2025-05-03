@@ -1,14 +1,11 @@
 <script lang="ts">
-	import {
-		processReactiveQuery,
-		type LoroHqlQueryExtended,
-		type QueryResult
-	} from '$lib/KERNEL/hominio-query';
 	import { get, type Readable, writable } from 'svelte/store';
 	import { getContext } from 'svelte';
-	import { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
 	import type { LeafValue } from '$db/seeding/leaf.data';
 	import type { SchemaPlaceTranslation } from '$db/seeding/schema.data';
+	import type { LoroHqlQueryExtended, QueryResult } from '$lib/KERNEL/hominio-svelte';
+
+	const o = getContext<typeof import('$lib/KERNEL/hominio-svelte').o>('o');
 
 	// --- Type Definitions ---
 	interface AllLeavesResult extends QueryResult {
@@ -53,9 +50,9 @@
 		x5ResolvedFromType?: string | null;
 	}
 
-	// --- Get Effective User Function from Context ---
-	type GetCurrentUserFn = typeof getMeType;
-	const getMe = getContext<GetCurrentUserFn>('getMe');
+	// REMOVE: Get Effective User Function from Context
+	// type GetCurrentUserFn = typeof getMeType;
+	// const getMe = getContext<GetCurrentUserFn>('getMe');
 
 	// --- State ---
 	let selectedLeafId = $state<string | null>(null);
@@ -64,15 +61,16 @@
 	const relatedCompositesQueryStore = writable<LoroHqlQueryExtended | null>(null); // <<< NEW Store
 
 	// --- Reactive Queries ---
-	const allLeavesReadable = processReactiveQuery(getMe, allLeavesQueryStore) as Readable<
+	// Use o.subscribe
+	const allLeavesReadable = o.subscribe(allLeavesQueryStore) as Readable<
 		AllLeavesResult[] | null | undefined
 	>;
 
 	// <<< NEW Readable (Updated type) >>>
-	const relatedCompositesReadable = processReactiveQuery(
-		getMe,
-		relatedCompositesQueryStore
-	) as Readable<RelatedCompositeResult[] | null | undefined>; // Type already updated by interface change
+	// Use o.subscribe
+	const relatedCompositesReadable = o.subscribe(relatedCompositesQueryStore) as Readable<
+		RelatedCompositeResult[] | null | undefined
+	>; // Type already updated by interface change
 
 	// --- Effects to Set Queries ---
 	$effect.pre(() => {

@@ -1,10 +1,10 @@
 import { writable, get } from 'svelte/store';
 import { hominio } from '$lib/KERNEL/hominio-client';
-import { hominioDB, docChangeNotifier, type Docs } from '$lib/KERNEL/hominio-db';
+import { hominioDB, subscribeToDbChanges, type Docs } from './hominio-db';
 import { browser } from '$app/environment';
 import { canWrite, canDelete, type CapabilityUser } from './hominio-caps';
 import { getContentStorage } from '$lib/KERNEL/hominio-storage';
-import { getMe } from '$lib/KERNEL/hominio-auth';
+import { getMe } from './hominio-auth';
 import { GENESIS_PUBKEY } from '$db/constants';
 import { updateIndexLeafRegistry, type IndexLeafType } from './index-registry';
 import { LoroMap } from 'loro-crdt';
@@ -44,7 +44,7 @@ const status = writable<SyncStatus>({
 
 export class HominioSync {
     status = status; // Expose the store for the UI
-    private unsubscribeNotifier: (() => void) | null = null; // Store the unsubscribe function
+    private unsubscribeDbChanges: (() => void) | null = null; // Renamed from unsubscribeNotifier
     private syncingDocs = new Set<string>(); // Track pubKeys currently being pushed
     private _syncDebounceTimer: NodeJS.Timeout | null = null;
     private _triggerSyncCount = 0;
@@ -61,8 +61,8 @@ export class HominioSync {
                 try {
                     this.updatePendingChangesCount(); // Initial count
 
-                    // Subscribe to DB changes to keep pending count updated AND trigger sync if online
-                    this.unsubscribeNotifier = docChangeNotifier.subscribe(() => {
+                    // Subscribe to DB changes using the new mechanism
+                    this.unsubscribeDbChanges = subscribeToDbChanges(() => {
                         // Add a very short delay to allow IndexedDB writes to settle
                         setTimeout(() => {
                             this.updatePendingChangesCount();
@@ -848,9 +848,10 @@ export class HominioSync {
     // ------------------------------
 
     destroy() {
-        if (this.unsubscribeNotifier) {
-            this.unsubscribeNotifier();
-            this.unsubscribeNotifier = null;
+        // Unsubscribe from DB changes
+        if (this.unsubscribeDbChanges) {
+            this.unsubscribeDbChanges();
+            this.unsubscribeDbChanges = null;
         }
         if (browser) {
             window.removeEventListener('online', this.handleOnline);

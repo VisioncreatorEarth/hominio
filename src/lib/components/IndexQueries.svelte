@@ -1,19 +1,12 @@
 <script lang="ts">
-	import {
-		processReactiveQuery,
-		executeQuery, // Needed to fetch meta index initially
-		type LoroHqlQueryExtended,
-		type QueryResult
-	} from '$lib/KERNEL/hominio-query';
-	import { readable, writable, type Readable } from 'svelte/store';
+	import { writable, type Readable } from 'svelte/store';
 	import { getContext, onMount } from 'svelte';
-	import { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
 	import { GENESIS_PUBKEY } from '$db/constants';
 	import type { IndexLeafType } from '$lib/KERNEL/index-registry';
 	import type { LeafValue } from '$db/seeding/leaf.data';
+	import type { LoroHqlQueryExtended, QueryResult } from '$lib/KERNEL/hominio-svelte';
 
-	type GetCurrentUserFn = typeof getMeType;
-	const getMe = getContext<GetCurrentUserFn>('getMe');
+	const o = getContext<typeof import('$lib/KERNEL/hominio-svelte').o>('o');
 
 	// --- State ---
 	let indexRegistry = $state<Partial<Record<IndexLeafType, string>>>({}); // To store index name -> pubkey map
@@ -28,7 +21,8 @@
 		id: string;
 		data?: LeafValue | Record<string, unknown> | null;
 	}
-	const selectedIndexContent = processReactiveQuery(getMe, selectedIndexQueryStore) as Readable<
+	// Use o.subscribe
+	const selectedIndexContent = o.subscribe(selectedIndexQueryStore) as Readable<
 		IndexContentResult[] | null | undefined
 	>;
 	let currentSelectedIndexData = $derived(($selectedIndexContent ?? [])[0]);
@@ -53,8 +47,8 @@
 		};
 
 		try {
-			const currentUser = getMe();
-			const result = await executeQuery(metaIndexQuery, currentUser);
+			// Use o.query
+			const result = await o.query(metaIndexQuery);
 			if (
 				result &&
 				result.length > 0 &&
@@ -206,7 +200,7 @@
 								<li class="text-gray-500 italic">No keys found.</li>
 							{/each}
 						</ul>
-					{:else if selectedIndexKey === 'composites_by_component'}
+					{:else if selectedIndexKey === 'composites-by-component'}
 						<h3 class="mb-2 text-sm font-semibold text-gray-700">
 							Component Index (Component Key -> Composites List):
 						</h3>
@@ -217,7 +211,9 @@
 									<ul class="mt-1 space-y-1 pl-4">
 										{#if Array.isArray(compositeList)}
 											{#each compositeList as compositePubKey (compositePubKey)}
-												<li><code class="text-xs text-gray-700">{compositePubKey}</code></li>
+												<li>
+													<code class="text-xs text-gray-700">{compositePubKey}</code>
+												</li>
 											{:else}
 												<li class="text-gray-500 italic">Empty list.</li>
 											{/each}

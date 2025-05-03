@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { hominioDB, docChangeNotifier, type Docs } from '$lib/KERNEL/hominio-db';
+	import { hominioDB, subscribeToDbChanges, type Docs } from '$lib/KERNEL/hominio-db';
 	import { onMount } from 'svelte';
 	import { writable, type Writable } from 'svelte/store';
 
@@ -23,8 +23,8 @@
 	onMount(() => {
 		loadDocs(); // Initial load
 
-		const unsubscribe = docChangeNotifier.subscribe(() => {
-			console.log('[DocStatusViewer] docChangeNotifier triggered, reloading docs.');
+		const unsubscribe = subscribeToDbChanges(() => {
+			console.log('[DocStatusViewer] DB change detected, reloading docs.');
 			// Add a small delay to allow potential DB operations to settle
 			setTimeout(loadDocs, 50);
 		});

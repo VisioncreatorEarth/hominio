@@ -3,28 +3,26 @@
 	import { onMount, onDestroy, setContext } from 'svelte';
 	import { startCall, endCall } from '$lib/ultravox/callFunctions';
 	import CallInterface from '$lib/components/CallInterface.svelte';
-	import { authClient, getMe } from '$lib/KERNEL/hominio-auth';
+	import { o } from '$lib/KERNEL/hominio-svelte';
 	import { initializeVibe } from '$lib/ultravox';
 	import { DEFAULT_CALL_CONFIG } from '$lib/ultravox/callConfig';
 	import { initDocs } from '$lib/docs';
 	import type { LayoutData } from './$types';
-	import { type Snippet } from 'svelte';
+	import { type Snippet, type ComponentType } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { hominioIndexing } from '$lib/KERNEL/hominio-indexing';
 	import Modal from '$lib/components/Modal.svelte';
 	import { openModal } from '$lib/KERNEL/modalStore';
-	import HelloEarth from '$lib/components/HelloEarth.svelte';
-	import type { ComponentType } from 'svelte';
 	import Prenu from '$lib/components/Prenu.svelte';
+	import { hominioIndexing } from '$lib/KERNEL/hominio-indexing';
 
-	// Get the session store from the auth client
-	const sessionStore = authClient.useSession();
+	// Get the session store using o.authClient
+	const sessionStore = o.authClient.useSession();
 
 	// Provide the session store to child components via context
 	setContext('sessionStore', sessionStore);
 
-	// Provide the effective user utility via context
-	setContext('getMe', getMe);
+	// Provide the entire 'o' object via context using key 'o'
+	setContext('o', o);
 
 	const DEFAULT_VIBE = 'home';
 
@@ -77,7 +75,7 @@
 		loading = true;
 		error = null;
 		try {
-			const result = await authClient.signIn.social({
+			const result = await o.authClient.signIn.social({
 				provider: 'google'
 			});
 			if (result.error) {
@@ -147,7 +145,7 @@
 	async function handleSignOut() {
 		signOutLoading = true;
 		try {
-			await authClient.signOut();
+			await o.authClient.signOut();
 			goto('/');
 		} catch (error) {
 			console.error('Sign out error:', error);

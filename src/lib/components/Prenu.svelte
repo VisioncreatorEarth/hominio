@@ -1,16 +1,27 @@
 <script lang="ts">
 	import { onMount, getContext } from 'svelte';
-	import type { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
+	// Remove direct hominio-auth import
+	// import type { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
 	import type { CapabilityUser } from '$lib/KERNEL/hominio-caps';
-	import { executeQuery, type LoroHqlQueryExtended } from '$lib/KERNEL/hominio-query';
-	import {
-		executeMutation as executeMutationInstance,
-		type MutateHqlRequest,
-		type CreateMutationOperation
-	} from '$lib/KERNEL/hominio-mutate';
+	// Remove direct hominio-query imports
+	// import { executeQuery, type LoroHqlQueryExtended } from '$lib/KERNEL/hominio-query';
+	// Remove direct hominio-mutate imports
+	// import {
+	// 	executeMutation as executeMutationInstance,
+	// 	type MutateHqlRequest,
+	// 	type CreateMutationOperation
+	// } from '$lib/KERNEL/hominio-mutate';
 	import { closeModal } from '$lib/KERNEL/modalStore'; // To close modal on success
-	import type { IndexLeafType } from '$lib/KERNEL/index-registry'; // <-- Import type at top level
-	import { canCreatePersonConcept } from '$lib/KERNEL/hominio-caps'; // <-- Import the capability check
+	import type { IndexLeafType } from '$lib/KERNEL/index-registry';
+	import { canCreatePersonConcept } from '$lib/KERNEL/hominio-caps';
+
+	// Import types from facade/core modules
+	import type { LoroHqlQueryExtended } from '$lib/KERNEL/hominio-svelte';
+	import type { MutateHqlRequest, CreateMutationOperation } from '$lib/KERNEL/hominio-mutate';
+
+	// --- Get Hominio Facade from Context ---
+	const o = getContext<typeof import('$lib/KERNEL/hominio-svelte').o>('o');
+	// --- End Get Hominio Facade from Context ---
 
 	// --- Component State ---
 	let personName = $state('');
@@ -21,32 +32,33 @@
 	let ponseSchemaId = $state<string | null>(null);
 	let isMutating = $state(false);
 	let mutationError = $state<string | null>(null);
-	let currentUser = $state<CapabilityUser | null>(null);
-	let isCheckingCapability = $state(false); // <-- State for the capability check
-	let canActuallyCreate = $state<boolean | null>(null); // <-- State for capability result (null = not checked)
-	let capabilityCheckError = $state<string | null>(null); // <-- State for capability check errors
+	// REMOVE: currentUser state
+	// let currentUser = $state<CapabilityUser | null>(null);
+	let isCheckingCapability = $state(false);
+	let canActuallyCreate = $state<boolean | null>(null);
+	let capabilityCheckError = $state<string | null>(null);
 
-	// --- Get User Context ---
-	type GetCurrentUserFn = typeof getMeType;
-	const getCurrentUser = getContext<GetCurrentUserFn>('getMe');
+	// REMOVE: Get User Context
+	// type GetCurrentUserFn = typeof getMeType;
+	// const getCurrentUser = getContext<GetCurrentUserFn>('getMe');
 
 	// --- Fetch Schema PubKeys --- (Self-contained)
 	async function loadSchemaPubKeys() {
-		const user = getCurrentUser();
+		// Use o.me() to check if user exists
+		const user = o.me();
 		if (!user) {
 			schemaError = 'Cannot load schemas: User not logged in.';
 			isSchemaLoading = false;
 			return;
 		}
-		currentUser = user; // Store user for mutation
+		// REMOVE: currentUser = user;
 		isSchemaLoading = true;
 		schemaError = null;
 
 		try {
 			const { GENESIS_PUBKEY } = await import('$db/constants');
-			// const { type IndexLeafType } = await import('$lib/KERNEL/index-registry'); // Removed dynamic import
 
-			// STEP 1: Fetch Meta Index
+			// STEP 1: Fetch Meta Index (use o.query)
 			const metaIndexQuery: LoroHqlQueryExtended = {
 				steps: [
 					{
@@ -57,7 +69,7 @@
 					}
 				]
 			};
-			const metaResult = await executeQuery(metaIndexQuery, user);
+			const metaResult = await o.query(metaIndexQuery); // Use o.query
 
 			let schemasIndexPubKey: string | null = null;
 			if (
@@ -79,7 +91,7 @@
 				throw new Error("Could not find pubkey for 'schemas' index.");
 			}
 
-			// STEP 2: Fetch the schemas index document
+			// STEP 2: Fetch the schemas index document (use o.query)
 			const schemasIndexQuery: LoroHqlQueryExtended = {
 				steps: [
 					{
@@ -90,7 +102,7 @@
 					}
 				]
 			};
-			const schemasResult = await executeQuery(schemasIndexQuery, user);
+			const schemasResult = await o.query(schemasIndexQuery); // Use o.query
 
 			// STEP 3: Extract the schema map
 			if (
@@ -124,13 +136,14 @@
 		} finally {
 			isSchemaLoading = false;
 			// --- Trigger capability check AFTER schemas are loaded ---
-			if (!schemaError && currentUser) {
-				await checkCreationCapability(currentUser);
+			// Use the user object obtained at the start of this function
+			if (!schemaError && user) {
+				await checkCreationCapability(user);
 			}
 		}
 	}
 
-	// --- NEW: Capability Check Function ---
+	// --- NEW: Capability Check Function --- (No change needed here, accepts user)
 	async function checkCreationCapability(user: CapabilityUser) {
 		isCheckingCapability = true;
 		capabilityCheckError = null;
@@ -160,7 +173,8 @@
 			mutationError = 'Please enter a name.';
 			return;
 		}
-		const currentUserId = currentUser?.id;
+		// Use o.me() to get current user ID
+		const currentUserId = o.me()?.id;
 		if (!currentUserId) {
 			mutationError = 'Cannot create person: User not logged in or ID missing.';
 			return;
@@ -176,7 +190,6 @@
 		}
 
 		// --- REMOVED PRE-CHECK QUERY ---
-		// The check is now done onMount via checkCreationCapability
 
 		// Ensure the capability check passed before proceeding
 		if (canActuallyCreate !== true) {
@@ -247,7 +260,7 @@
 				type: 'Composite',
 				placeholder: '$$ponseLink',
 				data: {
-					schemaId: ponseSchemaId, // Use the fetched ponse schema ID
+					schemaId: ponseSchemaId,
 					places: {
 						x1: '$$userIdLeaf', // Link to the new User ID Leaf
 						x2: '$$newPerson' // Link to the new Person Concept Leaf
@@ -260,13 +273,14 @@
 				mutations: [
 					personLeafOp,
 					nameLeafOp,
-					userIdLeafOp, // <-- Add User ID Leaf creation
+					userIdLeafOp,
 					prenuCompositeOp,
 					cnemeCompositeOp,
-					ponseCompositeOp // <-- Add Ponse Composite creation
+					ponseCompositeOp
 				]
 			};
-			const result = await executeMutationInstance(request, currentUser);
+			// Use o.mutate
+			const result = await o.mutate(request);
 
 			if (result.status === 'success') {
 				console.log('Person created successfully:', result.generatedPubKeys);
@@ -284,7 +298,7 @@
 		}
 	}
 
-	// --- Lifecycle ---
+	// --- Lifecycle --- (onMount remains)
 	onMount(() => {
 		loadSchemaPubKeys(); // This now also triggers checkCreationCapability
 	});

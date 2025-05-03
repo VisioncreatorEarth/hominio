@@ -1,15 +1,24 @@
 <script lang="ts">
-	import { processReactiveQuery, type LoroHqlQueryExtended } from '$lib/KERNEL/hominio-query';
+	// Remove direct hominio-query imports
+	// import { processReactiveQuery, type LoroHqlQueryExtended } from '$lib/KERNEL/hominio-query';
+	// import { executeQuery } from '$lib/KERNEL/hominio-query';
 	import { writable } from 'svelte/store';
 	import { getContext, onMount } from 'svelte';
-	import { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
+	// Remove direct hominio-auth import
+	// import { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
 	import { GENESIS_PUBKEY } from '$db/constants';
-	import { executeQuery } from '$lib/KERNEL/hominio-query';
 	import type { IndexLeafType } from '$lib/KERNEL/index-registry';
 
-	// --- Get Effective User Function from Context ---
-	type GetCurrentUserFn = typeof getMeType;
-	const getMe = getContext<GetCurrentUserFn>('getMe');
+	// Import types from facade
+	import type { LoroHqlQueryExtended, QueryResult } from '$lib/KERNEL/hominio-svelte';
+
+	// --- Get Hominio Facade from Context ---
+	const o = getContext<typeof import('$lib/KERNEL/hominio-svelte').o>('o');
+	// --- End Get Hominio Facade from Context ---
+
+	// REMOVE: Get Effective User Function from Context
+	// type GetCurrentUserFn = typeof getMeType;
+	// const getMe = getContext<GetCurrentUserFn>('getMe');
 
 	// Current query and editor state
 	let queryText = writable('// Loading default query...');
@@ -23,8 +32,8 @@
 	// Current query store - Use new type
 	const queryStore = writable<LoroHqlQueryExtended | null>(null);
 
-	// Results store
-	const resultsStore = processReactiveQuery(getMe, queryStore);
+	// Results store - Use o.subscribe
+	const resultsStore = o.subscribe(queryStore);
 
 	// Type for the actual map inside the schemas index
 	type SchemaRegistryMap = Record<string, string>;
@@ -49,8 +58,9 @@
 		};
 
 		try {
-			const currentUser = getMe();
-			const metaResult = await executeQuery(metaIndexQuery, currentUser);
+			// REMOVE: const currentUser = getMe();
+			// Use o.query
+			const metaResult = await o.query(metaIndexQuery);
 			if (
 				metaResult &&
 				metaResult.length > 0 &&
@@ -86,7 +96,8 @@
 					]
 				};
 
-				const schemasResult = await executeQuery(schemasIndexQuery, currentUser);
+				// Use o.query
+				const schemasResult = await o.query(schemasIndexQuery);
 
 				// STEP 4: Extract the schema map
 				if (
@@ -242,7 +253,7 @@
 			// Set a fallback query text on error
 			queryText.set(
 				'{\n  "error": "Could not load default query - failed to fetch schema pubkeys.",\n  "details": "' +
-					(registryError ?? '').replace(/"/g, '\\"') + // Escape quotes for JSON
+					(registryError ?? '').replace(/"/g, '\"') + // Escape quotes for JSON
 					'"\n}'
 			);
 		} finally {

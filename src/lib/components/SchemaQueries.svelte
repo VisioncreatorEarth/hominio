@@ -1,18 +1,13 @@
 <script lang="ts">
-	import {
-		type QueryResult,
-		processReactiveQuery,
-		type LoroHqlQueryExtended
-	} from '$lib/KERNEL/hominio-query';
 	import { getContext } from 'svelte';
-	import { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
 	import type { SchemaLanguageTranslation } from '$db/seeding/schema.data';
-	import { getMe } from '$lib/KERNEL/hominio-auth';
 	import { writable } from 'svelte/store';
 
-	// --- Get Effective User Function from Context ---
-	type GetCurrentUserFn = typeof getMeType;
-	const getCurrentUser = getContext<GetCurrentUserFn>('getCurrentUser');
+	// Import types from facade
+	import type { LoroHqlQueryExtended, QueryResult } from '$lib/KERNEL/hominio-svelte';
+
+	// --- Get Hominio Facade from Context ---
+	const o = getContext<typeof import('$lib/KERNEL/hominio-svelte').o>('o');
 
 	// FIX: Rename type and update fields to match expected select output
 	interface SchemaQueryResult extends QueryResult {
@@ -77,8 +72,8 @@
 	const schemaQueryDefStore = writable<LoroHqlQueryExtended | null>(allSchemaQueryDefinition);
 
 	// --- Reactive HQL Query Execution ---
-	// Pass the imported getMe function and the definition store
-	const schemaReadable = processReactiveQuery(getMe, schemaQueryDefStore);
+	// Use o.subscribe and remove getMe argument
+	const schemaReadable = o.subscribe(schemaQueryDefStore);
 
 	// --- Event Handlers and Helpers ---
 	function selectSchema(id: string) {
@@ -89,9 +84,11 @@
 		const currentSchemaList = $schemaReadable; // Access Svelte 5 rune value
 
 		if (currentSchemaList) {
-			// FIX: Type item explicitly and cast result
+			// FIX: Explicitly type item in find callback
 			const found = currentSchemaList.find(
-				(item): item is SchemaQueryResult =>
+				(
+					item: QueryResult
+				): item is SchemaQueryResult => // Explicit type
 					typeof item === 'object' && item !== null && (item as SchemaQueryResult).id === id
 			);
 			if (found) {
@@ -111,15 +108,7 @@
 	let creationMessage = '';
 
 	// --- REMOVED State for manual fetching ---
-	// let schemaIndexKey = $state<string | null>(null); // State for the index pubkey
-	// let schemaList = $state<SchemaQueryResult[]>([]); // State for final schema list
-	// let isLoadingSchemas = $state(true); // Loading state for the final list
-	// let schemaError = $state<string | null>(null); // Error state for final list
-
 	// --- REMOVED Fetch Schema Index Key and Schemas ---
-	// onMount(async () => {
-	// 	...
-	// });
 </script>
 
 <!-- FIX: Adjust grid columns for 3 columns: Sidebar, Main Content, Debug Aside - make right wider -->

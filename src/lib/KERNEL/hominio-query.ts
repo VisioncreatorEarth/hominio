@@ -7,10 +7,6 @@ import {
     getDataFromDoc,
 } from './loro-engine';
 import { canRead, type CapabilityUser } from '$lib/KERNEL/hominio-caps';
-import { docChangeNotifier, hominioDB } from '$lib/KERNEL/hominio-db';
-import { readable, type Readable, get } from 'svelte/store';
-import { authClient, type getMe as getMeType } from '$lib/KERNEL/hominio-auth';
-import { browser } from '$app/environment';
 import { getIndexLeafPubKey, type IndexLeafType } from './index-registry';
 
 // FIX: Export PlaceKey
@@ -212,15 +208,6 @@ export interface LoroHqlQueryExtended {
 // Result type
 export type QueryResult = Record<string, unknown>;
 
-// Minimal session type needed for reactive query
-type MinimalSession = {
-    data?: {
-        user?: {
-            id?: string | null;
-        } | null;
-    } | null;
-} | null;
-
 // --- Query Engine Implementation ---
 
 /**
@@ -357,7 +344,7 @@ async function processFindStep(
 
         for (const compPubKey of allCompositePubKeys) {
             try {
-                const compDoc = await hominioDB.getLoroDoc(compPubKey);
+                const compDoc = await getLeafDoc(compPubKey);
                 if (!compDoc) {
                     continue;
                 }
@@ -412,7 +399,7 @@ async function processFindStep(
 
         for (const compPubKey of allCompositePubKeys) {
             try {
-                const compDoc = await hominioDB.getLoroDoc(compPubKey);
+                const compDoc = await getLeafDoc(compPubKey);
                 if (!compDoc) {
                     continue;
                 }
@@ -1258,19 +1245,18 @@ async function processAggregateStep(
 
 /**
  * Main function to execute a LORO_HQL steps-based query.
+ * Now framework-agnostic.
  */
 export async function executeQuery(
-    query: LoroHqlQueryExtended, // Only accept the new steps-based format
-    user: CapabilityUser | null = null
+    query: LoroHqlQueryExtended,
+    user: CapabilityUser | null = null // Accepts user directly
 ): Promise<QueryResult[]> {
-
-    let context: QueryContext = {}; // Use defined type
+    let context: QueryContext = {};
     let finalResults: QueryResult[] = [];
-    let lastStepResultVariable: string | null = null; // <<< Track last result variable
+    let lastStepResultVariable: string | null = null;
 
-    // Check if the query object and steps array are valid
     if (!query || typeof query !== 'object' || !Array.isArray(query.steps)) {
-        console.error("[Query Engine] Invalid query format provided. Expected LoroHqlQueryExtended with a steps array.", query);
+        console.error("[Query Engine] Invalid query format provided.", query);
         throw new Error("Invalid query format: Expected object with a steps array.");
     }
 
@@ -1278,11 +1264,9 @@ export async function executeQuery(
         for (const step of query.steps) {
             switch (step.action) {
                 case 'setVar': {
-                    // FIX: Type assertion for step and check literal definition
                     const setVarStep = step as LoroHqlSetVarStep;
                     if (setVarStep.variables && typeof setVarStep.variables === 'object') {
                         for (const [varName, varDef] of Object.entries(setVarStep.variables)) {
-                            // Check if varDef has the literal property
                             if (typeof varDef === 'object' && varDef !== null && 'literal' in varDef) {
                                 context[varName] = varDef.literal;
                             } else {
@@ -1296,7 +1280,7 @@ export async function executeQuery(
                     context = await processFindStep(step as LoroHqlFindStep, context);
                     break;
                 case 'get':
-                    context = await processGetStep(step as LoroHqlGetStep, context, user);
+                    context = await processGetStep(step as LoroHqlGetStep, context, user); // Pass user
                     break;
                 case 'select':
                     {
@@ -1304,7 +1288,6 @@ export async function executeQuery(
                         if (step.resultVariable) {
                             context[step.resultVariable] = selectResults;
                         } else {
-                            // If no resultVariable, assume it's the final output (legacy behavior?)
                             finalResults = selectResults;
                         }
                     }
@@ -1327,182 +1310,23 @@ export async function executeQuery(
                     throw new Error(`Unsupported step action: ${unknownAction}`);
                 }
             }
-            // <<< FIX: Update lastStepResultVariable AFTER processing the step >>>
             if (step.resultVariable) {
                 lastStepResultVariable = step.resultVariable;
             } else if (step.action !== 'setVar') {
-                // If a step that produces results (not setVar) doesn't have a resultVariable,
-                // we can't reliably know what the final result should be from context.
-                // Reset the tracker. The fallback return might be used.
                 lastStepResultVariable = null;
             }
         }
-        // <<< Return results logic updated >>>
+
+        // Return logic as before
         if (lastStepResultVariable && context[lastStepResultVariable] !== undefined) {
             const resultValue = context[lastStepResultVariable];
-            // If the result is already an array, return it as is.
-            // If it's a single object (from return: 'first'), wrap it in an array.
-            // If it's null/undefined, return empty array (or handle as error? currently returns []).
             return Array.isArray(resultValue) ? resultValue as QueryResult[] : (resultValue ? [resultValue as QueryResult] : []);
         } else {
-            // Fallback if no result variable was set by the last step
             return finalResults;
         }
 
     } catch (error) {
         console.error("[Query Engine] Error during STEPS execution:", error);
-        // Return empty array on error
         return [];
     }
-}
-
-/**
- * Creates a reactive query.
- */
-export function processReactiveQuery(
-    getCurrentUserFn: typeof getMeType,
-    queryDefinitionStore: Readable<LoroHqlQueryExtended | null> // Updated to expect only new format
-): Readable<QueryResult[] | null | undefined> {
-
-    // <<< DEBUG: Identify the source component (if possible) >>>
-    const queryDefStringForId = JSON.stringify(get(queryDefinitionStore));
-    const queryIdentifier = queryDefStringForId.length > 50 ? queryDefStringForId.substring(0, 50) + '...' : queryDefStringForId;
-
-    if (!browser) {
-        // --- Server-Side Rendering (SSR) Handling --- 
-        const initialQuery = get(queryDefinitionStore);
-        const ssrUser = getCurrentUserFn();
-        return readable<QueryResult[] | null | undefined>(undefined, (set) => {
-            if (!initialQuery) { console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] SSR - No initial query, setting empty.`); set([]); return; }
-            executeQuery(initialQuery, ssrUser)
-                .then(results => { console.log(`[processReactiveQuery DEBUG ${queryIdentifier}] SSR - Query success, setting ${results.length} results.`); set(results); })
-                .catch(err => { console.error(`[processReactiveQuery DEBUG ${queryIdentifier}] SSR - Query error:`, err); set(null); });
-        });
-    }
-
-    // --- Client-Side Reactive Logic --- 
-    return readable<QueryResult[] | null | undefined>(undefined, (set) => {
-        let debounceTimer: NodeJS.Timeout | null = null;
-        const DEBOUNCE_MS = 50;
-        let lastSessionState: string | null = null;
-        let lastQueryDefinitionString: string | null = null;
-        let currentResults: QueryResult[] | null | undefined = undefined;
-
-        const triggerDebouncedQuery = (reason: string) => { // <<< DEBUG: Add reason
-            const currentQueryDefinition = get(queryDefinitionStore);
-            // Ensure we only proceed if the definition is valid (has steps)
-            if (!currentQueryDefinition || !Array.isArray(currentQueryDefinition.steps)) {
-                if (debounceTimer) clearTimeout(debounceTimer); debounceTimer = null;
-                if (currentResults !== undefined && currentResults !== null && currentResults.length > 0) {
-                    set([]);
-                    currentResults = [];
-                } else if (currentResults === undefined) {
-                    set([]); // Set to empty array if loading was interrupted by invalid query
-                    currentResults = [];
-                }
-                lastQueryDefinitionString = JSON.stringify(currentQueryDefinition); // Still update last string
-                return;
-            }
-
-            const queryDefString = JSON.stringify(currentQueryDefinition);
-            const queryChanged = lastQueryDefinitionString !== queryDefString;
-            lastQueryDefinitionString = queryDefString;
-
-            // <<< MODIFIED LOGIC >>>
-            // If the trigger was a document change, we ALWAYS proceed to debounce/execute,
-            // even if the query string itself hasn't changed and we have previous results.
-            // The underlying data might have changed.
-            if (reason !== 'Document Change Notifier' && !queryChanged && currentResults !== undefined) {
-                return; // Skip if not a doc change AND query is same AND results exist
-            }
-            // <<< END MODIFIED LOGIC >>>
-
-            if (debounceTimer) {
-                clearTimeout(debounceTimer);
-            }
-            if (currentResults === undefined || queryChanged) {
-                // Only set loading if not already loading
-                if (currentResults !== undefined) {
-                    set(undefined);
-                }
-            }
-
-            debounceTimer = setTimeout(async () => {
-                const currentUser = getCurrentUserFn();
-                const latestQueryDefinition = get(queryDefinitionStore);
-                const latestQueryDefString = JSON.stringify(latestQueryDefinition);
-
-
-                // Re-validate query before execution
-                if (!latestQueryDefinition || !Array.isArray(latestQueryDefinition.steps) || latestQueryDefString !== lastQueryDefinitionString) {
-                    return;
-                }
-
-                try {
-                    // Set to undefined only if not already undefined (prevents flicker if query is fast)
-                    if (currentResults !== undefined) {
-                        set(undefined);
-                    }
-                    currentResults = undefined;
-
-                    const results = await executeQuery(latestQueryDefinition, currentUser);
-
-                    // Check if query changed *again* during async execution
-                    if (JSON.stringify(get(queryDefinitionStore)) !== lastQueryDefinitionString) {
-                        return;
-                    }
-                    set(results);
-                    currentResults = results;
-                } catch (error) {
-                    console.error(`[processReactiveQuery DEBUG ${queryIdentifier}] Error during executeQuery:`, error);
-                    // Check staleness before setting error state
-                    if (JSON.stringify(get(queryDefinitionStore)) === lastQueryDefinitionString) {
-                        set(null);
-                        currentResults = null;
-                    }
-                }
-            }, DEBOUNCE_MS);
-        };
-
-        const unsubscribeQueryDef = queryDefinitionStore.subscribe(newQueryDef => {
-            const newQueryDefString = JSON.stringify(newQueryDef);
-            // Trigger if query changes OR if results are still undefined (initial load)
-            if (lastQueryDefinitionString !== newQueryDefString || currentResults === undefined) {
-                triggerDebouncedQuery('Query Definition Changed or Initial Load');
-            }
-        });
-
-        const unsubscribeNotifier = docChangeNotifier.subscribe(() => {
-            triggerDebouncedQuery('Document Change Notifier');
-        });
-
-        const sessionStore = authClient.useSession();
-        const unsubscribeSession = sessionStore.subscribe((session: MinimalSession) => { // Use defined type
-            const currentSessionState = JSON.stringify(session?.data?.user?.id ?? null);
-            if (lastSessionState !== null && lastSessionState !== currentSessionState) {
-                triggerDebouncedQuery('Session Change');
-            }
-            lastSessionState = currentSessionState;
-        });
-
-        const initialSessionData = get(sessionStore);
-        lastSessionState = JSON.stringify(initialSessionData?.data?.user?.id ?? null);
-        lastQueryDefinitionString = JSON.stringify(get(queryDefinitionStore));
-        currentResults = undefined; // Start in loading state
-
-        // Trigger initial query execution if valid
-        if (get(queryDefinitionStore) && Array.isArray(get(queryDefinitionStore)?.steps)) {
-            triggerDebouncedQuery('Initial Mount');
-        } else {
-            set([]); // Set empty array if initial query is invalid
-            currentResults = [];
-        }
-
-        return () => {
-            unsubscribeQueryDef();
-            unsubscribeNotifier();
-            unsubscribeSession();
-            if (debounceTimer) clearTimeout(debounceTimer);
-        };
-    });
 } 

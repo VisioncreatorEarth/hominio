@@ -1,15 +1,20 @@
 <script lang="ts">
 	import { hominioSync } from '$lib/KERNEL/hominio-sync';
 	import { getContext } from 'svelte';
-	import type { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
+	// Remove direct import from hominio-auth
+	// import type { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
 	import { browser } from '$app/environment';
 	import { hominioDB } from '$lib/KERNEL/hominio-db';
 	import { closeStorage } from '$lib/KERNEL/hominio-storage';
 	import { hominioIndexing } from '$lib/KERNEL/hominio-indexing';
 
-	// --- Get Effective User Function from Context ---
-	type GetCurrentUserFn = typeof getMeType;
-	const getMe = getContext<GetCurrentUserFn>('getMe');
+	// --- Get Hominio Facade from Context ---
+	const o = getContext<typeof import('$lib/KERNEL/hominio-svelte').o>('o');
+	// --- End Get Hominio Facade from Context ---
+
+	// REMOVE: Get Effective User Function from Context
+	// type GetCurrentUserFn = typeof getMeType;
+	// const getMe = getContext<GetCurrentUserFn>('getMe');
 
 	// --- Sync Status ---
 	const syncStatus = hominioSync.status;
@@ -22,7 +27,8 @@
 
 	function handlePush() {
 		if (!$syncStatus.isSyncing && $syncStatus.pendingLocalChanges > 0) {
-			const currentUser = getMe();
+			// Use o.me() to get the current user
+			const currentUser = o.me();
 			hominioSync.pushToServer(currentUser);
 		}
 	}

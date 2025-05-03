@@ -1,33 +1,22 @@
 <script lang="ts">
-	import { onMount, onDestroy, getContext, type ComponentType } from 'svelte';
+	import { onMount, onDestroy, getContext } from 'svelte';
 	import { writable, type Readable } from 'svelte/store';
-	import {
-		executeQuery,
-		processReactiveQuery,
-		type LoroHqlQueryExtended,
-		type QueryResult
-	} from '$lib/KERNEL/hominio-query';
-	import type { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
-	import {
-		executeMutation as executeMutationInstance,
-		type MutateHqlRequest,
-		type CreateMutationOperation
-	} from '$lib/KERNEL/hominio-mutate';
-	import type { CapabilityUser } from '$lib/KERNEL/hominio-caps';
+	import type { LoroHqlQueryExtended, QueryResult } from '$lib/KERNEL/hominio-svelte';
+	import type { MutateHqlRequest, CreateMutationOperation } from '$lib/KERNEL/hominio-mutate';
 	import { GENESIS_PUBKEY } from '$db/constants';
 	import type { IndexLeafType } from '$lib/KERNEL/index-registry';
 	import { draggable, droppable, type DragDropState } from '@thisux/sveltednd';
 
-	// --- Get User Context ---
-	type GetCurrentUserFn = typeof getMeType;
-	const getCurrentUser = getContext<GetCurrentUserFn>('getMe');
+	// --- Get Hominio Facade from Context ---
+	const o = getContext<typeof import('$lib/KERNEL/hominio-svelte').o>('o');
 
-	// --- Static Leaf IDs (Keep these) ---
+	// --- Static Leaf IDs (Re-added) ---
 	const STATUS_NOT_STARTED_ID =
 		'0x3b302f86a7873b6533959d80c53efec82ce28ea3fd540da3ed90dd26cac76bde';
 	const STATUS_IN_PROGRESS_ID =
 		'0x05447c2f4716f12eb30e49fad68e94aa017edeb6778610b96eb2f4b61c6c029e';
 	const STATUS_COMPLETED_ID = '0xe3110ac83fd5ef52cf91873b8a94ef6662cd03d5eb433d51922942e834d63c66';
+	// --- End Static Leaf IDs ---
 
 	// --- State ---
 	let isLoadingQueryData = $state(true);
@@ -35,7 +24,6 @@
 	let mutationError = $state<string | null>(null);
 	let newTodoText = $state('');
 	let isAdding = $state(false);
-	let currentUser = $state<CapabilityUser | null>(null);
 	let todos = $state<QueryResult[]>([]);
 	let selectedGoalId = $state<string | null>(null);
 
@@ -54,11 +42,8 @@
 	// Store for the query JSON object - Start as null
 	const queryStore = writable<LoroHqlQueryExtended | null>(null);
 
-	// Create the readable store using processReactiveQuery
-	const todoReadable: Readable<QueryResult[] | null | undefined> = processReactiveQuery(
-		getCurrentUser,
-		queryStore
-	);
+	// Create the readable store using o.subscribe
+	const todoReadable: Readable<QueryResult[] | null | undefined> = o.subscribe(queryStore);
 
 	// --- NEW: Goal List State and Query ---
 	let goalList = $state<QueryResult[]>([]);
@@ -67,21 +52,13 @@
 
 	const goalListQueryStore = writable<LoroHqlQueryExtended | null>(null);
 
-	const goalListReadable: Readable<QueryResult[] | null | undefined> = processReactiveQuery(
-		getCurrentUser,
-		goalListQueryStore
-	);
+	// Update goalListReadable call using o.subscribe
+	const goalListReadable: Readable<QueryResult[] | null | undefined> =
+		o.subscribe(goalListQueryStore);
 	// --- END NEW ---
 
 	// --- Fetch Schemas on Mount ---
 	onMount(async () => {
-		currentUser = getCurrentUser();
-		if (!currentUser) {
-			schemaError = 'Cannot load schemas: User not logged in.';
-			isSchemaLoading = false;
-			return;
-		}
-
 		isSchemaLoading = true;
 		schemaError = null;
 		try {
@@ -102,7 +79,8 @@
 				]
 			};
 
-			const metaResult = await executeQuery(metaIndexQuery, currentUser);
+			// Use o.query
+			const metaResult = await o.query(metaIndexQuery);
 
 			let schemasIndexPubKey: string | null = null;
 			if (
@@ -141,7 +119,8 @@
 				]
 			};
 
-			const schemasResult = await executeQuery(schemasIndexQuery, currentUser);
+			// Use o.query
+			const schemasResult = await o.query(schemasIndexQuery);
 
 			// STEP 3: Extract the schema map from the result
 			if (
@@ -391,9 +370,8 @@
 
 	// --- NEW Helper: Find User's Person Concept PubKey ---
 	async function findUserPersonConceptPubKey(): Promise<string | null> {
-		const user = currentUser;
-		if (!user || !ponsePubKey) {
-			console.error('[findUserPersonConceptPubKey] User or ponsePubKey not available.');
+		if (!ponsePubKey) {
+			console.error('[findUserPersonConceptPubKey] ponsePubKey not available.');
 			return null;
 		}
 
@@ -423,12 +401,15 @@
 		};
 
 		try {
-			const result = await executeQuery(findPersonQuery, user);
+			// Use o.query
+			const result = await o.query(findPersonQuery);
 
-			// We need to correlate ponseLinks and userIdLeafDetails.
-			// executeQuery currently returns the result of the LAST step ('userIdLeafDetails').
-			// TODO: Query engine needs enhancement to return multiple variables or join results effectively.
-			// For now, we'll re-fetch the ponseLinks based on the found user ID leaves.
+			// Get user ID using o.me
+			const userForIdLookup = o.me(); // Use o.me directly
+			if (!userForIdLookup) {
+				console.error('[findUserPersonConceptPubKey] Cannot get user ID for filtering.');
+				return null;
+			}
 
 			let personPubKey: string | null = null;
 
@@ -438,41 +419,38 @@
 					variables: { userIdValue: string };
 				}[];
 				const matchingUserIdLeaf = userIdDetails.find(
-					(item) => item.variables.userIdValue === user.id
+					(item) => item.variables.userIdValue === userForIdLookup.id
 				);
 
 				if (matchingUserIdLeaf) {
-					// Found the leaf with the user's ID. Now find the corresponding ponse link.
-					// Re-execute find to get the personConceptPubKeyVar
 					const findLinkAgainQuery: LoroHqlQueryExtended = {
 						steps: [
 							{
 								action: 'find',
-								target: { schema: ponsePubKey!, x1: matchingUserIdLeaf._sourceKey }, // Added non-null assertion for ponsePubKey
+								target: { schema: ponsePubKey!, x1: matchingUserIdLeaf._sourceKey },
 								variables: {
-									personConceptPubKeyVar: { source: 'link.x2' } // Get x2
+									personConceptPubKeyVar: { source: 'link.x2' }
 								},
 								resultVariable: 'foundLink',
 								return: 'first'
 							}
 						]
 					};
-					const linkResult = await executeQuery(findLinkAgainQuery, user);
+					// Use o.query
+					const linkResult = await o.query(findLinkAgainQuery);
 
-					// Robust check for the result structure before accessing
 					if (
 						linkResult &&
 						Array.isArray(linkResult) &&
 						linkResult.length > 0 &&
-						linkResult[0] && // Check item exists
+						linkResult[0] &&
 						typeof linkResult[0].variables === 'object' &&
 						linkResult[0].variables !== null &&
 						'personConceptPubKeyVar' in linkResult[0].variables &&
-						typeof linkResult[0].variables.personConceptPubKeyVar === 'string' // Check type
+						typeof linkResult[0].variables.personConceptPubKeyVar === 'string'
 					) {
 						personPubKey = linkResult[0].variables.personConceptPubKeyVar;
 					} else {
-						// Log if structure is not as expected
 						console.warn(
 							'[findUserPersonConceptPubKey] Query result structure for link is unexpected:',
 							linkResult
@@ -483,7 +461,7 @@
 
 			if (!personPubKey) {
 				console.warn(
-					`[findUserPersonConceptPubKey] Could not find person concept linked to user ${user.id}`
+					`[findUserPersonConceptPubKey] Could not find person concept linked to current user`
 				);
 				return null;
 			}
@@ -498,12 +476,6 @@
 	// --- Refactored addTodo (Uses dynamic Schema IDs) ---
 	async function addTodo() {
 		if (!newTodoText.trim()) return;
-		const user = currentUser;
-		if (!user) {
-			mutationError = 'Cannot add todo: User not logged in.';
-			return;
-		}
-		// Check all required schema keys including gunka and ponse
 		if (!tciniPubKey || !gunkaPubKey || !cnemePubKey || !ponsePubKey) {
 			mutationError =
 				'Cannot add todo: Required schema information (tcini, gunka, cneme, ponse) not loaded yet.';
@@ -519,7 +491,6 @@
 		isAdding = true;
 		mutationError = null;
 
-		// Find the user's person concept to use as the worker
 		const workerPubKey = await findUserPersonConceptPubKey();
 		if (!workerPubKey) {
 			mutationError =
@@ -545,7 +516,6 @@
 				data: { type: 'LoroText', value: newTodoText.trim() }
 			};
 
-			// Link task to its name using cneme
 			const cnemeCompositeOp: CreateMutationOperation = {
 				operation: 'create',
 				type: 'Composite',
@@ -559,7 +529,6 @@
 				}
 			};
 
-			// Link task to its initial status using tcini
 			const tciniCompositeOp: CreateMutationOperation = {
 				operation: 'create',
 				type: 'Composite',
@@ -573,22 +542,19 @@
 				}
 			};
 
-			// --- NEW: Link worker (user's person concept) to task using gunka ---
 			const gunkaCompositeOp: CreateMutationOperation = {
 				operation: 'create',
 				type: 'Composite',
 				placeholder: '$$gunkaLink',
 				data: {
-					schemaId: gunkaPubKey, // Use the fetched gunka schema ID
+					schemaId: gunkaPubKey,
 					places: {
-						x1: workerPubKey, // Link to the found person concept pubkey
-						x2: '$$newTask', // Link to the new task concept leaf
-						// Conditionally add x3 based on the selected goal filter
+						x1: workerPubKey,
+						x2: '$$newTask',
 						...(selectedGoalId && { x3: selectedGoalId })
 					}
 				}
 			};
-			// --- END NEW ---
 
 			const request: MutateHqlRequest = {
 				mutations: [
@@ -596,10 +562,11 @@
 					taskNameLeafOp,
 					cnemeCompositeOp,
 					tciniCompositeOp,
-					gunkaCompositeOp // <-- Add Gunka Composite creation
+					gunkaCompositeOp
 				]
 			};
-			const result = await executeMutationInstance(request, user);
+			// Use o.mutate
+			const result = await o.mutate(request);
 
 			if (result.status === 'success') {
 				console.log('Todo added successfully:', result.generatedPubKeys);
@@ -618,12 +585,6 @@
 
 	// --- Refactored changeTodoStatus (Replaces toggle) ---
 	async function changeTodoStatus(item: QueryResult, targetStatusLeafId: string) {
-		const user = currentUser;
-		if (!user) {
-			mutationError = 'User not authenticated.';
-			console.error('User not authenticated.');
-			return;
-		}
 		if (!tciniPubKey) {
 			mutationError = 'Cannot change status: Schema information not loaded yet.';
 			console.error('Change status failed: tciniPubKey not available.');
@@ -646,7 +607,6 @@
 
 		let tciniCompositeId: string | null = null;
 		try {
-			// Log inputs before executing the find query
 			console.log(
 				`[ChangeStatus Find] Attempting to find tcini link. TaskID: ${taskId}, CurrentStatusID: ${currentStatusLeafId}, tciniPubKey: ${tciniPubKey}`
 			);
@@ -665,24 +625,20 @@
 					}
 				]
 			};
-			const findResult = await executeQuery(findLinkQuery, user);
+			// Use o.query
+			const findResult = await o.query(findLinkQuery);
 
-			// <<< End Detailed Logging >>>
-
-			// Correct check for single-element array result (expecting [{ variables: { linkId: ... } }])
 			if (
 				findResult &&
 				Array.isArray(findResult) &&
 				findResult.length === 1 &&
-				findResult[0] && // Check if the first element exists
-				typeof findResult[0].variables === 'object' && // Check if variables is an object
-				findResult[0].variables !== null && // Check if variables is not null
-				'linkId' in findResult[0].variables // Check if linkId key exists
+				findResult[0] &&
+				typeof findResult[0].variables === 'object' &&
+				findResult[0].variables !== null &&
+				'linkId' in findResult[0].variables
 			) {
-				// Safe to access linkId now
 				tciniCompositeId = findResult[0].variables.linkId as string;
 			} else {
-				// Log the failing result before throwing error
 				console.error('[ChangeStatus ERROR] Check failed. findResult:', JSON.stringify(findResult));
 				throw new Error(
 					`Could not find the tcini link composite for task ${taskId} (looked in x1)`
@@ -713,7 +669,8 @@
 		};
 
 		try {
-			const result = await executeMutationInstance(mutationRequest, user);
+			// Use o.mutate
+			const result = await o.mutate(mutationRequest);
 			if (result.status === 'error') {
 				throw new Error(result.message);
 			}
@@ -726,12 +683,6 @@
 
 	// --- Refactored deleteTodo (Uses dynamic Schema IDs) ---
 	async function deleteTodo(item: QueryResult) {
-		const user = currentUser;
-		if (!user) {
-			mutationError = 'User not authenticated.';
-			console.error('User not authenticated.');
-			return;
-		}
 		if (!tciniPubKey || !gunkaPubKey || !cnemePubKey) {
 			mutationError = 'Cannot delete: Schema information not loaded yet.';
 			console.error('Delete todo failed: Schema pubkeys not available.', {
@@ -772,7 +723,8 @@
 					}
 				]
 			};
-			const tciniRes = await executeQuery(findTciniQuery, user);
+			// Use o.query
+			const tciniRes = await o.query(findTciniQuery);
 			if (tciniRes && tciniRes.length > 0 && tciniRes[0].linkId)
 				tciniCompositeId = tciniRes[0].linkId as string;
 			else console.warn(`Could not find TCINI link for task ${taskId}`);
@@ -788,7 +740,8 @@
 					}
 				]
 			};
-			const gunkaRes = await executeQuery(findGunkaQuery, user);
+			// Use o.query
+			const gunkaRes = await o.query(findGunkaQuery);
 			if (gunkaRes && gunkaRes.length > 0 && gunkaRes[0].linkId)
 				gunkaCompositeId = gunkaRes[0].linkId as string;
 			else console.warn(`Could not find GUNKA link for worker ${workerId} and task ${taskId}`);
@@ -807,7 +760,8 @@
 					}
 				]
 			};
-			const cnemeRes = await executeQuery(findCnemeQuery, user);
+			// Use o.query
+			const cnemeRes = await o.query(findCnemeQuery);
 			if (cnemeRes && cnemeRes.length > 0 && cnemeRes[0].linkId && cnemeRes[0].nameLeafVar) {
 				cnemeCompositeId = cnemeRes[0].linkId as string;
 				nameLeafId = cnemeRes[0].nameLeafVar as string;
@@ -853,7 +807,8 @@
 		const mutationRequest: MutateHqlRequest = { mutations: mutationsToDelete };
 
 		try {
-			const result = await executeMutationInstance(mutationRequest, user);
+			// Use o.mutate
+			const result = await o.mutate(mutationRequest);
 			if (result.status === 'error') {
 				throw new Error(result.message);
 			}
@@ -865,9 +820,7 @@
 	}
 
 	// --- Lifecycle and Effects ---
-	onMount(() => {
-		currentUser = getCurrentUser();
-	});
+	onMount(() => {});
 
 	// Reactive effect to update component state based on the readable store
 	$effect(() => {
