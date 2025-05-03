@@ -5,7 +5,6 @@ import { docIdService } from './docid-service'; // Needed for key generation
 
 // --- Import Types from hominio-types.ts ---
 import type {
-    LeafRecord, // Need the full record for data access
     LeafValue,
     SchemaRecord,
     CompositeRecord,
@@ -218,30 +217,55 @@ export async function executeMutation(
                     }
 
                     // 3. Apply Changes to In-Memory Doc
+                    const dataMap = docToUpdate.getMap('data');
+                    if (!dataMap) {
+                        console.error(`[Mutation UPDATE ERROR] Failed to get 'data' map for ${targetPubKey}.`);
+                        throw new Error(`Failed to get data map for update: ${targetPubKey}`);
+                    }
+
                     if (op.type === 'Composite' && 'places' in op.data && op.data.places) {
-                        const dataMap = docToUpdate.getMap('data');
-                        if (!dataMap) {
-                            console.error(`[Mutation UPDATE ERROR] Failed to get 'data' map for ${targetPubKey}.`);
-                            throw new Error(`Failed to get data map for update: ${targetPubKey}`);
-                        }
                         const placesMap = dataMap.get('places');
                         if (placesMap instanceof LoroMap) {
                             for (const place in op.data.places) {
                                 let value = op.data.places[place as keyof typeof op.data.places];
-                                // Resolve placeholder using TEMP map if present in update data
                                 if (typeof value === 'string' && value.startsWith('$$')) {
-                                    value = placeholderToTempKey[value] ?? value; // Use temp key if found
+                                    value = placeholderToTempKey[value] ?? value;
                                 }
                                 placesMap.set(place, value ?? null);
                             }
                         } else {
                             console.warn(`[Mutation UPDATE WARNING] Target doc ${targetPubKey} data.places is not a LoroMap or is missing.`);
-                            // Optionally throw error if places map is strictly required
-                            // throw new Error(`data.places is not a LoroMap in ${targetPubKey}`);
                         }
-                    } // Add logic for other types (Leaf value, Schema fields) if needed
-                    else {
-                        console.warn("[Mutation UPDATE WARNING] Update operation doesn't match expected Composite/places structure.", op); // Log if update data is unexpected
+                    } else if (op.type === 'Leaf' && op.data && typeof op.data === 'object') {
+                        const leafType = dataMap.get('type') as LeafValue['type'] | undefined;
+                        const updateData = op.data as Partial<LeafValue>;
+
+                        if (leafType === 'LoroText' && 'value' in updateData && typeof updateData.value === 'string') {
+                            const textContainer = dataMap.get('value');
+                            if (textContainer instanceof LoroText) {
+                                textContainer.delete(0, textContainer.length);
+                                textContainer.insert(0, updateData.value);
+                                console.log(`[Mutation UPDATE Leaf] Updated LoroText value for ${targetPubKey}`);
+                            } else {
+                                console.warn(`[Mutation UPDATE WARNING] Target leaf ${targetPubKey} is type LoroText but data.value container is not LoroText.`);
+                            }
+                        } else if (leafType === 'LoroMap' && 'value' in updateData && typeof updateData.value === 'object' && updateData.value !== null) {
+                            const mapContainer = dataMap.get('value');
+                            if (mapContainer instanceof LoroMap) {
+                                for (const [key, value] of Object.entries(updateData.value)) {
+                                    mapContainer.set(key, value);
+                                }
+                                console.log(`[Mutation UPDATE Leaf] Updated LoroMap value(s) for ${targetPubKey}`);
+                            } else {
+                                console.warn(`[Mutation UPDATE WARNING] Target leaf ${targetPubKey} is type LoroMap but data.value container is not LoroMap.`);
+                            }
+                        } else if (leafType && 'value' in updateData) {
+                            console.warn(`[Mutation UPDATE WARNING] Update for Leaf type '${leafType}' with data key 'value' not fully implemented.`, op.data);
+                        } else {
+                            console.warn(`[Mutation UPDATE WARNING] Unhandled Leaf update scenario for type '${leafType}'.`, op);
+                        }
+                    } else {
+                        console.warn("[Mutation UPDATE WARNING] Update operation doesn't match expected Composite/places or Leaf/value structure.", op);
                     }
 
                     // 4. Mark for Phase 2 Persistence

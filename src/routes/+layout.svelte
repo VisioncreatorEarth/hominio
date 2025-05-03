@@ -13,7 +13,6 @@
 	import Modal from '$lib/components/Modal.svelte';
 	import { openModal } from '$lib/KERNEL/modalStore';
 	import Prenu from '$lib/components/Prenu.svelte';
-	import { hominioIndexing } from '$lib/KERNEL/hominio-indexing';
 
 	// Get the session store using o.authClient
 	const sessionStore = o.authClient.useSession();
@@ -199,7 +198,7 @@
 						class="flex h-12 w-12 transform items-center justify-center rounded-full bg-white/20 shadow-2xl shadow-black/50 transition-all duration-300 hover:scale-105 hover:bg-white/30 focus:outline-none"
 						onclick={toggleCall}
 					>
-						<img src="logo-button.png" alt="o" />
+						<img src="/logo-button.png" alt="o" />
 					</button>
 				{/if}
 			{:else}

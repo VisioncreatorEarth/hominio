@@ -15,15 +15,6 @@
                     "description": "Optional tag to filter todos by. Use 'null' for todos with no tags."
                 },
                 "required": false
-            },
-            {
-                "name": "completed",
-                "location": "PARAMETER_LOCATION_BODY",
-                "schema": {
-                    "type": "boolean",
-                    "description": "Optional boolean to filter by completion status: true for completed tasks, false for incomplete tasks."
-                },
-                "required": false
             }
         ],
         "client": {}

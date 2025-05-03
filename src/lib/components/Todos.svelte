@@ -41,7 +41,7 @@
 	let ckajiPubKey = $state<string | null>(null);
 
 	// Type for the actual map inside the schemas index
-	// type SchemaRegistryMap = Record<string, string>;
+	type SchemaRegistryMap = Record<string, string>;
 
 	// Store for the query JSON object - Start as null
 	const queryStore = writable<LoroHqlQueryExtended | null>(null);
@@ -923,7 +923,7 @@
 					<button
 						class="w-full truncate rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-gray-100 {selectedGoalId ===
 						null
-							? 'bg-blue-100 font-semibold text-blue-800'
+							? 'bg-[#c5d4e8] font-semibold text-[#153243]'
 							: 'text-gray-700'}"
 						on:click={() => (selectedGoalId = null)}
 					>
@@ -936,7 +936,7 @@
 						<button
 							class="w-full truncate rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-gray-100 {selectedGoalId ===
 							goal.goalId
-								? 'bg-blue-100 font-semibold text-blue-800'
+								? 'bg-[#c5d4e8] font-semibold text-[#153243]'
 								: 'text-gray-700'}"
 							on:click={() => (selectedGoalId = goal.goalId as string)}
 						>
@@ -949,12 +949,7 @@
 	</aside>
 
 	<!-- Main Content -->
-	<div class="flex flex-1 flex-col overflow-hidden p-6">
-		<h1 class="mb-1 text-2xl font-bold text-[#153243]">Kanban Board</h1>
-		<p class="mb-6 text-sm text-gray-500">
-			Drag and drop tasks between columns to change their status.
-		</p>
-
+	<div class="flex flex-1 flex-col overflow-hidden p-4">
 		<form class="mb-6 flex items-center gap-2" on:submit|preventDefault={addTodo}>
 			<input
 				type="text"
@@ -966,7 +961,7 @@
 			/>
 			<button
 				type="submit"
-				class="rounded-md bg-[#153243] px-4 py-2 text-[#DDD4C9] transition-colors hover:bg-[#174C6B] focus:ring-2 focus:ring-[#153243] focus:ring-offset-2 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+				class="rounded-md bg-[#153243] px-4 py-2 text-sm font-medium text-[#f8f4ed] transition-colors hover:bg-[#1e3a5e] focus:ring-2 focus:ring-[#153243] focus:ring-offset-2 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
 				disabled={isAdding || isSchemaLoading}
 			>
 				{#if isAdding}
@@ -981,7 +976,7 @@
 
 		{#if mutationError}
 			<div
-				class="relative mb-4 rounded border border-[#D38F7A] bg-[#fceded] px-4 py-3 text-[#D38F7A]"
+				class="relative mb-4 rounded border border-red-400 bg-red-100 px-4 py-3 text-red-700"
 				role="alert"
 			>
 				<strong class="font-bold">Mutation Error:</strong>
@@ -991,7 +986,7 @@
 					on:click={() => (mutationError = null)}
 				>
 					<svg
-						class="h-6 w-6 fill-current text-[#D38F7A]"
+						class="h-6 w-6 fill-current text-red-700"
 						role="button"
 						xmlns="http://www.w3.org/2000/svg"
 						viewBox="0 0 20 20"
@@ -1009,7 +1004,7 @@
 			<div class="py-4 text-center text-gray-500">Loading todos...</div>
 		{:else if queryError}
 			<div
-				class="relative mb-4 rounded border border-[#DBAD75] bg-[#fff8ed] px-4 py-3 text-[#DBAD75]"
+				class="relative mb-4 rounded border border-orange-400 bg-orange-100 px-4 py-3 text-orange-700"
 				role="alert"
 			>
 				<strong class="font-bold">Error:</strong>
@@ -1018,13 +1013,15 @@
 		{/if}
 
 		{#if !isSchemaLoading && !isLoadingQueryData && !queryError}
-			<div class="grid flex-1 grid-cols-3 gap-4 overflow-hidden">
+			<div class="grid flex-1 grid-cols-3 gap-4 overflow-hidden bg-[#f8f4ed]">
 				<!-- Not Started Column -->
-				<div class="flex flex-col overflow-hidden rounded-lg bg-white p-4 shadow">
+				<div
+					class="flex flex-col overflow-hidden rounded-lg border border-gray-200 bg-white p-4 shadow-sm"
+				>
 					<div class="mb-3 flex items-center justify-between">
 						<h3 class="font-semibold text-[#153243]">Todo</h3>
 						<span
-							class="ml-2 rounded-md bg-[#DDD4C9] px-2 py-0.5 text-xs font-medium text-[#153243]"
+							class="ml-2 rounded-md bg-gray-200 px-2 py-0.5 text-xs font-medium text-[#153243]"
 						>
 							{filteredTodos.filter((t) => t.status === 'not-started').length}
 						</span>
@@ -1043,7 +1040,7 @@
 									typeof item.workerName === 'string' ? item.workerName : '(No Worker)'}
 								{@const goalName = typeof item.goalName === 'string' ? item.goalName : '(No Goal)'}
 								<li
-									class="group relative cursor-grab rounded-lg border border-gray-200 bg-gray-50 p-3 shadow-sm"
+									class="group relative cursor-grab rounded-lg border border-gray-200 bg-gray-50 p-3 shadow-sm transition-shadow hover:shadow-md"
 									use:draggable={{
 										container: STATUS_NOT_STARTED_ID,
 										dragData: item
@@ -1057,7 +1054,7 @@
 											{#each item.tags as tag}
 												{#if tag}
 													<span
-														class="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-800"
+														class="rounded bg-[#c5d4e8] px-1.5 py-0.5 text-xs font-medium text-[#153243]"
 													>
 														{tag}
 													</span>
@@ -1067,7 +1064,7 @@
 									{/if}
 									<button
 										on:click={() => deleteTodo(item)}
-										class="absolute top-1 right-1 rounded-full p-1 text-[#D38F7A] opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 focus:opacity-100 focus:outline-none"
+										class="absolute top-1 right-1 rounded-full p-1 text-red-500 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-100 focus:opacity-100 focus:outline-none"
 										aria-label="Delete todo"
 									>
 										<svg
@@ -1093,11 +1090,13 @@
 				</div>
 
 				<!-- In Progress Column -->
-				<div class="flex flex-col overflow-hidden rounded-lg bg-white p-4 shadow">
+				<div
+					class="flex flex-col overflow-hidden rounded-lg border border-gray-200 bg-white p-4 shadow-sm"
+				>
 					<div class="mb-3 flex items-center justify-between">
 						<h3 class="font-semibold text-[#153243]">In Progress</h3>
 						<span
-							class="ml-2 rounded-md bg-[#DDD4C9] px-2 py-0.5 text-xs font-medium text-[#153243]"
+							class="ml-2 rounded-md bg-gray-200 px-2 py-0.5 text-xs font-medium text-[#153243]"
 						>
 							{filteredTodos.filter((t) => t.status === 'in-progress').length}
 						</span>
@@ -1116,7 +1115,7 @@
 									typeof item.workerName === 'string' ? item.workerName : '(No Worker)'}
 								{@const goalName = typeof item.goalName === 'string' ? item.goalName : '(No Goal)'}
 								<li
-									class="group relative cursor-grab rounded-lg border border-gray-200 bg-gray-50 p-3 shadow-sm"
+									class="group relative cursor-grab rounded-lg border border-gray-200 bg-gray-50 p-3 shadow-sm transition-shadow hover:shadow-md"
 									use:draggable={{
 										container: STATUS_IN_PROGRESS_ID,
 										dragData: item
@@ -1130,7 +1129,7 @@
 											{#each item.tags as tag}
 												{#if tag}
 													<span
-														class="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-800"
+														class="rounded bg-[#c5d4e8] px-1.5 py-0.5 text-xs font-medium text-[#153243]"
 													>
 														{tag}
 													</span>
@@ -1140,7 +1139,7 @@
 									{/if}
 									<button
 										on:click={() => deleteTodo(item)}
-										class="absolute top-1 right-1 rounded-full p-1 text-[#D38F7A] opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 focus:opacity-100 focus:outline-none"
+										class="absolute top-1 right-1 rounded-full p-1 text-red-500 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-100 focus:opacity-100 focus:outline-none"
 										aria-label="Delete todo"
 									>
 										<svg
@@ -1166,11 +1165,13 @@
 				</div>
 
 				<!-- Done Column -->
-				<div class="flex flex-col overflow-hidden rounded-lg bg-[#f5f1e8] p-4 shadow">
+				<div
+					class="flex flex-col overflow-hidden rounded-lg border border-gray-200 bg-gray-100 p-4 shadow-sm"
+				>
 					<div class="mb-3 flex items-center justify-between">
 						<h3 class="font-semibold text-[#153243]">Done</h3>
 						<span
-							class="ml-2 rounded-md bg-[#DDD4C9] px-2 py-0.5 text-xs font-medium text-[#153243]"
+							class="ml-2 rounded-md bg-gray-200 px-2 py-0.5 text-xs font-medium text-[#153243]"
 						>
 							{filteredTodos.filter((t) => t.status === 'completed').length}
 						</span>
@@ -1189,7 +1190,7 @@
 									typeof item.workerName === 'string' ? item.workerName : '(No Worker)'}
 								{@const goalName = typeof item.goalName === 'string' ? item.goalName : '(No Goal)'}
 								<li
-									class="group relative cursor-grab rounded-lg border border-gray-200 bg-gray-50 p-3 opacity-75 shadow-sm"
+									class="group relative cursor-grab rounded-lg border border-gray-200 bg-white p-3 opacity-75 shadow-sm"
 									use:draggable={{
 										container: STATUS_COMPLETED_ID,
 										dragData: item
@@ -1203,7 +1204,7 @@
 											{#each item.tags as tag}
 												{#if tag}
 													<span
-														class="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-800 line-through"
+														class="rounded bg-[#e2e8f0] px-1.5 py-0.5 text-xs font-medium text-gray-600 line-through"
 													>
 														{tag}
 													</span>
@@ -1213,7 +1214,7 @@
 									{/if}
 									<button
 										on:click={() => deleteTodo(item)}
-										class="absolute top-1 right-1 rounded-full p-1 text-[#D38F7A] opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 focus:opacity-100 focus:outline-none"
+										class="absolute top-1 right-1 rounded-full p-1 text-red-500 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-100 focus:opacity-100 focus:outline-none"
 										aria-label="Delete todo"
 									>
 										<svg

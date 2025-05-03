@@ -24,15 +24,6 @@
                     "description": "Optional comma-separated list of tags (e.g. \"work,urgent,home\")"
                 },
                 "required": false
-            },
-            {
-                "name": "listName",
-                "location": "PARAMETER_LOCATION_BODY",
-                "schema": {
-                    "type": "string",
-                    "description": "Optional name of the list to create the todo in"
-                },
-                "required": false
             }
         ],
         "client": {}
