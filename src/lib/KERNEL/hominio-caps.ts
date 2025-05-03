@@ -2,7 +2,7 @@ import type { Docs } from './hominio-db'; // Assuming Docs type is exported
 import { hominioDB } from './hominio-db'; // <-- Import hominioDB
 import { GENESIS_HOMINIO } from '../../db/constants'; // Import from centralized constants
 import type { LoroMap } from 'loro-crdt'; // <-- Import LoroMap for type casting
-import type { LoroHqlQueryExtended } from '$lib/KERNEL/hominio-query'; // <-- Import type directly
+import type { LoroHqlQueryExtended } from '$lib/KERNEL/hominio-types'; // <-- NEW PATH (direct type import)
 
 // Basic representation of a user for capability checks
 export interface CapabilityUser {
@@ -121,7 +121,7 @@ export async function canCreatePersonConcept(user: CapabilityUser | null): Promi
     try {
         console.log(`[canCreatePersonConcept] Performing ownership check for user: ${userId}`);
 
-        const queryModule = await import('$lib/KERNEL/hominio-query');
+        const queryModule = await import('$lib/KERNEL/hominio-query/index');
         const executeQuery = queryModule.executeQuery;
         const indexRegistryModule = await import('$lib/KERNEL/index-registry');
         const getIndexLeafPubKey = indexRegistryModule.getIndexLeafPubKey;

@@ -1,31 +1,16 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 import { writable, readable, get, type Readable } from 'svelte/store';
 import { browser } from '$app/environment';
-import { subscribeToDbChanges } from './hominio-db'; // Import subscribe function
-// Import query executor and types for internal use
-import { executeQuery as coreExecuteQuery } from './hominio-query';
-// Re-export under original names
-// export type { CoreLoroHqlQueryExtended as LoroHqlQueryExtended, CoreQueryResult as QueryResult };
+import { subscribeToDbChanges } from './hominio-db';
+import { executeQuery as coreExecuteQuery } from './hominio-query/index';
 import { executeMutation as coreExecuteMutation } from './hominio-mutate';
-// Import and re-export auth tools
 import { authClient as coreAuthClient, getMe as coreGetMe } from './hominio-auth';
-// Remove individual re-exports
-// export { authClient, coreGetMe as getMe };
-// Remove direct caps import
-// import type { CapabilityUser } from './hominio-caps';
-/* eslint-enable @typescript-eslint/no-unused-vars */
-
-// --- Import Types from hominio-types.ts ---
 import type {
-    LoroHqlQueryExtended as CoreLoroHqlQueryExtended, // Keep alias
-    QueryResult as CoreQueryResult, // Keep alias
+    LoroHqlQueryExtended as CoreLoroHqlQueryExtended,
+    QueryResult as CoreQueryResult,
     MutateHqlRequest,
     MutationResult,
     CapabilityUser
 } from './hominio-types';
-// Re-export under original names using imported types
-// export type { CoreLoroHqlQueryExtended as LoroHqlQueryExtended, CoreQueryResult as QueryResult };
-// --- End Import Types ---
 
 // --- Internal State ---
 
@@ -160,14 +145,50 @@ function processReactiveQueryFacade(
 
                     const results = await coreExecuteQuery(latestQueryDefinition, user);
 
-                    if (JSON.stringify(get(queryDefinitionStore)) !== lastQueryDefinitionString) {
-                        return;
+                    // <<< DEBUG LOG START >>>
+                    console.log(`[processReactiveQueryFacade DEBUG ${queryIdentifier}] Raw results received from coreExecuteQuery:`, JSON.stringify(results));
+                    // <<< DEBUG LOG END >>>
+
+                    // <<< FIX: Assign results directly, no longer need to extract 'variables' >>>
+                    const finalResults = results;
+
+                    // <<< DUPLICATE CHECK START >>>
+                    if (Array.isArray(finalResults)) {
+                        // Check 'id' on the top-level item (should be correct now)
+                        const ids = finalResults.map(item => item?.id ?? JSON.stringify(item)).filter(id => id);
+                        const uniqueIds = new Set(ids);
+                        if (ids.length !== uniqueIds.size) {
+                            console.error(`[processReactiveQueryFacade DEBUG ${queryIdentifier}] Duplicate IDs DETECTED BEFORE set(results)! IDs:`, ids);
+                            // Optionally handle the error, e.g., filter duplicates or set an error state
+                        } else {
+                            console.log(`[processReactiveQueryFacade DEBUG ${queryIdentifier}] IDs verified unique before set(results). Count: ${ids.length}`);
+                        }
                     }
-                    set(results);
-                    currentResults = results;
+                    // <<< DUPLICATE CHECK END >>>
+
+                    if (JSON.stringify(get(queryDefinitionStore)) !== lastQueryDefinitionString) {
+                        return; // Query definition changed while query was running, discard result
+                    }
+
+                    // <<< DEBUG LOG START >>>
+                    console.log(`[processReactiveQueryFacade DEBUG ${queryIdentifier}] Setting results:`, JSON.stringify(finalResults));
+                    if (Array.isArray(finalResults)) {
+                        const ids = finalResults.map(r => r?.id ?? JSON.stringify(r)).filter(id => id);
+                        const uniqueIds = new Set(ids);
+                        if (ids.length !== uniqueIds.size) {
+                            console.error(`[processReactiveQueryFacade DEBUG ${queryIdentifier}] Duplicate IDs found BEFORE set(results)!`, ids);
+                        }
+                    }
+                    // <<< DEBUG LOG END >>>
+
+                    set(finalResults);
+                    currentResults = finalResults;
                 } catch (error) {
-                    console.error(`[processReactiveQueryFacade] Error during executeQuery:`, error);
+                    console.error(`[processReactiveQueryFacade ${queryIdentifier}] Error during executeQuery:`, error);
                     if (JSON.stringify(get(queryDefinitionStore)) === lastQueryDefinitionString) {
+                        // <<< DEBUG LOG START >>>
+                        console.log(`[processReactiveQueryFacade DEBUG ${queryIdentifier}] Setting null due to error.`);
+                        // <<< DEBUG LOG END >>>
                         set(null);
                         currentResults = null;
                     }
@@ -175,29 +196,48 @@ function processReactiveQueryFacade(
             }, DEBOUNCE_MS);
         };
 
+        // Add logging for other set calls
         const unsubscribeQueryDef = queryDefinitionStore.subscribe(newQueryDef => {
             const newQueryDefString = JSON.stringify(newQueryDef);
             if (lastQueryDefinitionString !== newQueryDefString || currentResults === undefined) {
+                // <<< DEBUG LOG START >>>
+                console.log(`[processReactiveQueryFacade DEBUG ${queryIdentifier}] Query definition changed or initial load, triggering query.`);
+                // <<< DEBUG LOG END >>>
                 triggerDebouncedQuery('Query Definition Changed or Initial Load');
             }
         });
 
         notifierSubscription = svelteNotifier.subscribe(() => {
+            // <<< DEBUG LOG START >>>
+            console.log(`[processReactiveQueryFacade DEBUG ${queryIdentifier}] DB change notifier triggered, re-running query.`);
+            // <<< DEBUG LOG END >>>
             triggerDebouncedQuery('DB Change Notifier');
         });
 
         userSubscription = currentUser.subscribe((/* newUser */) => {
             if (currentResults !== undefined) {
+                // <<< DEBUG LOG START >>>
+                console.log(`[processReactiveQueryFacade DEBUG ${queryIdentifier}] User changed, re-running query.`);
+                // <<< DEBUG LOG END >>>
                 triggerDebouncedQuery('User Change');
             }
         });
 
         lastQueryDefinitionString = JSON.stringify(get(queryDefinitionStore));
         currentResults = undefined;
+        // <<< DEBUG LOG START >>>
+        console.log(`[processReactiveQueryFacade DEBUG ${queryIdentifier}] Initial setup. QueryDef: ${lastQueryDefinitionString}`);
+        // <<< DEBUG LOG END >>>
 
         if (get(queryDefinitionStore) && Array.isArray(get(queryDefinitionStore)?.steps)) {
+            // <<< DEBUG LOG START >>>
+            console.log(`[processReactiveQueryFacade DEBUG ${queryIdentifier}] Triggering initial query on mount.`);
+            // <<< DEBUG LOG END >>>
             triggerDebouncedQuery('Initial Mount');
         } else {
+            // <<< DEBUG LOG START >>>
+            console.log(`[processReactiveQueryFacade DEBUG ${queryIdentifier}] Initial query definition invalid or missing, setting empty array.`);
+            // <<< DEBUG LOG END >>>
             set([]);
             currentResults = [];
         }

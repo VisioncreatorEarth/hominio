@@ -1,6 +1,4 @@
 // Implementation extracted from hominio/+page.svelte
-import { getLoroAPIInstance } from '$lib/KERNEL/loroAPI';
-import type { TodoItem } from '$lib/docs/schemas/todo';
 import { logToolActivity } from '$lib/ultravox/stores';
 import type { ToolParameters } from '$lib/ultravox/types';
 import { o } from '$lib/KERNEL/hominio-svelte'; // Import Hominio facade
@@ -12,133 +10,6 @@ import type {
     UpdateMutationOperation,
     QueryResult
 } from '$lib/KERNEL/hominio-types';
-
-/**
- * Updates a todo item with new properties
- * @param inputs Tool input parameters
- * @returns Result of the operation
- */
-export async function execute(inputs: {
-    todoId?: string;
-    text?: string;
-    newText?: string;
-    completed?: boolean;
-    tags?: string;
-}): Promise<{ success: boolean; message: string }> {
-    try {
-        // Get the LoroAPI instance
-        const loroAPI = getLoroAPIInstance();
-
-        // Prepare update data
-        const updateData: Partial<TodoItem> = {};
-
-        if (inputs.newText) {
-            updateData.text = inputs.newText.trim();
-        }
-
-        if (inputs.completed !== undefined) {
-            updateData.completed = inputs.completed;
-        }
-
-        if (inputs.tags) {
-            updateData.tags = inputs.tags
-                .split(',')
-                .map(t => t.trim())
-                .filter(t => t.length > 0);
-        }
-
-        // Check if there's anything to update
-        if (Object.keys(updateData).length === 0) {
-            return logToolActivity('updateTodo', 'No updates specified', false);
-        }
-
-        // Find the todo using the search criteria with the LoroAPI
-        const result = await loroAPI.findItem<TodoItem>('todo', {
-            id: inputs.todoId,
-            searchField: 'text',
-            searchValue: inputs.text
-        });
-
-        if (!result) {
-            return logToolActivity('updateTodo', 'No matching todo found', false);
-        }
-
-        const [id, todo] = result;
-
-        // Use the updateItem helper from loroAPI for consistency
-        const success = await loroAPI.updateItem<TodoItem>('todo', id, (currentItem) => {
-            return { ...currentItem, ...updateData };
-        });
-
-        if (success) {
-            return logToolActivity('updateTodo', `Todo "${todo.text}" updated successfully`);
-        } else {
-            return logToolActivity('updateTodo', `Failed to update todo with ID ${id}`, false);
-        }
-    } catch (error) {
-        console.error('Error updating todo:', error);
-        const message = error instanceof Error ? error.message : String(error);
-        return logToolActivity('updateTodo', message, false);
-    }
-}
-
-// --- Type Definitions --- (Similar to queryTodos)
-type MetaIndexResult = QueryResult & { variables: { index_map: Partial<Record<IndexLeafType, string>> } };
-type SchemasIndexResult = QueryResult & { variables: { schema_map: Record<string, string> } };
-// Type for finding the name leaf pubkey via cneme link
-type NameLeafLinkResult = QueryResult & { variables: { nameLeafPubKeyVar: string } };
-// Type for finding tcini link
-type TciniLinkResult = QueryResult & { variables: { linkId: string, currentStatusLeafId: string } };
-
-// --- Static Leaf IDs --- (Status IDs needed)
-const STATUS_NOT_STARTED_ID =
-    '0x3b302f86a7873b6533959d80c53efec82ce28ea3fd540da3ed90dd26cac76bde';
-const STATUS_IN_PROGRESS_ID =
-    '0x05447c2f4716f12eb30e49fad68e94aa017edeb6778610b96eb2f4b61c6c029e';
-const STATUS_COMPLETED_ID =
-    '0xe3110ac83fd5ef52cf91873b8a94ef6662cd03d5eb433d51922942e834d63c66';
-
-const STATUS_MAP: Record<string, string> = {
-    'not started': STATUS_NOT_STARTED_ID,
-    'in progress': STATUS_IN_PROGRESS_ID,
-    'done': STATUS_COMPLETED_ID
-};
-
-// --- Helper: Fetch Schema Pubkeys --- (Can be shared or copied)
-async function fetchSchemaPubkeys(schemaNames: string[]): Promise<Record<string, string | null>> {
-    try {
-        const metaIndexQuery: LoroHqlQueryExtended = {
-            steps: [
-                { action: 'get', from: { pubkey: [GENESIS_PUBKEY], targetDocType: 'Leaf' }, fields: { index_map: { field: 'self.data.value' } }, resultVariable: 'metaIndex' }
-            ]
-        };
-        const metaResult = await o.query(metaIndexQuery);
-        let schemasIndexPubKey: string | null = null;
-        if (metaResult && metaResult.length > 0 && metaResult[0].variables && typeof metaResult[0].variables === 'object' && metaResult[0].variables !== null && 'index_map' in metaResult[0].variables && typeof metaResult[0].variables.index_map === 'object') {
-            const indexRegistry = (metaResult[0] as MetaIndexResult).variables.index_map;
-            schemasIndexPubKey = indexRegistry['schemas'] ?? null;
-        } else { throw new Error('Meta Index query failed.'); }
-        if (!schemasIndexPubKey) throw new Error("Could not find 'schemas' index pubkey.");
-
-        const schemasIndexQuery: LoroHqlQueryExtended = {
-            steps: [
-                { action: 'get', from: { pubkey: [schemasIndexPubKey], targetDocType: 'Leaf' }, fields: { schema_map: { field: 'self.data.value' } }, resultVariable: 'schemasIndexData' }
-            ]
-        };
-        const schemasResult = await o.query(schemasIndexQuery);
-        if (schemasResult && schemasResult.length > 0 && schemasResult[0].variables && typeof schemasResult[0].variables === 'object' && schemasResult[0].variables !== null && 'schema_map' in schemasResult[0].variables && typeof schemasResult[0].variables.schema_map === 'object') {
-            const schemaMap = (schemasResult[0] as SchemasIndexResult).variables.schema_map;
-            const result: Record<string, string | null> = {};
-            for (const name of schemaNames) { result[name] = schemaMap[name] ?? null; }
-            return result;
-        } else { throw new Error('Schemas index query failed.'); }
-    } catch (err) {
-        console.error('[fetchSchemaPubkeys] Error:', err);
-        const errorResult: Record<string, string | null> = {};
-        schemaNames.forEach(name => errorResult[name] = null);
-        return errorResult;
-    }
-}
 
 /**
  * Updates a todo item's text or status using HQL, identified by taskId.
@@ -313,5 +184,63 @@ export async function updateTodoImplementation(parameters: ToolParameters): Prom
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
         logToolActivity('updateTodo', `Error: ${errorMessage}`, false);
         return JSON.stringify({ success: false, message: `Error updating todo: ${errorMessage}` });
+    }
+}
+
+// --- Type Definitions --- (Similar to queryTodos)
+type MetaIndexResult = QueryResult & { variables: { index_map: Partial<Record<IndexLeafType, string>> } };
+type SchemasIndexResult = QueryResult & { variables: { schema_map: Record<string, string> } };
+// Type for finding the name leaf pubkey via cneme link
+type NameLeafLinkResult = QueryResult & { variables: { nameLeafPubKeyVar: string } };
+// Type for finding tcini link
+type TciniLinkResult = QueryResult & { variables: { linkId: string, currentStatusLeafId: string } };
+
+// --- Static Leaf IDs --- (Status IDs needed)
+const STATUS_NOT_STARTED_ID =
+    '0x3b302f86a7873b6533959d80c53efec82ce28ea3fd540da3ed90dd26cac76bde';
+const STATUS_IN_PROGRESS_ID =
+    '0x05447c2f4716f12eb30e49fad68e94aa017edeb6778610b96eb2f4b61c6c029e';
+const STATUS_COMPLETED_ID =
+    '0xe3110ac83fd5ef52cf91873b8a94ef6662cd03d5eb433d51922942e834d63c66';
+
+const STATUS_MAP: Record<string, string> = {
+    'not started': STATUS_NOT_STARTED_ID,
+    'in progress': STATUS_IN_PROGRESS_ID,
+    'done': STATUS_COMPLETED_ID
+};
+
+// --- Helper: Fetch Schema Pubkeys --- (Can be shared or copied)
+async function fetchSchemaPubkeys(schemaNames: string[]): Promise<Record<string, string | null>> {
+    try {
+        const metaIndexQuery: LoroHqlQueryExtended = {
+            steps: [
+                { action: 'get', from: { pubkey: [GENESIS_PUBKEY], targetDocType: 'Leaf' }, fields: { index_map: { field: 'self.data.value' } }, resultVariable: 'metaIndex' }
+            ]
+        };
+        const metaResult = await o.query(metaIndexQuery);
+        let schemasIndexPubKey: string | null = null;
+        if (metaResult && metaResult.length > 0 && metaResult[0].variables && typeof metaResult[0].variables === 'object' && metaResult[0].variables !== null && 'index_map' in metaResult[0].variables && typeof metaResult[0].variables.index_map === 'object') {
+            const indexRegistry = (metaResult[0] as MetaIndexResult).variables.index_map;
+            schemasIndexPubKey = indexRegistry['schemas'] ?? null;
+        } else { throw new Error('Meta Index query failed.'); }
+        if (!schemasIndexPubKey) throw new Error("Could not find 'schemas' index pubkey.");
+
+        const schemasIndexQuery: LoroHqlQueryExtended = {
+            steps: [
+                { action: 'get', from: { pubkey: [schemasIndexPubKey], targetDocType: 'Leaf' }, fields: { schema_map: { field: 'self.data.value' } }, resultVariable: 'schemasIndexData' }
+            ]
+        };
+        const schemasResult = await o.query(schemasIndexQuery);
+        if (schemasResult && schemasResult.length > 0 && schemasResult[0].variables && typeof schemasResult[0].variables === 'object' && schemasResult[0].variables !== null && 'schema_map' in schemasResult[0].variables && typeof schemasResult[0].variables.schema_map === 'object') {
+            const schemaMap = (schemasResult[0] as SchemasIndexResult).variables.schema_map;
+            const result: Record<string, string | null> = {};
+            for (const name of schemaNames) { result[name] = schemaMap[name] ?? null; }
+            return result;
+        } else { throw new Error('Schemas index query failed.'); }
+    } catch (err) {
+        console.error('[fetchSchemaPubkeys] Error:', err);
+        const errorResult: Record<string, string | null> = {};
+        schemaNames.forEach(name => errorResult[name] = null);
+        return errorResult;
     }
 } 
