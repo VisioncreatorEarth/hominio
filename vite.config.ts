@@ -2,6 +2,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 import wasm from "vite-plugin-wasm";
+import { nodePolyfills } from 'vite-plugin-node-polyfills';
 // import topLevelAwait from "vite-plugin-top-level-await"; // Temporarily removed
 
 export default defineConfig({
@@ -10,10 +11,17 @@ export default defineConfig({
 		sveltekit(),
 		wasm(),
 		// topLevelAwait(), // Temporarily removed
+		nodePolyfills({
+			include: ['buffer', 'process', 'util']
+		}),
 	],
 	resolve: {
 		// Handle Tauri API as external module to avoid dev-time errors
 		conditions: ['browser']
+	},
+	define: {
+		'process.env': {},
+		global: 'globalThis',
 	},
 	server: {
 		host: '0.0.0.0',  // Listen on all network interfaces
@@ -29,7 +37,12 @@ export default defineConfig({
 		}
 	},
 	optimizeDeps: {
-		exclude: ['loro-crdt']
+		exclude: ['loro-crdt'],
+		esbuildOptions: {
+			define: {
+				global: 'globalThis',
+			},
+		},
 	},
 	build: {
 		// Ensure assets are copied
