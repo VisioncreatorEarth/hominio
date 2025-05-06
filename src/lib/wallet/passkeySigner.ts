@@ -3,7 +3,7 @@ declare global {
     interface Window { ethereum?: import('viem').EIP1193Provider }
 }
 
-import { createPublicClient, http, createWalletClient, custom, type Address, type Hex, hexToBytes, bytesToHex, hexToBigInt, keccak256, encodeAbiParameters, parseAbiParameters, /* type Hash, */ type PublicClient, toBytes } from 'viem';
+import { createPublicClient, http, createWalletClient, custom, type Address, type Hex, hexToBytes, bytesToHex, hexToBigInt, keccak256, encodeAbiParameters, parseAbiParameters, /* type Hash, */ type PublicClient, toBytes, getAddress } from 'viem';
 import { gnosis } from 'viem/chains';
 
 // --- Constants ---
@@ -561,78 +561,159 @@ export async function getPasskeySignerContractAddress(): Promise<Address | null>
  */
 export async function deployPasskeySignerContract(): Promise<{ txHash: Hex; signerAddress?: Address } | null> {
     const storedData = getStoredPasskeyData();
-    if (!storedData?.pubkeyCoordinates?.x || !storedData?.pubkeyCoordinates?.y) {
-        console.error("No stored passkey coordinates found.");
-        return null;
+    if (!storedData || !storedData.pubkeyCoordinates.x || !storedData.pubkeyCoordinates.y) {
+        throw new Error('Passkey data with coordinates not found. Create a passkey first.');
     }
 
     try {
+        const client = getWalletClient();
+        if (!client) {
+            throw new Error('Wallet client not initialized.');
+        }
         const account = await getWalletAccount();
-        const wallet = getWalletClient();
-
-        // Ensure wallet is on Gnosis before proceeding
-        const currentChainId = await wallet.getChainId();
-        if (currentChainId !== gnosis.id) {
-            // Optional: Request network switch
-            // try {
-            //     await wallet.switchChain({ id: gnosis.id });
-            //     console.log('Switched to Gnosis network');
-            // } catch (switchError) {
-            //     console.error('Failed to switch network:', switchError);
-            //     throw new Error(`Please switch your wallet to the Gnosis network (Chain ID: ${gnosis.id}) to deploy the signer contract.`);
-            // }
-            throw new Error(`Wallet is connected to chain ${currentChainId}, but Gnosis (Chain ID: ${gnosis.id}) is required for deployment.`);
+        if (!account) {
+            throw new Error('Could not get wallet account.');
         }
 
-        const x = hexToBigInt(storedData.pubkeyCoordinates.x as Hex);
-        const y = hexToBigInt(storedData.pubkeyCoordinates.y as Hex);
-        const verifiersValue = BigInt(FCL_VERIFIER_ADDRESS);
+        // --- NEW: Network Switch Logic --- 
+        let currentChainId = await client.getChainId();
+        if (currentChainId !== gnosis.id) {
+            console.log(`Requesting wallet switch to Gnosis (ID: ${gnosis.id})...`);
+            try {
+                await client.switchChain({ id: gnosis.id });
+                currentChainId = await client.getChainId(); // Re-check after switch attempt
+                if (currentChainId !== gnosis.id) {
+                    throw new Error(`Wallet switch failed. Please manually switch to Gnosis (ID: ${gnosis.id}).`);
+                }
+                console.log(`Wallet switched to Gnosis.`);
+            } catch (switchError: unknown) {
+                let message = 'Unknown switch error';
+                if (switchError instanceof Error) message = switchError.message;
+                else if (typeof switchError === 'string') message = switchError;
+                // Include specific message for user rejection
+                if (message.includes('rejected') || (typeof switchError === 'object' && switchError && 'code' in switchError && switchError.code === 4001)) {
+                    throw new Error('User rejected the network switch request.');
+                }
+                throw new Error(`Failed to switch wallet to Gnosis: ${message}`);
+            }
+        }
+        // --- END: Network Switch Logic --- 
 
-        console.log(`Attempting to deploy signer for passkey ${storedData.rawId} on Gnosis...`);
+        // Compute Verifiers value (P256.Verifiers type in Solidity, uint176 in ABI)
+        // Assuming 0x000A precompile for P-256 based on EIP-7212 (common for Arbitrum/Gnosis)
+        // Adjust precompile address if different for Gnosis mainnet/chiado
+        const precompileAddressShort = 0x000a; // Adjust if necessary
+        const fallbackVerifierAddress = FCL_VERIFIER_ADDRESS;
+        const verifiersBigInt =
+            (BigInt(precompileAddressShort) << 160n) + BigInt(fallbackVerifierAddress);
 
-        const txHash = await wallet.writeContract({
+        console.log('Deploying signer contract with:');
+        console.log(' Public Key X:', storedData.pubkeyCoordinates.x);
+        console.log(' Public Key Y:', storedData.pubkeyCoordinates.y);
+        console.log(' Verifiers (BigInt):', verifiersBigInt);
+        console.log(' Factory Address:', FACTORY_ADDRESS);
+        console.log(' Account:', account);
+
+        const txHash = await client.writeContract({
             address: FACTORY_ADDRESS,
             abi: FactoryABI,
             functionName: 'createSigner',
-            args: [x, y, verifiersValue],
+            args: [
+                hexToBigInt(storedData.pubkeyCoordinates.x as Hex),
+                hexToBigInt(storedData.pubkeyCoordinates.y as Hex),
+                verifiersBigInt // Pass the computed BigInt
+            ],
             account: account,
-            chain: gnosis // Explicitly set chain to gnosis
+            chain: gnosis // Explicitly specify chain for Viem
         });
 
-        console.log('Deployment Transaction Hash:', txHash);
+        console.log('Deployment transaction sent:', txHash);
+
+        // Wait for transaction receipt to potentially extract signer address
         console.log('Waiting for transaction receipt...');
-
         const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+        console.log('Transaction receipt:', receipt);
 
-        console.log('Transaction Confirmed:', receipt);
-        if (receipt.status === 'success') {
-            console.log('Signer contract deployment transaction succeeded.');
+        if (receipt.status !== 'success') {
+            throw new Error(`Deployment transaction failed. Status: ${receipt.status}`);
+        }
 
-            // Attempt to get the address via prediction *after* deployment succeeds
-            console.log('Attempting to predict signer address post-deployment...');
-            const predictedAddress = await getPasskeySignerContractAddress();
+        // Attempt to parse the 'Created' event log to get the signer address
+        let signerAddress: Address | undefined = undefined;
+        const createdEventSignature = keccak256(toBytes('Created(address,uint256,uint256,uint176)'));
 
-            if (predictedAddress) {
-                console.log('Successfully predicted signer address post-deployment:', predictedAddress);
-                // Store the address
-                storedData.signerContractAddress = predictedAddress;
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(storedData));
-                console.log('Stored deployed signer address.');
-                return { txHash, signerAddress: predictedAddress }; // Return address
-            } else {
-                console.error('Prediction failed even after deployment succeeded.');
-                // Return txHash, but indicate address wasn't found
-                return { txHash };
+        for (const log of receipt.logs) {
+            // Check if log comes from the Factory and matches the event signature
+            if (log.address.toLowerCase() === FACTORY_ADDRESS.toLowerCase() &&
+                log.topics[0]?.toLowerCase() === createdEventSignature.toLowerCase() &&
+                log.topics.length > 1 && log.topics[1]) {
+                try {
+                    // The signer address is the first indexed topic (log.topics[1])
+                    // It's stored as bytes32, need last 20 bytes.
+                    const topicValue = log.topics[1];
+                    // Extract the last 40 hex chars (20 bytes) and prepend 0x
+                    const potentialAddress = `0x${topicValue.slice(-40)}` as Address;
+                    // Use getAddress to validate and checksum
+                    signerAddress = getAddress(potentialAddress);
+                    console.log("Successfully extracted signer address from logs:", signerAddress);
+                    break; // Found it, exit loop
+                } catch (parseError) {
+                    console.error("Error parsing or checksumming address from 'Created' event log topic:", log.topics[1], parseError);
+                    signerAddress = undefined; // Ensure it's undefined if parsing/checksum fails
+                }
             }
+        }
+
+        if (signerAddress) {
+            // Update stored data with the deployed address
+            storedData.signerContractAddress = signerAddress;
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(storedData));
+            console.log('Updated stored passkey data with signer address.');
         } else {
-            throw new Error(`Deployment transaction failed: ${txHash}`);
+            console.warn("Could not extract signer address from 'Created' event logs.");
         }
-    } catch (error) {
-        console.error("Error deploying signer contract:", error);
-        if (error instanceof Error && error.message.includes('User rejected the request')) {
-            throw new Error('Transaction rejected by user.');
+
+        return { txHash, signerAddress };
+
+    } catch (error: unknown) {
+        console.error('Error deploying signer contract:', error);
+        let errorMessage = 'An unknown deployment error occurred.';
+        let errorCode: number | string | undefined = undefined;
+
+        if (error instanceof Error) {
+            errorMessage = error.message;
+            if ('code' in error && error.code !== undefined && (typeof error.code === 'number' || typeof error.code === 'string')) {
+                errorCode = error.code;
+            }
+        } else if (typeof error === 'string') {
+            errorMessage = error;
+        } else if (typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string') {
+            errorMessage = error.message;
+            if ('code' in error && error.code !== undefined && (typeof error.code === 'number' || typeof error.code === 'string')) {
+                errorCode = error.code;
+            }
         }
-        throw error;
+
+        // Re-throw specific user rejection errors
+        if (errorMessage?.includes('User rejected') || errorCode === 4001) {
+            throw new Error('User rejected the transaction request.');
+        }
+        // Also handle the network switch rejection message explicitly
+        if (errorMessage?.includes('User rejected the network switch request')) {
+            throw new Error('User rejected the network switch request.');
+        }
+
+        // Construct a comprehensive error message
+        let finalErrorMessage = `Failed to deploy: ${errorMessage}`;
+        if (errorCode !== undefined) {
+            finalErrorMessage += ` (Code: ${errorCode})`;
+        }
+        if (!(error instanceof Error) && typeof error !== 'string') {
+            try {
+                finalErrorMessage += ` | Raw error: ${JSON.stringify(error)}`;
+            } catch { /* ignore stringify errors */ }
+        }
+        throw new Error(finalErrorMessage);
     }
 }
 

@@ -1,28 +1,24 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { browser } from '$app/environment'; // Import browser helper
 	import {
 		createAndStorePasskeyData,
 		getStoredPasskeyData,
 		clearStoredPasskeyData,
 		deployPasskeySignerContract,
-		checkSignature,
 		verifySignatureWithProxy,
 		getWalletClient,
 		getWalletAccount,
-		type StoredPasskeyData,
-		type AuthenticatorAssertionResponse
+		type StoredPasskeyData
 	} from '$lib/wallet/passkeySigner';
 	import {
 		connectToLit,
-		getSessionSigs as getSessionSigsViaEOA, // Renamed for clarity
-		createAuthNeededCallback,
 		signWithPKP,
 		executeLitAction,
-		registerPasskeyAuthMethod,
-		addPermittedLitAction,
 		getSessionSigsWithGnosisPasskeyVerification,
 		getPermittedAuthMethodsForPkp,
-		gnosisPasskeyVerifyActionCode
+		gnosisPasskeyVerifyActionCode,
+		mintPKPWithPasskeyAndAction
 	} from '$lib/wallet/lit';
 	import type { LitNodeClient } from '@lit-protocol/lit-node-client';
 	import type { SessionSigs, ExecuteJsResponse } from '@lit-protocol/types';
@@ -35,16 +31,8 @@
 	let storedPasskey: StoredPasskeyData | null = null;
 	let deploymentTxHash = '';
 	let deployedSignerAddress: Address | null = null;
-	let verificationResult: { isCorrect: boolean; error?: string } | null = null;
 	let proxyVerificationResult: { isCorrect: boolean; error?: string } | null = null;
 	let isLoadingProxyVerify = false;
-
-	// PKP Auth Registration State (for Passkey)
-	let pkpTokenIdInput =
-		'54904544591499255766150295717592103065825849619250648229571304472718432033530'; // Default from lit page
-	let isRegisteringPasskeyAuth = false;
-	let passkeyRegistrationTxHash = '';
-	let isPasskeyAuthMethodRegistered = false; // This will be updated by checking contract state later
 
 	// Lit Connection State
 	let litNodeClient: LitNodeClient | null = null;
@@ -56,10 +44,16 @@
 	let eoaAddress: Address | null = null;
 	let isEoaConnecting = false;
 
+	// --- Minted PKP State ---
+	let mintedPkpTokenId: string | null = null;
+	let mintedPkpPublicKey: Hex | null = null;
+	let mintedPkpEthAddress: Address | null = null;
+	let isMintingPkp = false;
+	// --- END: Minted PKP State ---
+
 	// Session Signatures State (Unified)
 	let sessionSigs: SessionSigs | null = null;
-	let sessionAuthMethod: 'eoa' | 'gnosis-passkey' | null = null;
-	let isLoadingSessionSigsEOA = false;
+	let sessionAuthMethod: 'gnosis-passkey' | null = null;
 	let isLoadingSessionSigsGnosisPasskey = false;
 
 	// PKP Interaction State
@@ -85,10 +79,8 @@ const go = async () => {
   }
 };
 go();`;
-	let isRegisteringLitActionAuth = false;
-	let litActionRegistrationTxHash = '';
 
-	// --- NEW: State for displaying auth methods ---
+	// --- State for displaying auth methods ---
 	let permittedAuthMethods: Array<{ authMethodType: bigint; id: Hex; userPubkey: Hex }> = [];
 	let isLoadingPermittedAuthMethods = false;
 	// --- END: State for displaying auth methods ---
@@ -97,31 +89,58 @@ go();`;
 	let mainError = '';
 	let mainSuccess = '';
 
-	// PKP Details (from lit/+page.svelte, used as primary for PKP operations)
-	const PKP_TOKEN_ID =
-		'54904544591499255766150295717592103065825849619250648229571304472718432033530';
-	const PKP_PUBLIC_KEY =
-		'0x04024be2ffbd04173e6a014f0b93e9a4c4f5ea4c1d7409ca0c90ee596f40ed38f9c7faa53b5536a0ac11aa8a315e2705032a282db4ee386644e4d2f5e06964df5e' as Hex;
-	const PKP_ETH_ADDRESS = '0x6c4980C788eB10157c19884F581fed1AFd3c3520' as Address;
-
-	// State for registering Lit Action as Auth Method (Section 4B)
-	let litActionCodeForRegistration = gnosisPasskeyVerifyActionCode;
-
 	onMount(async () => {
-		storedPasskey = getStoredPasskeyData();
-		if (storedPasskey?.signerContractAddress) {
-			deployedSignerAddress = storedPasskey.signerContractAddress as Address;
+		// localStorage operations must be client-side only
+		if (browser) {
+			// Load stored passkey data
+			storedPasskey = getStoredPasskeyData();
+			if (storedPasskey?.signerContractAddress) {
+				deployedSignerAddress = storedPasskey.signerContractAddress as Address;
+			}
+
+			// Load minted PKP data from localStorage
+			const storedPKPDataString = localStorage.getItem('mintedPKPData');
+			if (storedPKPDataString) {
+				try {
+					const storedPKPData = JSON.parse(storedPKPDataString);
+					if (
+						storedPKPData &&
+						storedPKPData.tokenId &&
+						storedPKPData.pkpPublicKey &&
+						storedPKPData.pkpEthAddress
+					) {
+						mintedPkpTokenId = storedPKPData.tokenId;
+						mintedPkpPublicKey = storedPKPData.pkpPublicKey;
+						mintedPkpEthAddress = storedPKPData.pkpEthAddress;
+						console.log('Loaded PKP details from localStorage:', storedPKPData);
+					} else {
+						console.warn('Found invalid PKP data in localStorage.');
+						localStorage.removeItem('mintedPKPData'); // Clear invalid data
+					}
+				} catch (error) {
+					console.error('Error parsing PKP data from localStorage:', error);
+					localStorage.removeItem('mintedPKPData'); // Clear corrupted data
+				}
+			}
+
+			// Auto-connect Lit and EOA
+			await handleConnectLit();
+			await handleConnectEoaWallet();
+
+			// Auto-fetch auth methods if PKP ID is loaded
+			if (mintedPkpTokenId) {
+				await handleFetchPermittedAuthMethods(mintedPkpTokenId);
+			}
 		}
-		await handleConnectLit(); // Auto-connect to Lit
-		// TODO: Later, add check for existing passkey auth method registration if PKP_TOKEN_ID and litNodeClient are available
 	});
 
 	function resetMainMessages() {
 		mainError = '';
 		mainSuccess = '';
+		generalIsLoading = false;
 	}
 
-	// --- Passkey & EIP-1271 Functions (Section 1-3 from original wallet page) ---
+	// --- Passkey & EIP-1271 Functions ---
 	async function handleCreatePasskey() {
 		if (!username.trim()) {
 			mainError = 'Please enter a username.';
@@ -130,7 +149,6 @@ go();`;
 		generalIsLoading = true;
 		resetMainMessages();
 		deploymentTxHash = '';
-		verificationResult = null;
 		proxyVerificationResult = null;
 
 		try {
@@ -153,21 +171,24 @@ go();`;
 		clearStoredPasskeyData();
 		storedPasskey = null;
 		username = '';
-		mainSuccess = 'Passkey data cleared.';
 		resetMainMessages();
 		deploymentTxHash = '';
-		verificationResult = null;
 		proxyVerificationResult = null;
 		deployedSignerAddress = null;
-		isPasskeyAuthMethodRegistered = false;
-		passkeyRegistrationTxHash = '';
+		mintedPkpTokenId = null;
+		mintedPkpPublicKey = null;
+		mintedPkpEthAddress = null;
+		permittedAuthMethods = [];
+		if (browser) {
+			localStorage.removeItem('mintedPKPData');
+		}
+		mainSuccess = 'Passkey and associated PKP data cleared.';
 	}
 
 	async function handleDeployContract() {
 		generalIsLoading = true;
 		resetMainMessages();
 		deploymentTxHash = '';
-		verificationResult = null;
 		proxyVerificationResult = null;
 
 		try {
@@ -192,43 +213,17 @@ go();`;
 		}
 	}
 
-	async function handleSignAndVerifyEIP1271Factory() {
-		if (!messageToSign.trim()) {
-			mainError = 'Please enter a message to sign for EIP-1271 verification.';
-			return;
-		}
-		generalIsLoading = true;
-		resetMainMessages();
-		verificationResult = null;
-		proxyVerificationResult = null;
-
-		try {
-			verificationResult = await checkSignature(messageToSign);
-			if (verificationResult.isCorrect) {
-				mainSuccess = 'EIP-1271 Signature verified successfully via FACTORY!';
-			} else {
-				mainError = `EIP-1271 Factory Verification Failed: ${verificationResult.error || 'Contract returned invalid magic value.'}`;
-			}
-		} catch (error: any) {
-			mainError = `Error during EIP-1271 factory signature verification: ${error.message}`;
-			console.error(error);
-		} finally {
-			generalIsLoading = false;
-		}
-	}
-
 	async function handleSignAndVerifyEIP1271Proxy() {
 		if (!messageToSign.trim()) {
 			mainError = 'Please enter a message to sign for EIP-1271 verification.';
 			return;
 		}
 		if (!deployedSignerAddress) {
-			mainError = 'EIP-1271 Signer contract must be deployed first.';
+			mainError = 'EIP-1271 Signer contract must be deployed first (Step 2).';
 			return;
 		}
 		isLoadingProxyVerify = true;
 		resetMainMessages();
-		verificationResult = null;
 		proxyVerificationResult = null;
 
 		try {
@@ -251,6 +246,7 @@ go();`;
 
 	// --- Lit Connection & EOA Wallet Connection ---
 	async function handleConnectLit() {
+		if (litNodeClient && litConnected) return;
 		isLitConnecting = true;
 		resetMainMessages();
 		sessionSigs = null; // Clear previous sigs
@@ -258,147 +254,112 @@ go();`;
 		try {
 			litNodeClient = await connectToLit();
 			litConnected = true;
-			mainSuccess = 'Connected to Lit Network.';
-		} catch (err: any) {
-			mainError = err.message || 'Unknown error connecting to Lit';
-			litConnected = false;
+			mainSuccess = 'Successfully connected to Lit Network.';
+		} catch (error: any) {
+			mainError = `Error connecting to Lit: ${error.message}`;
+			console.error('Lit connection error:', error);
 		} finally {
 			isLitConnecting = false;
 		}
 	}
 
 	async function handleConnectEoaWallet() {
+		if (eoaWalletClient && eoaAddress) return;
 		isEoaConnecting = true;
 		resetMainMessages();
 		try {
-			eoaWalletClient = getWalletClient();
-			eoaAddress = await getWalletAccount();
-			mainSuccess = `Connected EOA wallet: ${eoaAddress}`;
-		} catch (err: any) {
-			mainError = err.message || 'Unknown error connecting EOA wallet';
-			eoaAddress = null;
+			eoaWalletClient = getWalletClient(); // Assumes this doesn't need await or can be synchronous setup
+			if (eoaWalletClient) {
+				const account = await getWalletAccount();
+				if (account) {
+					eoaAddress = account;
+					mainSuccess = `EOA Wallet connected: ${eoaAddress}`;
+				} else {
+					mainError =
+						'Could not get EOA account. Is your wallet connected and an account selected?';
+					eoaWalletClient = null; // Reset if account couldn't be fetched
+				}
+			} else {
+				mainError = 'Could not initialize EOA wallet client.';
+			}
+		} catch (error: any) {
+			mainError = `Error connecting EOA wallet: ${error.message}`;
+			console.error('EOA connection error:', error);
 			eoaWalletClient = null;
+			eoaAddress = null;
 		} finally {
 			isEoaConnecting = false;
 		}
 	}
 
-	// --- PKP Auth Method Registration ---
-	async function handleRegisterPasskeyAuth() {
-		const currentAuthMethodId = storedPasskey?.authMethodId;
-		if (!currentAuthMethodId) {
-			mainError = 'No passkey found with authMethodId. Create a passkey first (Section 1).';
+	// --- Mint PKP Function ---
+	async function handleMintPkp() {
+		if (!storedPasskey?.authMethodId) {
+			mainError = 'Cannot mint: Passkey not created or authMethodId missing (Step 1).';
+			return;
+		}
+		if (!storedPasskey?.signerContractAddress) {
+			mainError = 'Cannot mint: EIP-1271 Signer contract must be deployed first (Step 2).';
 			return;
 		}
 		if (!eoaWalletClient || !eoaAddress) {
-			mainError = 'EOA Wallet (Controller) must be connected to register auth methods.';
-			return;
-		}
-		if (!pkpTokenIdInput.trim()) {
-			mainError = 'PKP Token ID must be provided for registration.';
+			mainError = 'Cannot mint: EOA Wallet not connected (Step 0).';
 			return;
 		}
 
-		isRegisteringPasskeyAuth = true;
+		isMintingPkp = true;
 		resetMainMessages();
-		passkeyRegistrationTxHash = '';
 
 		try {
-			// EOA Wallet client is already available via eoaWalletClient
-			const txHash = await registerPasskeyAuthMethod(
+			const pkpDetails = await mintPKPWithPasskeyAndAction(
 				eoaWalletClient,
 				eoaAddress,
-				pkpTokenIdInput, // Use the input field value
-				currentAuthMethodId as Hex
+				storedPasskey.authMethodId as Hex,
+				gnosisPasskeyVerifyActionCode
 			);
-			passkeyRegistrationTxHash = txHash;
-			isPasskeyAuthMethodRegistered = true; // Assume success for now, real check later
-			mainSuccess = `Passkey auth method registration sent for PKP ${pkpTokenIdInput}. Tx: ${txHash}. (Note: On-chain status not yet verified here.)`;
+
+			mintedPkpTokenId = pkpDetails.tokenId;
+			mintedPkpPublicKey = pkpDetails.pkpPublicKey;
+			mintedPkpEthAddress = pkpDetails.pkpEthAddress;
+
+			if (browser) {
+				try {
+					localStorage.setItem('mintedPKPData', JSON.stringify(pkpDetails));
+					console.log('Saved PKP details to localStorage:', pkpDetails);
+				} catch (error) {
+					console.error('Error saving PKP details to localStorage:', error);
+				}
+			}
+
+			mainSuccess = `PKP Minted Successfully! Token ID: ${mintedPkpTokenId}`;
+
+			await handleFetchPermittedAuthMethods(mintedPkpTokenId);
 		} catch (error: any) {
-			mainError = error.message || 'An unknown error occurred during passkey auth registration.';
-			console.error(error);
-			isPasskeyAuthMethodRegistered = false;
+			mainError = `PKP minting error: ${error.message}`;
+			console.error('PKP minting error:', error);
 		} finally {
-			isRegisteringPasskeyAuth = false;
-		}
-	}
-
-	// --- NEW: Lit Action Auth Registration Handler ---
-	async function handleRegisterLitActionAuth() {
-		if (!eoaWalletClient || !eoaAddress) {
-			mainError = 'EOA Wallet (Controller) must be connected to register auth methods.';
-			return;
-		}
-		if (!pkpTokenIdInput.trim()) {
-			mainError = 'PKP Token ID must be provided for registration.';
-			return;
-		}
-		if (!litActionCodeForRegistration.trim()) {
-			mainError = 'Lit Action code cannot be empty.';
-			return;
-		}
-
-		isRegisteringLitActionAuth = true;
-		resetMainMessages();
-		litActionRegistrationTxHash = '';
-
-		try {
-			// litNodeClient is not strictly required by addPermittedLitAction anymore
-			const txHash = await addPermittedLitAction(
-				eoaWalletClient,
-				eoaAddress,
-				pkpTokenIdInput,
-				litActionCodeForRegistration
-				// scopes default to [1n] (SignAnything)
-			);
-			litActionRegistrationTxHash = txHash;
-			mainSuccess = `Lit Action auth method registration sent for PKP ${pkpTokenIdInput}. Tx: ${txHash}. (Note: On-chain status not yet verified here.)`;
-			// Ideally, we'd have a way to confirm on-chain status here or later
-		} catch (error: any) {
-			mainError = error.message || 'An unknown error occurred during Lit Action auth registration.';
-			console.error(error);
-		} finally {
-			isRegisteringLitActionAuth = false;
+			isMintingPkp = false;
 		}
 	}
 
 	// --- Session Signature Generation ---
-	async function handleGetSessionSigsEOA() {
-		if (!litNodeClient || !eoaWalletClient || !eoaAddress) {
-			mainError = 'Must connect to Lit and EOA wallet first.';
-			return;
-		}
-		isLoadingSessionSigsEOA = true;
-		resetMainMessages();
-		sessionSigs = null;
-		sessionAuthMethod = null;
-		try {
-			const chainInfo = await eoaWalletClient.getChainId();
-			const authCallback = createAuthNeededCallback(
-				litNodeClient,
-				eoaWalletClient,
-				eoaAddress,
-				chainInfo
-			);
-			sessionSigs = await getSessionSigsViaEOA(litNodeClient, 'ethereum', authCallback);
-			sessionAuthMethod = 'eoa';
-			mainSuccess = 'Successfully obtained session signatures via EOA!';
-		} catch (err: any) {
-			mainError = err.message || 'Unknown error getting session signatures via EOA';
-			sessionSigs = null;
-		} finally {
-			isLoadingSessionSigsEOA = false;
-		}
-	}
-
-	// --- NEW: Session Sigs with Gnosis Passkey Verification ---
 	async function handleGetSessionSigsGnosisPasskey() {
 		if (!litNodeClient) {
-			mainError = 'Must connect to Lit first.';
+			mainError = 'Must connect to Lit first (Step 0).';
 			return;
 		}
 		if (!storedPasskey?.rawId || !storedPasskey.pubkeyCoordinates) {
-			mainError = 'Stored passkey with rawId and coordinates is required for Gnosis verification.';
+			mainError = 'Stored passkey with rawId and coordinates is required (Step 1).';
+			return;
+		}
+		if (!storedPasskey?.signerContractAddress) {
+			mainError = 'EIP-1271 Signer contract must be deployed first (Step 2) to get session sigs.';
+			return;
+		}
+
+		const pkpKeyToUse = mintedPkpPublicKey;
+		if (!pkpKeyToUse) {
+			mainError = 'No PKP Public Key available. Mint a PKP first (Step 3).';
 			return;
 		}
 
@@ -408,11 +369,9 @@ go();`;
 		sessionAuthMethod = null;
 
 		try {
-			// Define a standard challenge message
 			const challengeMessage = 'Sign in to Hominio PKP via Passkey';
 
-			// 1. Get assertion from passkey using the defined challenge
-			const messageHashAsChallenge = keccak256(new TextEncoder().encode(challengeMessage)); // Hash the standard message
+			const messageHashAsChallenge = keccak256(new TextEncoder().encode(challengeMessage));
 			console.log(
 				`Requesting passkey signature for challenge (hash of "${challengeMessage}"): ${messageHashAsChallenge}`
 			);
@@ -423,13 +382,12 @@ go();`;
 					allowCredentials: [{ type: 'public-key', id: hexToBytes(storedPasskey.rawId as Hex) }],
 					userVerification: 'required'
 				}
-			})) as PublicKeyCredential | null; // Correct type assertion
+			})) as PublicKeyCredential | null;
 
-			// Add checks for assertion and required response fields
 			if (
 				!assertion ||
 				!assertion.response ||
-				!(assertion.response instanceof AuthenticatorAssertionResponse) || // Check instance type
+				!(assertion.response instanceof AuthenticatorAssertionResponse) ||
 				!assertion.response.authenticatorData ||
 				!assertion.response.signature
 			) {
@@ -439,15 +397,18 @@ go();`;
 			}
 			console.log('Got assertion for Gnosis verification:', assertion);
 
-			// assertion.response is now guaranteed to be AuthenticatorAssertionResponse
 			const assertionResponse = assertion.response;
 
-			// 2. Call the session sig function, passing the assertion RESPONSE
+			if (!storedPasskey || !storedPasskey.signerContractAddress) {
+				throw new Error(
+					'Stored passkey data or signer contract address missing unexpectedly before session sig call.'
+				);
+			}
 			sessionSigs = await getSessionSigsWithGnosisPasskeyVerification(
 				litNodeClient,
-				PKP_PUBLIC_KEY,
+				pkpKeyToUse,
 				challengeMessage,
-				assertionResponse, // <-- Pass the checked assertionResponse
+				assertionResponse,
 				storedPasskey,
 				'ethereum'
 			);
@@ -468,21 +429,29 @@ go();`;
 	// --- PKP Operations (Sign Message, Execute Action) ---
 	async function handleSignMessageWithPkp() {
 		if (!litNodeClient || !sessionSigs) {
-			mainError = 'Must connect to Lit and get session signatures first.';
+			mainError = 'Must connect to Lit and get session signatures first (Step 5).';
 			return;
 		}
 		if (!messageToSign.trim()) {
 			mainError = 'Please enter a message to sign with PKP.';
 			return;
 		}
+
+		const pkpKeyToUseForSigning = mintedPkpPublicKey;
+		if (!pkpKeyToUseForSigning) {
+			mainError = 'No PKP Public Key available for signing. Mint a PKP first (Step 3).';
+			return;
+		}
+
 		isSigningMessage = true;
 		resetMainMessages();
 		signatureResult = null;
+
 		try {
 			signatureResult = await signWithPKP(
 				litNodeClient,
 				sessionSigs,
-				PKP_PUBLIC_KEY,
+				pkpKeyToUseForSigning,
 				messageToSign
 			);
 			mainSuccess = 'Message signed successfully with PKP!';
@@ -496,7 +465,7 @@ go();`;
 
 	async function handleExecuteLitAction() {
 		if (!litNodeClient || !sessionSigs) {
-			mainError = 'Must connect to Lit and get session signatures first.';
+			mainError = 'Must connect to Lit and get session signatures first (Step 5).';
 			return;
 		}
 		isExecutingAction = true;
@@ -522,13 +491,13 @@ go();`;
 		}
 	}
 
-	// --- NEW: Handler to fetch and display permitted auth methods ---
-	async function handleFetchPermittedAuthMethods() {
+	// --- Handler to fetch and display permitted auth methods ---
+	async function handleFetchPermittedAuthMethods(tokenId: string) {
 		if (!litNodeClient) {
 			mainError = 'Lit Network not connected.';
 			return;
 		}
-		if (!pkpTokenIdInput.trim()) {
+		if (!tokenId.trim()) {
 			mainError = 'PKP Token ID must be provided to fetch auth methods.';
 			return;
 		}
@@ -536,12 +505,12 @@ go();`;
 		resetMainMessages();
 		permittedAuthMethods = [];
 		try {
-			const methods = await getPermittedAuthMethodsForPkp(pkpTokenIdInput);
+			const methods = await getPermittedAuthMethodsForPkp(tokenId);
 			permittedAuthMethods = methods;
 			if (methods.length > 0) {
-				mainSuccess = `Found ${methods.length} permitted auth method(s) for PKP ${pkpTokenIdInput}.`;
+				mainSuccess = `Found ${methods.length} permitted auth method(s) for PKP ${tokenId}.`;
 			} else {
-				mainSuccess = `No permitted auth methods found for PKP ${pkpTokenIdInput}.`;
+				mainSuccess = `No permitted auth methods found for PKP ${tokenId}.`;
 			}
 		} catch (err: any) {
 			mainError = err.message || 'Error fetching permitted auth methods.';
@@ -550,7 +519,6 @@ go();`;
 			isLoadingPermittedAuthMethods = false;
 		}
 	}
-	// --- END: Handler to fetch and display permitted auth methods ---
 </script>
 
 <div
@@ -559,7 +527,7 @@ go();`;
 	<h1
 		class="mb-8 bg-gradient-to-r from-purple-400 to-pink-600 bg-clip-text text-4xl font-bold text-transparent"
 	>
-		Unified Passkey & PKP Interaction Demo
+		Passkey-Controlled PKP Demo
 	</h1>
 
 	{#if mainError}
@@ -576,7 +544,7 @@ go();`;
 		</div>
 	{/if}
 
-	<!-- Section 0: Initial Connections -->
+	<!-- Step 0: Initial Connections -->
 	<div
 		class="mb-8 w-full max-w-3xl rounded-lg bg-white/5 p-6 text-slate-100 shadow-xl backdrop-blur-sm"
 	>
@@ -603,20 +571,26 @@ go();`;
 			</div>
 			<div>
 				<h3 class="mb-2 text-lg font-medium text-slate-300">B. Connect Controller EOA Wallet</h3>
-				<button
-					on:click={handleConnectEoaWallet}
-					class="flex w-full justify-center rounded-md border border-transparent bg-orange-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-orange-700 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-					disabled={isEoaConnecting || !!eoaAddress}
-				>
-					{#if isEoaConnecting}Connecting...{:else if eoaAddress}<span class="truncate"
-							>✅ EOA: {eoaAddress}</span
-						>{:else}Connect EOA Wallet{/if}
-				</button>
+				{#if isEoaConnecting}
+					<p class="text-center"><span class="spinner mr-2"></span>Connecting EOA Wallet...</p>
+				{:else if eoaAddress}
+					<p class="rounded bg-green-100 p-2 text-center text-green-600">
+						✅ EOA Connected: <span class="font-mono text-sm">{eoaAddress}</span>
+					</p>
+				{:else if mainError && mainError.toLowerCase().includes('eoa')}
+					<p class="rounded bg-red-100 p-2 text-center text-red-600">
+						EOA Connection Failed. {mainError.replace('Error connecting EOA wallet: ', '')}
+					</p>
+				{:else}
+					<p class="rounded bg-gray-100 p-2 text-center text-gray-500">
+						EOA Wallet not connected. Will attempt on load.
+					</p>
+				{/if}
 			</div>
 		</div>
 	</div>
 
-	<!-- Section 1: Passkey Management -->
+	<!-- Step 1: Passkey Management -->
 	<div
 		class="mb-8 w-full max-w-3xl rounded-lg bg-white/5 p-6 text-slate-100 shadow-xl backdrop-blur-sm"
 	>
@@ -690,18 +664,25 @@ go();`;
 		{/if}
 	</div>
 
-	<!-- Section 2: Deploy EIP-1271 Signer Contract (Optional, for on-chain passkey sig verification) -->
-	{#if storedPasskey && !storedPasskey.signerContractAddress}
-		<div
-			class="mb-8 w-full max-w-3xl rounded-lg bg-white/5 p-6 text-slate-100 shadow-xl backdrop-blur-sm"
-		>
-			<h2 class="mb-4 border-b border-slate-700 pb-3 text-2xl font-semibold text-pink-300">
-				Step 2: Deploy EIP-1271 Signer (Optional)
-			</h2>
-			<p class="mb-4 text-sm text-slate-300">
-				Deploy an EIP-1271 signer proxy contract for the passkey. This allows on-chain verification
-				of signatures made by this passkey. <strong>Requires Gnosis connection & funds.</strong>
+	<!-- Step 2: Deploy & Verify EIP-1271 Signer Contract -->
+	<div
+		class="mb-8 w-full max-w-3xl rounded-lg bg-white/5 p-6 text-slate-100 shadow-xl backdrop-blur-sm"
+	>
+		<h2 class="mb-4 border-b border-slate-700 pb-3 text-2xl font-semibold text-pink-300">
+			Step 2: Deploy & Verify EIP-1271 Signer
+		</h2>
+		<p class="mb-4 text-sm text-slate-300">
+			Deploy an EIP-1271 signer proxy contract for the passkey (Step 1). This allows on-chain
+			verification of signatures and is **required** before minting a PKP (Step 3) that uses this
+			passkey for Lit Action authentication.
+			<strong>Requires Gnosis connection & funds.</strong>
+		</p>
+
+		{#if !storedPasskey}
+			<p class="rounded bg-orange-700/30 p-3 text-center text-orange-400">
+				Create a Passkey (Step 1) first.
 			</p>
+		{:else if !storedPasskey.signerContractAddress}
 			<button
 				on:click={handleDeployContract}
 				class="flex w-full justify-center rounded-md border border-transparent bg-pink-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-pink-700 focus:ring-2 focus:ring-pink-500 focus:ring-offset-2 focus:ring-offset-slate-800 focus:outline-none disabled:opacity-50"
@@ -719,57 +700,33 @@ go();`;
 					>
 				</p>
 			{/if}
-		</div>
-	{/if}
-
-	<!-- Section 3: Sign & Verify with EIP-1271 (Optional) -->
-	{#if storedPasskey}
-		<div
-			class="mb-8 w-full max-w-3xl rounded-lg bg-white/5 p-6 text-slate-100 shadow-xl backdrop-blur-sm"
-		>
-			<h2 class="mb-4 border-b border-slate-700 pb-3 text-2xl font-semibold text-teal-300">
-				Step 3: Sign & Verify with Passkey (EIP-1271 - Optional)
-			</h2>
+		{:else}
+			<p class="mb-4 rounded-md bg-green-800/50 p-3 text-center text-green-300">
+				EIP-1271 Signer already deployed at: <a
+					href={`https://gnosisscan.io/address/${storedPasskey.signerContractAddress}`}
+					target="_blank"
+					rel="noopener noreferrer"
+					class="font-mono text-xs hover:underline">{storedPasskey.signerContractAddress}</a
+				>
+			</p>
+			<h3 class="mb-2 text-lg font-medium text-slate-300">Verify Signer Functionality</h3>
 			<div class="mb-4">
 				<label for="messageToSignEIP1271" class="mb-1 block text-sm font-medium text-slate-300"
-					>Message to Sign (for EIP-1271)</label
-				><input
+					>Message to Sign & Verify</label
+				>
+				<input
 					id="messageToSignEIP1271"
 					bind:value={messageToSign}
 					class="w-full rounded-md border border-slate-600 bg-slate-700 px-3 py-2 text-white shadow-sm focus:border-pink-500 focus:ring-pink-500 focus:outline-none"
 					placeholder="Enter a message"
 				/>
 			</div>
-			<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-				<button
-					on:click={handleSignAndVerifyEIP1271Factory}
-					class="flex w-full justify-center rounded-md border border-transparent bg-teal-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-teal-700 focus:outline-none disabled:opacity-50"
-					disabled={generalIsLoading}
-					>{generalIsLoading ? 'Verifying...' : 'Sign & Verify (Factory)'}</button
-				>
-				<button
-					on:click={handleSignAndVerifyEIP1271Proxy}
-					class="flex w-full justify-center rounded-md border border-transparent bg-cyan-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-cyan-700 focus:outline-none disabled:opacity-50"
-					disabled={isLoadingProxyVerify || !storedPasskey?.signerContractAddress}
-					>{isLoadingProxyVerify ? 'Verifying...' : 'Sign & Verify (Deployed Proxy)'}</button
-				>
-			</div>
-			{#if verificationResult !== null}
-				<div
-					class="mt-4 rounded-md p-3 text-center {verificationResult.isCorrect
-						? 'bg-green-800/50'
-						: 'bg-red-800/50'}"
-				>
-					<p class="font-semibold">
-						{verificationResult.isCorrect
-							? '✅ Factory Verification Successful!'
-							: '❌ Factory Verification Failed'}
-					</p>
-					{#if verificationResult.error}
-						<p class="mt-1 text-xs text-red-300">{verificationResult.error}</p>
-					{/if}
-				</div>
-			{/if}
+			<button
+				on:click={handleSignAndVerifyEIP1271Proxy}
+				class="flex w-full justify-center rounded-md border border-transparent bg-cyan-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-cyan-700 focus:outline-none disabled:opacity-50"
+				disabled={isLoadingProxyVerify || !storedPasskey?.signerContractAddress}
+				>{isLoadingProxyVerify ? 'Verifying...' : 'Sign & Verify (Deployed Proxy)'}</button
+			>
 			{#if proxyVerificationResult !== null}
 				<div
 					class="mt-4 rounded-md p-3 text-center {proxyVerificationResult.isCorrect
@@ -786,213 +743,159 @@ go();`;
 					{/if}
 				</div>
 			{/if}
-		</div>
-	{/if}
+		{/if}
+	</div>
 
-	<!-- Section 4: Register Auth Methods for PKP -->
-	{#if litConnected && eoaAddress}
+	<!-- Step 3: Mint New PKP -->
+	<div
+		class="mb-8 w-full max-w-3xl rounded-lg bg-white/5 p-6 text-slate-100 shadow-xl backdrop-blur-sm"
+	>
+		<h2 class="mb-4 border-b border-slate-700 pb-3 text-2xl font-semibold text-teal-300">
+			Step 3: Mint PKP for Passkey
+		</h2>
+
+		{#if !storedPasskey}
+			<p class="rounded-md bg-orange-700/30 p-3 text-orange-400">
+				Please create and store a passkey first (Step 1) to enable PKP minting.
+			</p>
+		{:else if !storedPasskey.signerContractAddress}
+			<p class="rounded-md bg-orange-700/30 p-3 text-orange-400">
+				Please deploy the EIP-1271 Signer (Step 2) first to enable PKP minting.
+			</p>
+		{:else if !eoaAddress}
+			<p class="rounded-md bg-orange-700/30 p-3 text-orange-400">
+				EOA Wallet not connected (Step 0). Please ensure your wallet is connected to enable PKP
+				minting.
+			</p>
+		{:else if !mintedPkpTokenId}
+			<p class="mb-4 text-sm text-slate-300">
+				Mint a new PKP on the Chronicle testnet. This PKP will be configured to allow authentication
+				using your passkey (via the Gnosis verification Lit Action) and will be transferred to its
+				own address.
+			</p>
+			<button
+				class="mb-3 flex w-full items-center justify-center rounded bg-purple-600 px-4 py-2 font-bold text-white transition duration-150 ease-in-out hover:bg-purple-700 disabled:opacity-50"
+				disabled={isMintingPkp ||
+					!storedPasskey?.authMethodId ||
+					!eoaAddress ||
+					!storedPasskey.signerContractAddress}
+				on:click={handleMintPkp}
+			>
+				{#if isMintingPkp}
+					<span class="spinner mr-2"></span>Minting PKP...
+				{:else}
+					Mint New PKP for Passkey
+				{/if}
+			</button>
+		{/if}
+
+		{#if mintedPkpTokenId}
+			<div class="mt-3 rounded-md border border-green-700 bg-green-800/50 p-3 text-slate-100">
+				<h4 class="font-semibold text-green-300">PKP Details (Minted / Loaded):</h4>
+				<p class="text-sm">
+					Token ID: <code class="rounded bg-slate-700 p-1 text-xs">{mintedPkpTokenId}</code>
+				</p>
+				<p class="text-sm">
+					Public Key: <code class="rounded bg-slate-700 p-1 text-xs break-all"
+						>{mintedPkpPublicKey}</code
+					>
+				</p>
+				<p class="text-sm">
+					ETH Address: <code class="rounded bg-slate-700 p-1 text-xs">{mintedPkpEthAddress}</code>
+				</p>
+			</div>
+		{/if}
+	</div>
+
+	<!-- Step 4: View Auth Methods -->
+	{#if litConnected && (mintedPkpTokenId || eoaAddress)}
 		<div
 			class="mb-8 w-full max-w-3xl rounded-lg bg-white/5 p-6 text-slate-100 shadow-xl backdrop-blur-sm"
 		>
 			<h2 class="mb-4 border-b border-slate-700 pb-3 text-2xl font-semibold text-lime-300">
-				Step 4: Register Auth Methods for PKP (Controller EOA Action)
+				Step 4: View PKP Auth Methods
 			</h2>
-			<p class="mb-4 text-sm text-slate-300">
-				Use your connected Controller EOA (<code class="text-xs">{eoaAddress}</code>) to register
-				authentication methods for a PKP on the Chronicle testnet.
+			<p class="mb-3 text-sm text-slate-300">
+				Fetch and display all auth methods registered for the PKP Token ID <code class="text-xs"
+					>{mintedPkpTokenId ?? 'N/A (Using manual input below)'}</code
+				> from the Chronicle testnet.
 			</p>
-			<div class="mb-4">
-				<label for="pkpTokenIdInput" class="mb-1 block text-sm font-medium text-slate-300"
-					>Target PKP Token ID</label
-				>
-				<input
-					type="text"
-					id="pkpTokenIdInput"
-					bind:value={pkpTokenIdInput}
-					class="w-full rounded-md border border-slate-600 bg-slate-700 px-3 py-2 text-white shadow-sm focus:border-pink-500 focus:ring-pink-500 focus:outline-none"
-					placeholder="Enter PKP Token ID to manage"
-				/>
-			</div>
 
-			<!-- Register Passkey Auth Method -->
-			<div class="mb-6 rounded-lg border border-slate-700 p-4">
-				<h3 class="mb-3 text-lg font-medium text-purple-300">4A. Register Current Local Passkey</h3>
-				{#if storedPasskey?.authMethodId}
-					<p class="mb-2 text-xs text-slate-400">
-						Using AuthMethodID: <code class="text-purple-400">{storedPasskey.authMethodId}</code>
-					</p>
-					<button
-						on:click={handleRegisterPasskeyAuth}
-						class="flex w-full justify-center rounded-md border border-transparent bg-purple-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-purple-700 disabled:opacity-50"
-						disabled={isRegisteringPasskeyAuth || !pkpTokenIdInput.trim()}
-					>
-						{isRegisteringPasskeyAuth ? 'Registering Passkey...' : 'Register Passkey Auth'}
-					</button>
-					{#if passkeyRegistrationTxHash}
-						<p class="mt-2 text-center text-xs">
-							Tx: <a
-								href={`https://explorer.litprotocol.com/datil-dev/tx/${passkeyRegistrationTxHash}`}
-								target="_blank"
-								rel="noopener noreferrer"
-								class="text-pink-400 hover:underline">{passkeyRegistrationTxHash}</a
-							>
-						</p>
-					{/if}
-				{:else}
-					<p class="text-sm text-amber-400">
-						No local passkey with an AuthMethodID found. Please create one in Step 1.
-					</p>
-				{/if}
-			</div>
+			<button
+				on:click={() => mintedPkpTokenId && handleFetchPermittedAuthMethods(mintedPkpTokenId)}
+				class="mb-3 flex w-full justify-center rounded-md border border-transparent bg-yellow-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-yellow-700 disabled:opacity-50"
+				disabled={isLoadingPermittedAuthMethods || !mintedPkpTokenId || !litConnected}
+			>
+				{isLoadingPermittedAuthMethods ? 'Fetching Methods...' : 'Fetch Permitted Auth Methods'}
+			</button>
 
-			<!-- NEW: Register Lit Action Auth Method -->
-			<div class="mb-6 rounded-lg border border-slate-700 p-4">
-				<h3 class="mb-3 text-lg font-medium text-cyan-300">4B. Register Lit Action</h3>
-				<p class="mb-2 text-xs text-slate-400">
-					Register the JavaScript code below as a Type 2 authentication method for the PKP above.
-					This grants the Lit Action itself (identified by its code's IPFS CID) permission to use
-					the PKP with default 'SignAnything' scope.
-				</p>
-				<div class="mb-4">
-					<label
-						for="litActionCodeInputForRegistration"
-						class="mb-1 block text-sm font-medium text-slate-300">Lit Action JavaScript Code</label
-					>
-					<textarea
-						id="litActionCodeInputForRegistration"
-						bind:value={litActionCodeForRegistration}
-						rows={10}
-						class="w-full rounded-md border border-slate-600 bg-slate-900/80 px-3 py-2 font-mono text-sm text-white shadow-sm focus:border-cyan-500 focus:ring-cyan-500 focus:outline-none"
-						placeholder="Enter Lit Action JS code here..."
-					></textarea>
-				</div>
-				<button
-					on:click={handleRegisterLitActionAuth}
-					class="flex w-full justify-center rounded-md border border-transparent bg-cyan-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-cyan-700 disabled:opacity-50"
-					disabled={isRegisteringLitActionAuth ||
-						!pkpTokenIdInput.trim() ||
-						!litActionCodeForRegistration.trim()}
-				>
-					{isRegisteringLitActionAuth ? 'Registering Lit Action...' : 'Register Lit Action Auth'}
-				</button>
-				{#if litActionRegistrationTxHash}
-					<p class="mt-2 text-center text-xs">
-						Tx: <a
-							href={`https://explorer.litprotocol.com/datil-dev/tx/${litActionRegistrationTxHash}`}
-							target="_blank"
-							rel="noopener noreferrer"
-							class="text-pink-400 hover:underline">{litActionRegistrationTxHash}</a
-						>
-					</p>
-				{/if}
-			</div>
-
-			<!-- --- Section to Display Permitted Auth Methods --- -->
-			{#if eoaAddress && pkpTokenIdInput.trim()}
-				<div class="mt-6 rounded-lg border border-slate-700 p-4">
-					<h3 class="mb-3 text-lg font-medium text-yellow-300">View Registered Auth Methods</h3>
-					<p class="mb-3 text-xs text-slate-400">
-						Fetch and display all auth methods registered for the PKP Token ID <code class="text-xs"
-							>{pkpTokenIdInput}</code
-						> from the Chronicle testnet.
-					</p>
-					<button
-						on:click={handleFetchPermittedAuthMethods}
-						class="mb-3 flex w-full justify-center rounded-md border border-transparent bg-yellow-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-yellow-700 disabled:opacity-50"
-						disabled={isLoadingPermittedAuthMethods || !pkpTokenIdInput.trim() || !litConnected}
-					>
-						{isLoadingPermittedAuthMethods ? 'Fetching Methods...' : 'Fetch Permitted Auth Methods'}
-					</button>
-
-					{#if permittedAuthMethods.length > 0}
-						<div class="mt-4 space-y-3">
-							{#each permittedAuthMethods as method, i}
-								<div class="rounded-md bg-slate-800/50 p-3 text-xs">
-									<p><span class="font-semibold text-slate-400">Method {i + 1}</span></p>
-									<p>
-										<span class="font-semibold text-slate-400">Type:</span>
-										{method.authMethodType.toString()}
-									</p>
-									<p class="break-all">
-										<span class="font-semibold text-slate-400">ID (Hex):</span>
-										{method.id}
-									</p>
-									<p class="break-all">
-										<span class="font-semibold text-slate-400">User Pubkey (Hex):</span>
-										{method.userPubkey}
-									</p>
-								</div>
-							{/each}
+			{#if permittedAuthMethods.length > 0}
+				<div class="mt-4 space-y-3">
+					{#each permittedAuthMethods as method, i}
+						<div class="rounded-md bg-slate-800/50 p-3 text-xs">
+							<p><span class="font-semibold text-slate-400">Method {i + 1}</span></p>
+							<p>
+								<span class="font-semibold text-slate-400">Type:</span>
+								{method.authMethodType.toString()}
+								{#if method.authMethodType === 2n}
+									<span class="text-cyan-300">(Lit Action)</span>
+								{:else}
+									(Other)
+								{/if}
+							</p>
+							<p class="break-all">
+								<span class="font-semibold text-slate-400">ID (Hex):</span>
+								{method.id}
+							</p>
+							<p class="break-all">
+								<span class="font-semibold text-slate-400">User Pubkey (Hex):</span>
+								{method.userPubkey}
+							</p>
 						</div>
-					{:else if !isLoadingPermittedAuthMethods && mainSuccess.includes('No permitted auth methods')}
-						<p class="mt-3 text-center text-sm text-slate-400">No methods found.</p>
-					{/if}
+					{/each}
 				</div>
+			{:else if !isLoadingPermittedAuthMethods && (mainSuccess.includes('No permitted auth methods') || mainSuccess.includes('permitted auth method(s)'))}
+				<p class="mt-3 text-center text-sm text-slate-400">No methods found or fetch completed.</p>
 			{/if}
-			<!-- --- END: Section to Display Permitted Auth Methods --- -->
 		</div>
 	{/if}
 
-	<!-- Section 5: Generate Session Signatures for PKP -->
-	{#if litConnected}
+	<!-- Step 5: Generate Session Signatures for PKP -->
+	{#if litConnected && mintedPkpTokenId}
 		<div
 			class="mb-8 w-full max-w-3xl rounded-lg bg-white/5 p-6 text-slate-100 shadow-xl backdrop-blur-sm"
 		>
 			<h2 class="mb-4 border-b border-slate-700 pb-3 text-2xl font-semibold text-emerald-300">
 				Step 5: Generate Session Signatures for PKP
 			</h2>
-			<p class="mb-2 text-sm text-slate-300">
-				Use a registered authentication method to obtain temporary session keys to use the PKP. The
-				following PKP will be used for operations:
+			<p class="mb-4 text-sm text-slate-300">
+				Use your passkey (authenticated via the Gnosis verification Lit Action) to obtain temporary
+				session keys to use the PKP ({mintedPkpTokenId}).
 			</p>
-			<div class="mb-4 rounded-md bg-slate-700/50 p-3 text-xs">
-				<p><span class="font-semibold text-slate-400">Using PKP Token ID:</span> {PKP_TOKEN_ID}</p>
-				<p>
-					<span class="font-semibold text-slate-400">PKP Public Key:</span>
-					<code class="block break-all">{PKP_PUBLIC_KEY}</code>
-				</p>
-				<p>
-					<span class="font-semibold text-slate-400">PKP ETH Address:</span>
-					<code class="block break-all">{PKP_ETH_ADDRESS}</code>
-				</p>
-			</div>
 
 			<div class="space-y-4">
-				<!-- Method A: EOA Wallet -->
-				<div class="rounded-lg border border-slate-700 p-4">
-					<h3 class="mb-2 font-medium text-purple-300">Method A: EOA Wallet</h3>
-					{#if eoaAddress}
-						<button
-							on:click={handleGetSessionSigsEOA}
-							class="flex w-full justify-center rounded-md border border-transparent bg-purple-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-purple-700 disabled:opacity-50"
-							disabled={isLoadingSessionSigsEOA || (!!sessionSigs && sessionAuthMethod !== 'eoa')}
-						>
-							{#if isLoadingSessionSigsEOA}Generating EOA Sigs...{:else if sessionSigs && sessionAuthMethod === 'eoa'}✅
-								Sigs Obtained (EOA){:else}Get Session Sigs (EOA){/if}
-						</button>
-					{:else}
-						<p class="text-sm text-amber-400">Connect EOA wallet in Step 0.B first.</p>
-					{/if}
-				</div>
-
-				<!-- Method C: Gnosis Verified Passkey (NEW) -->
+				<!-- Method: Gnosis Verified Passkey -->
 				<div class="rounded-lg border border-slate-700 p-4">
 					<h3 class="mb-2 font-medium text-blue-300">
-						Method C: Passkey (Gnosis On-Chain Verification)
+						Authenticate with Passkey (Gnosis On-Chain Verification)
 					</h3>
 					{#if storedPasskey?.rawId && storedPasskey?.pubkeyCoordinates}
 						<p class="mb-2 text-xs text-slate-400">
-							Uses a Lit Action to verify your passkey signature directly against Gnosis Chain
-							contracts (Proxy or Factory).
+							Uses a Lit Action to verify your passkey signature directly against your deployed
+							EIP-1271 Gnosis Chain contract (Step 2).
 						</p>
 						<button
 							on:click={handleGetSessionSigsGnosisPasskey}
 							class="flex w-full justify-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
 							disabled={isLoadingSessionSigsGnosisPasskey ||
-								(!!sessionSigs && sessionAuthMethod !== 'gnosis-passkey')}
+								(!!sessionSigs && sessionAuthMethod !== 'gnosis-passkey') ||
+								!storedPasskey?.rawId ||
+								!storedPasskey?.pubkeyCoordinates ||
+								!storedPasskey?.signerContractAddress ||
+								!mintedPkpPublicKey}
 						>
-							{#if isLoadingSessionSigsGnosisPasskey}Generating Gnosis Passkey Sigs...{:else if sessionSigs && sessionAuthMethod === 'gnosis-passkey'}✅
-								Sigs Obtained (Gnosis Passkey){:else}Get Session Sigs (Gnosis Passkey){/if}
+							{#if isLoadingSessionSigsGnosisPasskey}Generating Sigs...{:else if sessionSigs && sessionAuthMethod === 'gnosis-passkey'}✅
+								Sigs Obtained{:else}Get Session Sigs (Gnosis Passkey){/if}
 						</button>
 					{:else}
 						<p class="text-sm text-amber-400">Create a passkey (Step 1) first.</p>
@@ -1015,7 +918,7 @@ go();`;
 		</div>
 	{/if}
 
-	<!-- Section 6: PKP Operations -->
+	<!-- Step 6: PKP Operations -->
 	{#if sessionSigs}
 		<div
 			class="mb-8 w-full max-w-3xl rounded-lg bg-white/5 p-6 text-slate-100 shadow-xl backdrop-blur-sm"
@@ -1045,7 +948,7 @@ go();`;
 				<button
 					on:click={handleSignMessageWithPkp}
 					class="flex w-full justify-center rounded-md border border-transparent bg-sky-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-sky-700 disabled:opacity-50"
-					disabled={isSigningMessage}
+					disabled={isSigningMessage || !sessionSigs || !mintedPkpPublicKey}
 				>
 					{isSigningMessage ? 'Signing...' : 'Sign Message with PKP'}
 				</button>
@@ -1068,7 +971,7 @@ go();`;
 			<div class="rounded-lg border border-slate-700 p-4">
 				<h3 class="mb-3 text-lg font-medium text-indigo-300">6B. Execute Inline Lit Action</h3>
 				<p class="mb-3 text-xs text-slate-400">
-					This action checks if a number is &gt;= 42. Code is defined below.
+					This action checks if a number is >= 42. Code is defined below.
 				</p>
 				<div class="mb-4">
 					<label for="magicNumber" class="mb-1 block text-sm font-medium text-slate-300"
@@ -1115,4 +1018,24 @@ go();`;
 
 <style>
 	/* Keeping previous styles, can be refactored later if needed */
+	.spinner {
+		display: inline-block;
+		width: 1em;
+		height: 1em;
+		border: 2px solid currentColor;
+		border-right-color: transparent;
+		border-radius: 50%;
+		animation: spin 0.75s linear infinite;
+	}
+
+	@keyframes spin {
+		to {
+			transform: rotate(360deg);
+		}
+	}
+
+	/* Ensure buttons in flex containers don't shrink unnecessarily */
+	button {
+		flex-shrink: 0;
+	}
 </style>

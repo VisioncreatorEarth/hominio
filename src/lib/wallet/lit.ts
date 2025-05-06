@@ -13,28 +13,16 @@ import {
     type AuthenticatorAssertionResponse
 } from './passkeySigner';
 import { utils as ethersUtils } from 'ethers';
-import * as ipfsOnlyHash from 'ipfs-only-hash'; // Import ipfs-only-hash
+import * as ipfsOnlyHash from 'ipfs-only-hash';
 // Import constants from config
 import {
     chronicle,
     PKP_PERMISSIONS_CONTRACT_ADDRESS_DATIL_DEV,
-    PKP_PERMISSIONS_ABI
+    PKP_PERMISSIONS_ABI,
+    PKP_NFT_CONTRACT_ADDRESS_DATIL_DEV,
+    PKP_HELPER_CONTRACT_ADDRESS_DATIL_DEV, // Re-importing Helper address
+    PKP_HELPER_ABI // Re-importing Helper ABI
 } from './config';
-
-// --- Contract Details for datil-dev ---
-// const PKP_PERMISSIONS_CONTRACT_ADDRESS_DATIL_DEV = ...; // Removed
-// const PKP_PERMISSIONS_ABI = [ ... ]; // Removed
-// --- END Contract Details ---
-
-// --- Custom Auth Type Constants ---
-// export const AUTH_METHOD_TYPE_PASSKEY = ... // This is in passkeySigner.ts
-
-// --- NEW: Dummy Auth Type Constants ---
-// Make AUTH_METHOD_TYPE_DUMMY a hash for uniqueness, similar to AUTH_METHOD_TYPE_PASSKEY
-export const AUTH_METHOD_TYPE_DUMMY = keccak256(toBytes("hominio_dummy_auth_type_v1"));
-export const DUMMY_AUTH_METHOD_ID = keccak256(toBytes("hominio_dummy_auth_id_v1")); // Ensure ID is also distinct if type changes meaning
-console.log("AUTH_METHOD_TYPE_DUMMY (hashed):", AUTH_METHOD_TYPE_DUMMY);
-console.log("DUMMY_AUTH_METHOD_ID:", DUMMY_AUTH_METHOD_ID);
 
 export const connectToLit = async (): Promise<LitNodeClient> => {
     try {
@@ -270,114 +258,6 @@ export const registerPasskeyAuthMethod = async (
     }
 };
 
-// --- NEW: Dummy Auth Method Registration ---
-/**
- * Registers the DUMMY auth method.
- */
-export const registerDummyAuthMethod = async (
-    walletClient: WalletClient,
-    eoaAddress: Address,
-    pkpTokenId: string
-): Promise<Hex> => {
-    console.log(`Attempting to register DUMMY auth method for PKP ${pkpTokenId} on Chronicle...`);
-    try {
-        const currentChainId = await walletClient.getChainId();
-        if (currentChainId !== chronicle.id) {
-            throw new Error(`Wallet is connected to chain ${currentChainId}, but Chronicle (Chain ID: ${chronicle.id}) is required.`);
-        }
-
-        const authMethod = {
-            authMethodType: BigInt(AUTH_METHOD_TYPE_DUMMY), // Use new hashed dummy type
-            id: DUMMY_AUTH_METHOD_ID,
-            userPubkey: '0x' as Hex // Add empty userPubkey for DUMMY type
-        };
-        const scopesToGrant = [1n, 2n]; // Grant SignAnything and ExecuteJs
-
-        console.log(`Sending transaction for DUMMY auth method: Type=${authMethod.authMethodType.toString(16)}, ID=${authMethod.id}, Scopes=${scopesToGrant.join(',')}`);
-
-        const txHash = await walletClient.writeContract({
-            address: PKP_PERMISSIONS_CONTRACT_ADDRESS_DATIL_DEV,
-            abi: PKP_PERMISSIONS_ABI,
-            functionName: 'addPermittedAuthMethod',
-            args: [BigInt(pkpTokenId), authMethod, scopesToGrant],
-            account: eoaAddress,
-            chain: chronicle,
-            gas: 500000n // Keep explicit gas limit for now
-        });
-
-        console.log('Register DUMMY auth method transaction sent:', txHash);
-        return txHash;
-
-    } catch (error) {
-        console.error('Error registering DUMMY auth method:', error);
-        if (error instanceof Error && error.message.includes('User rejected the request')) {
-            throw new Error('Transaction rejected by user.');
-        }
-        throw new Error(`Failed to send DUMMY auth transaction: ${error instanceof Error ? error.message : String(error)}`);
-    }
-};
-
-// --- NEW: Dummy Lit Action & Session Sig Function ---
-
-/**
- * DUMMY Lit Action: Does nothing but log and return success.
- * Expects jsParams: { dummyType: number | string | bigint, dummyId: Hex }
- */
-export const dummyAuthActionCode = `
-  const go = async () => {
-    // Minimal action: only set a response.
-    // This tests if Lit.Actions.setResponse is available.
-    Lit.Actions.setResponse({ response: JSON.stringify({ verified: true, note: "Dummy verification minimal" }) });
-  };
-  go();
-`;
-
-/**
- * Generates session sigs using the DUMMY auth method and DUMMY Lit Action.
- */
-export const getSessionSigsWithDummyAuth = async (
-    litNodeClient: LitNodeClient,
-    pkpPublicKey: Hex,
-    chain: string
-): Promise<SessionSigs> => {
-    console.log('Attempting session sigs with DUMMY auth method...');
-    try {
-        const jsParams = {
-            dummyType: AUTH_METHOD_TYPE_DUMMY,
-            dummyId: DUMMY_AUTH_METHOD_ID
-        };
-        console.log('jsParams for DUMMY getLitActionSessionSigs:', jsParams);
-
-        const resourceAbilityRequests = [
-            { resource: new LitPKPResource('*'), ability: 'pkp-signing' as const },
-            { resource: new LitActionResource('*'), ability: 'lit-action-execution' as const },
-        ];
-
-        let encodedLitActionCode;
-        try {
-            encodedLitActionCode = btoa(dummyAuthActionCode);
-            console.log("Base64 Encoded DUMMY Lit Action Code sent.");
-        } catch {
-            throw new Error("Failed to Base64 encode dummy action code.");
-        }
-
-        const sessionSigs = await litNodeClient.getLitActionSessionSigs({
-            pkpPublicKey,
-            litActionCode: encodedLitActionCode,
-            jsParams,
-            chain,
-            resourceAbilityRequests,
-        });
-
-        console.log('Session Sigs generated with DUMMY auth method:', sessionSigs);
-        return sessionSigs;
-
-    } catch (error) {
-        console.error('Error getting session sigs with DUMMY auth method:', error);
-        throw error; // Rethrow
-    }
-};
-
 /**
  * Fetches all permitted authentication methods for a given PKP Token ID using direct Viem read.
  * @param pkpTokenId The Token ID of the PKP to query.
@@ -533,7 +413,7 @@ export const addPermittedLitAction = async (
  */
 export const gnosisPasskeyVerifyActionCode = `
   const go = async () => {
-    console.log("[LitAction_GnosisVerify] Starting. Using provider.call via getRpcUrl('xdai'). Checking result with startsWith.");
+    console.log("[LitAction_GnosisVerify] Starting. Using provider.call via getRpcUrl('xdai'). Checking result with startsWith. PROXY ONLY.");
     
     if (typeof ethers === 'undefined') {
       throw new Error("[LitAction_GnosisVerify] ethers.js is not available globally!");
@@ -542,15 +422,16 @@ export const gnosisPasskeyVerifyActionCode = `
       throw new Error("[LitAction_GnosisVerify] Lit.Actions or required functions not available.");
     }
 
-    if (!messageHash || !formattedSignature || !publicKeyX || !publicKeyY || !JS_EIP1271_MAGIC_VALUE || typeof authMethodType === 'undefined' || !authMethodId || !passkeySignerContractAddress || !JS_FACTORY_ADDRESS || !JS_FCL_VERIFIER_ADDRESS) {
-        throw new Error("[LitAction_GnosisVerify] A required jsParam is missing.");
+    // Factory fallback removed - proxy address is now mandatory for this action to succeed.
+    const nullAddress = '0x0000000000000000000000000000000000000000';
+    if (!messageHash || !formattedSignature || !publicKeyX || !publicKeyY || !JS_EIP1271_MAGIC_VALUE || typeof authMethodType === 'undefined' || !authMethodId || !passkeySignerContractAddress || passkeySignerContractAddress.toLowerCase() === nullAddress) {
+        throw new Error("[LitAction_GnosisVerify] A required jsParam (including a non-null passkeySignerContractAddress) is missing.");
     }
 
     let verificationResult;
     let verified = false;
     const chainIdentifiersToTry = ['xdai', 'gnosis'];
     const publicGnosisRpcUrl = 'https://rpc.gnosischain.com';
-    const nullAddress = '0x0000000000000000000000000000000000000000';
     let rpcUrl = null;
 
     // Logic to get RPC URL (try 'xdai', 'gnosis', then fallback)
@@ -573,60 +454,35 @@ export const gnosisPasskeyVerifyActionCode = `
     const magicValueLower = JS_EIP1271_MAGIC_VALUE.toLowerCase();
 
     // --- Proxy Check --- 
-    if (passkeySignerContractAddress && passkeySignerContractAddress.toLowerCase() !== nullAddress) {
-        console.log("[LitAction_GnosisVerify] Attempting PROXY verification:", passkeySignerContractAddress);
-        try {
-            const proxyAbi = [ { "inputs": [{ "internalType": "bytes32", "name": "_hash", "type": "bytes32" }, { "internalType": "bytes", "name": "_signature", "type": "bytes" }], "name": "isValidSignature", "outputs": [{ "internalType": "bytes4", "name": "magicValue", "type": "bytes4" }], "stateMutability": "view", "type": "function" } ];
-            const iface = new ethers.utils.Interface(proxyAbi);
-            const calldata = iface.encodeFunctionData("isValidSignature", [messageHash, formattedSignature]);
-            
-            verificationResult = await provider.call({ to: passkeySignerContractAddress, data: calldata });
-            console.log("[LitAction_GnosisVerify] Proxy provider.call result:", verificationResult);
+    // Note: We already checked passkeySignerContractAddress is non-null above
+    console.log("[LitAction_GnosisVerify] Attempting PROXY verification:", passkeySignerContractAddress);
+    try {
+        const proxyAbi = [ { "inputs": [{ "internalType": "bytes32", "name": "_hash", "type": "bytes32" }, { "internalType": "bytes", "name": "_signature", "type": "bytes" }], "name": "isValidSignature", "outputs": [{ "internalType": "bytes4", "name": "magicValue", "type": "bytes4" }], "stateMutability": "view", "type": "function" } ];
+        const iface = new ethers.utils.Interface(proxyAbi);
+        const calldata = iface.encodeFunctionData("isValidSignature", [messageHash, formattedSignature]);
+        
+        verificationResult = await provider.call({ to: passkeySignerContractAddress, data: calldata });
+        console.log("[LitAction_GnosisVerify] Proxy provider.call result:", verificationResult);
 
-            // ***** USE startsWith *****
-            if (verificationResult && typeof verificationResult === 'string' && verificationResult.toLowerCase().startsWith(magicValueLower)) {
-                verified = true;
-                console.log("[LitAction_GnosisVerify] Proxy verification successful (startsWith).");
-            }
-        } catch (e) {
-            console.error("[LitAction_GnosisVerify] Error during proxy provider.call:", e.message || JSON.stringify(e));
+        // ***** USE startsWith *****
+        if (verificationResult && typeof verificationResult === 'string' && verificationResult.toLowerCase().startsWith(magicValueLower)) {
+            verified = true;
+            console.log("[LitAction_GnosisVerify] Proxy verification successful (startsWith).");
         }
+    } catch (e) {
+        console.error("[LitAction_GnosisVerify] Error during proxy provider.call:", e.message || JSON.stringify(e));
+        // No need to set verified = false, it starts as false
     }
-
-    // --- Factory Check (Only if Proxy was not available or failed) ---
-    if (!verified) { 
-        console.log("[LitAction_GnosisVerify] Proxy not verified or not available. Attempting FACTORY verification:", JS_FACTORY_ADDRESS);
-        try {
-            const factoryAbi = [ { "inputs": [ { "internalType": "bytes32", "name": "message", "type": "bytes32" }, { "internalType": "bytes", "name": "signature", "type": "bytes" }, { "internalType": "uint256", "name": "x", "type": "uint256" }, { "internalType": "uint256", "name": "y", "type": "uint256" }, { "internalType": "uint176", "name": "verifiers", "type": "uint176" } ], "name": "isValidSignatureForSigner", "outputs": [{ "internalType": "bytes4", "name": "magicValue", "type": "bytes4" }], "stateMutability": "view", "type": "function" } ];
-            const factoryIface = new ethers.utils.Interface(factoryAbi);
-            const factoryCalldata = factoryIface.encodeFunctionData("isValidSignatureForSigner", [
-                messageHash,
-                formattedSignature,
-                publicKeyX,
-                publicKeyY,
-                JS_FCL_VERIFIER_ADDRESS
-            ]);
-
-            verificationResult = await provider.call({ to: JS_FACTORY_ADDRESS, data: factoryCalldata });
-            console.log("[LitAction_GnosisVerify] Factory provider.call result:", verificationResult);
-
-            // ***** USE startsWith *****
-            if (verificationResult && typeof verificationResult === 'string' && verificationResult.toLowerCase().startsWith(magicValueLower)) {
-                verified = true;
-                 console.log("[LitAction_GnosisVerify] Factory verification successful (startsWith).");
-           }
-        } catch (e) {
-            console.error("[LitAction_GnosisVerify] Error during factory provider.call:", e.message || JSON.stringify(e));
-        }
-    }
+    
+    // --- Factory Check Removed --- 
 
     if (verified) {
-        console.log("[LitAction_GnosisVerify] Verification complete: SUCCESS. RPC Used: " + rpcUrl);
+        console.log("[LitAction_GnosisVerify] Proxy verification complete: SUCCESS. RPC Used: " + rpcUrl);
         Lit.Actions.setResponse({ response: JSON.stringify({ verified: true, finalResultFromAction: verificationResult, rpcUsed: rpcUrl }) });
     } else {
-        console.error("[LitAction_GnosisVerify] Verification complete: FAILED. RPC Used: " + rpcUrl);
+        console.error("[LitAction_GnosisVerify] Proxy verification complete: FAILED. RPC Used: " + rpcUrl);
         // Include last verificationResult for debugging failed comparisons
-        throw new Error("Passkey sig verify failed. RPC: " + rpcUrl + ". Last verification result: " + verificationResult + ". Error logged above if call failed."); 
+        throw new Error("Passkey sig verify failed via Proxy. Proxy address: " + passkeySignerContractAddress + ". RPC: " + rpcUrl + ". Last verification result: " + verificationResult + ". Error logged above if call failed."); 
     }
   };
   go(); 
@@ -723,5 +579,235 @@ export const getSessionSigsWithGnosisPasskeyVerification = async (
         } else {
             throw new Error(`Failed during Gnosis passkey session sig generation: ${String(error)}`);
         }
+    }
+};
+
+// --- NEW: Dynamic PKP Minting Function ---
+/**
+ * Mints a new PKP and assigns the passkey and verification Lit Action as auth methods.
+ * Transfers the PKP NFT to the PKP's own address.
+ * 
+ * @param walletClient Viem Wallet Client connected to the EOA (for signing the mint tx).
+ * @param eoaAddress Address of the EOA paying for gas.
+ * @param passkeyAuthMethodId The unique ID for the passkey auth method (keccak256 of rawId).
+ * @param gnosisVerifyActionCode The JS code string of the verification Lit Action.
+ * @returns Promise resolving to the new PKP's details.
+ */
+export const mintPKPWithPasskeyAndAction = async (
+    walletClient: WalletClient,
+    eoaAddress: Address,
+    passkeyAuthMethodId: Hex,
+    gnosisVerifyActionCode: string
+): Promise<{ tokenId: string; pkpPublicKey: Hex; pkpEthAddress: Address }> => {
+    console.log(
+        `Attempting mint via direct walletClient.writeContract on Chronicle (${chronicle.id})...`
+    );
+
+    // --- Argument Checks --- 
+    if (!walletClient || !eoaAddress) {
+        throw new Error('Wallet client and EOA address are required for minting.');
+    }
+    if (!passkeyAuthMethodId || !passkeyAuthMethodId.startsWith('0x')) {
+        throw new Error('Passkey Auth Method ID cannot be empty and must be a hex string.');
+    }
+    if (!gnosisVerifyActionCode.trim()) {
+        throw new Error('Gnosis Verify Action Code cannot be empty.');
+    }
+
+    // --- Ensure EOA Wallet is on Chronicle Chain --- 
+    let currentChainId = await walletClient.getChainId();
+    if (currentChainId !== chronicle.id) {
+        console.log(`Requesting wallet switch to Chronicle (${chronicle.id})...`);
+        try {
+            await walletClient.switchChain({ id: chronicle.id });
+            currentChainId = await walletClient.getChainId();
+            if (currentChainId !== chronicle.id) {
+                throw new Error(`Wallet switch failed. Please manually switch to Chronicle (ID: ${chronicle.id}).`);
+            }
+            console.log(`Wallet switched to Chronicle.`);
+        } catch (switchError: unknown) {
+            let message = 'Unknown switch error';
+            if (switchError instanceof Error) {
+                message = switchError.message;
+            } else if (typeof switchError === 'string') {
+                message = switchError;
+            }
+            throw new Error(`Failed to switch wallet to Chronicle: ${message}`);
+        }
+    }
+    // --- End Chain Check --- 
+
+    try {
+        // 1. Calculate IPFS CID for the Lit Action code
+        console.log('Computing Action IPFS CID...');
+        const ipfsCidBase58 = await ipfsOnlyHash.of(gnosisVerifyActionCode);
+        const ipfsCidBytes = ethersUtils.base58.decode(ipfsCidBase58);
+        console.log('Action CID Bytes:', ipfsCidBytes);
+        // Convert CID bytes to Hex string for the contract call
+        const ipfsCidHex = `0x${Buffer.from(ipfsCidBytes).toString('hex')}` as Hex;
+
+        // 2. Prepare Arguments for PKPHelper.mintNextAndAddAuthMethodsWithTypes
+        //    Pass bytes arguments as Hex strings ('0x...') for Viem's writeContract
+        const args = [
+            2n, // keyType = ECDSA k256
+            [ipfsCidHex], // permittedIpfsCIDs (bytes[] -> Hex[]) 
+            [[1n]], // permittedIpfsCIDScopes (Action: SignAnything)
+            [] as Address[], // permittedAddresses
+            [] as bigint[][], // permittedAddressScopes
+            [] as bigint[], // permittedAuthMethodTypes (Was: [BigInt(AUTH_METHOD_TYPE_PASSKEY)])
+            [] as Hex[], // permittedAuthMethodIds (Was: [passkeyAuthMethodId])
+            [] as Hex[], // permittedAuthMethodPubkeys (Was: ['0x'])
+            [] as bigint[][], // permittedAuthMethodScopes (Was: [[]])
+            false, // addPkpEthAddressAsPermittedAddress
+            true // sendPkpToItself
+        ] as const;
+
+        console.log("Arguments prepared for PKPHelper (bytes as Hex) - NATIVE PASSKEY REGISTRATION REMOVED:");
+        console.log({ // Log args individually for clarity
+            keyType: args[0],
+            permittedIpfsCIDs: args[1],
+            permittedIpfsCIDScopes: args[2],
+            permittedAddresses: args[3],
+            permittedAddressScopes: args[4],
+            permittedAuthMethodTypes: args[5],
+            permittedAuthMethodIds: args[6],
+            permittedAuthMethodPubkeys: args[7],
+            permittedAuthMethodScopes: args[8],
+            addPkpEthAddressAsPermittedAddress: args[9],
+            sendPkpToItself: args[10],
+        });
+
+        // 3. Call mint function using direct walletClient.writeContract
+        console.log(`Sending transaction to PKPHelper (${PKP_HELPER_CONTRACT_ADDRESS_DATIL_DEV})...`);
+        const explicitGasLimit = 15000000n; // Ensure this is defined only ONCE here.
+        console.log(`Setting explicit gas limit to ${explicitGasLimit}`);
+
+        const mintTxHash = await walletClient.writeContract({
+            address: PKP_HELPER_CONTRACT_ADDRESS_DATIL_DEV,
+            abi: PKP_HELPER_ABI,
+            functionName: 'mintNextAndAddAuthMethodsWithTypes',
+            args: args,
+            account: eoaAddress,
+            chain: chronicle,
+            value: 1n, // Send 1 wei of tstLPX (assuming 18 decimals)
+            gas: explicitGasLimit
+        });
+        console.log('Mint transaction sent, hash:', mintTxHash);
+
+        // 4. Wait for transaction receipt
+        const publicClient = createPublicClient({ chain: chronicle, transport: http() });
+        console.log("Waiting for transaction receipt...");
+        const receipt = await publicClient.waitForTransactionReceipt({ hash: mintTxHash });
+        console.log('Transaction receipt:', receipt);
+
+        if (receipt.status !== 'success') {
+            throw new Error(`Minting transaction failed. Receipt status: ${receipt.status}`);
+        }
+
+        // 5. Extract Token ID from logs
+        let tokenId: string | null = null;
+        const transferEventSignature = keccak256(toBytes("Transfer(address,address,uint256)"));
+        const zeroAddressPadded = ethersUtils.hexZeroPad('0x0', 32).toLowerCase();
+
+        console.log("Searching for PKPNFT Transfer event in logs...");
+        console.log(`Expected PKPNFT Address: ${PKP_NFT_CONTRACT_ADDRESS_DATIL_DEV}`);
+        console.log(`Expected Transfer Signature: ${transferEventSignature}`);
+        console.log(`Expected From Address (padded): ${zeroAddressPadded}`);
+
+        for (const [index, log] of receipt.logs.entries()) {
+            console.log(`Log[${index}]: Address: ${log.address}, Topics: ${JSON.stringify(log.topics)}`);
+            // The Transfer event for minting might be emitted by the PKPPermissions contract (proxy for PKPPermissionsLogic)
+            // or directly by the PKPPermissionsLogic contract in some flows.
+            const logAddressLower = log.address.toLowerCase();
+            if ((logAddressLower === PKP_NFT_CONTRACT_ADDRESS_DATIL_DEV.toLowerCase() ||
+                logAddressLower === PKP_PERMISSIONS_CONTRACT_ADDRESS_DATIL_DEV.toLowerCase() ||
+                logAddressLower === '0x02c4242f72d62c8fef2b2db088a35a9f4ec741c7') && // Explicitly check PKPPermissionsLogic address
+                log.topics[0]?.toLowerCase() === transferEventSignature.toLowerCase() &&
+                log.topics[1]?.toLowerCase() === zeroAddressPadded && // from address(0)
+                log.topics.length > 3
+            ) {
+                try {
+                    tokenId = BigInt(log.topics[3] as Hex).toString();
+                    console.log("MATCH FOUND! Extracted PKP Token ID:", tokenId, "from log index:", index);
+                    break;
+                } catch (e: unknown) {
+                    console.warn("Error converting tokenId topic from a matching log:", log.topics[3], e);
+                }
+            }
+        }
+
+        if (!tokenId) {
+            console.error("PKPNFT Transfer event log not found in receipt:", receipt.logs);
+            throw new Error('Could not extract PKP tokenId from mint transaction logs.');
+        }
+
+        // 6. Fetch PKP details using publicClient.readContract
+        console.log("Fetching PKP details for tokenId:", tokenId);
+        const pkpPublicKey = await publicClient.readContract({
+            address: PKP_PERMISSIONS_CONTRACT_ADDRESS_DATIL_DEV,
+            abi: PKP_PERMISSIONS_ABI,
+            functionName: 'getPubkey',
+            args: [BigInt(tokenId)] // Pass as BigInt for read
+        }) as Hex;
+
+        const pkpEthAddress = await publicClient.readContract({
+            address: PKP_PERMISSIONS_CONTRACT_ADDRESS_DATIL_DEV,
+            abi: PKP_PERMISSIONS_ABI,
+            functionName: 'getEthAddress',
+            args: [BigInt(tokenId)] // Pass as BigInt for read
+        }) as Address;
+
+        console.log("PKP Minted & Fetched Successfully:", { tokenId, pkpPublicKey, pkpEthAddress });
+        return { tokenId, pkpPublicKey, pkpEthAddress };
+
+    } catch (error: unknown) {
+        console.error('Error during PKP minting process:', error);
+
+        let errorMessage = 'An unknown error occurred during PKP minting.';
+        let errorCode: number | string | undefined = undefined;
+
+        if (error instanceof Error) {
+            errorMessage = error.message;
+            // Attempt to get code if it exists (common in RPC errors like from MetaMask)
+            if ('code' in error && error.code !== undefined && (typeof error.code === 'number' || typeof error.code === 'string')) {
+                errorCode = error.code;
+            }
+        } else if (typeof error === 'string') {
+            errorMessage = error;
+        } else if (typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string') {
+            // Handle cases where error is an object with a message property (e.g. some RPC errors)
+            errorMessage = error.message;
+            if ('code' in error && error.code !== undefined && (typeof error.code === 'number' || typeof error.code === 'string')) {
+                errorCode = error.code;
+            }
+        }
+
+        if (errorMessage?.includes('rejected') || errorCode === 4001) {
+            throw new Error('User rejected the request (chain switch or transaction signature).');
+        }
+        if (errorMessage && (errorMessage.includes('insufficient funds') || errorMessage.includes('gas required exceeds allowance'))) {
+            throw new Error(`Insufficient funds for minting transaction on Chronicle. Error: ${errorMessage}`);
+        }
+        // Let specific chain switch errors pass through (already handled by the specific catch or will be part of generic message)
+        if (errorMessage?.includes('Failed to switch wallet') || errorMessage?.includes('Wallet switch failed')) {
+            // This specific message is already thrown earlier, but good to keep the check if it could bubble up differently
+            throw new Error(errorMessage);
+        }
+        if (errorMessage?.includes('You must pay exactly mint cost')) {
+            throw new Error(`Mint cost error: The contract requires an exact mint cost. Check Chronicle testnet requirements. Error: ${errorMessage}`);
+        }
+
+        // Construct a comprehensive error message
+        let finalErrorMessage = `PKP Minting Failed: ${errorMessage}`;
+        if (errorCode !== undefined) {
+            finalErrorMessage += ` (Code: ${errorCode})`;
+        }
+        // Add original error structure if it's not just a string message, for more debug info
+        if (!(error instanceof Error) && typeof error !== 'string') {
+            try {
+                finalErrorMessage += ` | Raw error: ${JSON.stringify(error)}`;
+            } catch { /* ignore stringify errors */ }
+        }
+        throw new Error(finalErrorMessage);
     }
 };
