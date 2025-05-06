@@ -3,7 +3,7 @@ declare global {
     interface Window { ethereum?: import('viem').EIP1193Provider }
 }
 
-import { createPublicClient, http, createWalletClient, custom, type Address, type Hex, hexToBytes, bytesToHex, hexToBigInt, keccak256, encodeAbiParameters, parseAbiParameters } from 'viem';
+import { createPublicClient, http, createWalletClient, custom, type Address, type Hex, hexToBytes, bytesToHex, hexToBigInt, keccak256, encodeAbiParameters, parseAbiParameters, /* type Hash, */ type PublicClient, toBytes } from 'viem';
 import { gnosis } from 'viem/chains';
 
 // --- Constants ---
@@ -13,12 +13,18 @@ const STORAGE_KEY = 'hominio_passkey_data'; // Renamed storage key
 const RPC_URL = 'https://rpc.gnosischain.com';
 
 // Deployed Contract Addresses on Gnosis Chain (from Contracts.md and previous context)
-const FACTORY_ADDRESS = '0x1d31F259eE307358a26dFb23EB365939E8641195' as Address;
-const DAIMO_VERIFIER_ADDRESS = '0xc2b78104907F722DABAc4C69f826a522B2754De4' as Address; // Removed - Unused --> Re-enabled
-const FCL_VERIFIER_ADDRESS = '0xA86e0054C51E4894D88762a017ECc5E5235f5DBA' as Address;
+export const FACTORY_ADDRESS = '0x1d31F259eE307358a26dFb23EB365939E8641195' as Address;
+// const DAIMO_VERIFIER_ADDRESS = '0xc2b78104907F722DABAc4C69f826a522B2754De4' as Address; // REMOVED - Unused
+export const FCL_VERIFIER_ADDRESS = '0xA86e0054C51E4894D88762a017ECc5E5235f5DBA' as Address;
 
 // EIP-1271 Magic Value
-const EIP1271_MAGIC_VALUE = '0x1626ba7e';
+export const EIP1271_MAGIC_VALUE = '0x1626ba7e';
+
+// --- NEW: Custom Auth Method Type --- 
+// Defined by hashing the Factory Address string
+export const AUTH_METHOD_TYPE_PASSKEY = keccak256(toBytes(FACTORY_ADDRESS));
+// export const AUTH_METHOD_TYPE_PASSKEY = 100n; // Reverted from simple BigInt
+console.log("AUTH_METHOD_TYPE_PASSKEY:", AUTH_METHOD_TYPE_PASSKEY); // Log for verification
 
 // --- ABIs (Updated with correct ABI from GnosisScan) ---
 const FactoryABI = [
@@ -170,6 +176,34 @@ const FactoryABI = [
     }
 ] as const;
 
+// NEW: Standard EIP-1271 ABI fragment
+const EIP1271ABI = [
+    {
+        "inputs": [
+            {
+                "internalType": "bytes32",
+                "name": "_hash",
+                "type": "bytes32"
+            },
+            {
+                "internalType": "bytes",
+                "name": "_signature",
+                "type": "bytes"
+            }
+        ],
+        "name": "isValidSignature",
+        "outputs": [
+            {
+                "internalType": "bytes4",
+                "name": "magicValue",
+                "type": "bytes4"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    }
+] as const;
+
 // --- Types ---
 type PublicKeyCredential = Credential & {
     rawId: ArrayBuffer;
@@ -184,7 +218,7 @@ type PublicKeyCredential = Credential & {
     };
 };
 
-// EXPORT Stored format includes coordinates
+// UPDATED StoredPasskeyData type
 export type StoredPasskeyData = {
     rawId: string; // hex format
     pubkeyCoordinates: {
@@ -193,21 +227,17 @@ export type StoredPasskeyData = {
     };
     username: string;
     signerContractAddress?: string; // Optional: Store deployed address
+    authMethodId?: string; // NEW: Unique ID for this passkey as an auth method (hex format)
 };
 
-type AuthenticatorAssertionResponse = {
-    authenticatorData: ArrayBuffer;
-    clientDataJSON: ArrayBuffer;
-    signature: ArrayBuffer;
-    userHandle?: ArrayBuffer;
-}
-// Make Assertion type globally available
-type Assertion = {
-    response: AuthenticatorAssertionResponse;
+export declare interface AuthenticatorAssertionResponse extends AuthenticatorResponse {
+    readonly authenticatorData: ArrayBuffer;
+    readonly signature: ArrayBuffer;
+    readonly userHandle?: ArrayBuffer | null | undefined; // Allow null and undefined
 }
 
 // --- Viem Clients ---
-const publicClient = createPublicClient({
+const publicClient: PublicClient = createPublicClient({
     chain: gnosis,
     transport: http(RPC_URL)
 });
@@ -216,7 +246,7 @@ const publicClient = createPublicClient({
 let walletClient: ReturnType<typeof createWalletClient> | null = null;
 let walletAccount: Address | null = null;
 
-function getWalletClient() {
+export function getWalletClient() {
     if (!walletClient) {
         if (typeof window !== 'undefined' && window.ethereum) {
             walletClient = createWalletClient({
@@ -230,7 +260,7 @@ function getWalletClient() {
     return walletClient;
 }
 
-async function getWalletAccount(): Promise<Address> {
+export async function getWalletAccount(): Promise<Address> {
     if (walletAccount) return walletAccount;
     const client = getWalletClient();
     const [account] = await client.requestAddresses();
@@ -340,7 +370,7 @@ export async function createPasskeyCredential(username: string): Promise<{ crede
 }
 
 /**
- * Creates a passkey, extracts coordinates, and stores relevant data.
+ * Creates a passkey, extracts coordinates, calculates authMethodId, and stores relevant data.
  */
 export async function createAndStorePasskeyData(username: string): Promise<StoredPasskeyData | null> {
     try {
@@ -349,15 +379,22 @@ export async function createAndStorePasskeyData(username: string): Promise<Store
 
         const { credential, coordinates } = result;
 
+        const passkeyRawIdBytes = new Uint8Array(credential.rawId);
+        const passkeyRawIdHex = bytesToHex(passkeyRawIdBytes); // Store rawId as hex
+
+        // Calculate the authMethodId by hashing the rawId bytes
+        const authMethodId = keccak256(passkeyRawIdBytes);
+
         const storedData: StoredPasskeyData = {
-            rawId: bytesToHex(new Uint8Array(credential.rawId)), // Store rawId as hex
+            rawId: passkeyRawIdHex,
             pubkeyCoordinates: coordinates,
             username: username,
+            authMethodId: authMethodId, // Store the calculated ID
             // signerContractAddress will be added after deployment
         };
 
         localStorage.setItem(STORAGE_KEY, JSON.stringify(storedData));
-        console.log('Stored Passkey Data:', storedData);
+        console.log('Stored Passkey Data (with authMethodId):', storedData);
         return storedData;
     } catch (error) {
         console.error('Error creating and storing passkey data:', error);
@@ -367,7 +404,7 @@ export async function createAndStorePasskeyData(username: string): Promise<Store
 }
 
 /**
- * Retrieves the passkey data from localStorage.
+ * Retrieves the passkey data (including authMethodId) from localStorage.
  */
 export function getStoredPasskeyData(): StoredPasskeyData | null {
     const stored = localStorage.getItem(STORAGE_KEY);
@@ -375,7 +412,10 @@ export function getStoredPasskeyData(): StoredPasskeyData | null {
         return null;
     }
     try {
-        return JSON.parse(stored) as StoredPasskeyData;
+        // Parse should now include authMethodId if it exists
+        const parsedData = JSON.parse(stored) as StoredPasskeyData;
+        console.log("Retrieved StoredPasskeyData:", parsedData);
+        return parsedData;
     } catch (parseError) {
         console.error("Failed to parse stored passkey data.", parseError);
         localStorage.removeItem(STORAGE_KEY);
@@ -468,13 +508,10 @@ function extractClientDataFields(clientDataJSON: ArrayBuffer): Hex {
 
 /**
  * Formats the signature components into the structure expected by the Safe contracts.
+ * Export this function so it can be used in lit.ts to prepare jsParams.
  */
-function formatSignatureForEIP1271(assertionResponse: AuthenticatorAssertionResponse): Hex {
+export function formatSignatureForEIP1271(assertionResponse: AuthenticatorAssertionResponse): Hex {
     const [r, s] = extractSignatureRS(assertionResponse.signature);
-    // The snippet used `extractClientDataFields` which took everything *but* type/challenge.
-    // Let's try encoding the full clientDataJSON first, as verification might handle parsing.
-    // Revisit if verification fails.
-    // const clientDataFields = extractClientDataFields(assertionResponse.clientDataJSON); // Alternative based on snippet
     const partialClientDataBytes = extractClientDataFields(assertionResponse.clientDataJSON);
 
     return encodeAbiParameters(
@@ -520,7 +557,7 @@ export async function getPasskeySignerContractAddress(): Promise<Address | null>
 
 /**
  * Deploys the EIP-1271 signer contract via the factory.
- * Requires a connected & funded EOA wallet.
+ * Requires a connected & funded EOA wallet ON GNOSIS CHAIN.
  */
 export async function deployPasskeySignerContract(): Promise<{ txHash: Hex; signerAddress?: Address } | null> {
     const storedData = getStoredPasskeyData();
@@ -533,20 +570,33 @@ export async function deployPasskeySignerContract(): Promise<{ txHash: Hex; sign
         const account = await getWalletAccount();
         const wallet = getWalletClient();
 
+        // Ensure wallet is on Gnosis before proceeding
+        const currentChainId = await wallet.getChainId();
+        if (currentChainId !== gnosis.id) {
+            // Optional: Request network switch
+            // try {
+            //     await wallet.switchChain({ id: gnosis.id });
+            //     console.log('Switched to Gnosis network');
+            // } catch (switchError) {
+            //     console.error('Failed to switch network:', switchError);
+            //     throw new Error(`Please switch your wallet to the Gnosis network (Chain ID: ${gnosis.id}) to deploy the signer contract.`);
+            // }
+            throw new Error(`Wallet is connected to chain ${currentChainId}, but Gnosis (Chain ID: ${gnosis.id}) is required for deployment.`);
+        }
+
         const x = hexToBigInt(storedData.pubkeyCoordinates.x as Hex);
         const y = hexToBigInt(storedData.pubkeyCoordinates.y as Hex);
-        const verifiersValue = BigInt(FCL_VERIFIER_ADDRESS); // Use FCL
+        const verifiersValue = BigInt(FCL_VERIFIER_ADDRESS);
 
-        console.log(`Attempting to deploy signer for passkey ${storedData.rawId}`);
+        console.log(`Attempting to deploy signer for passkey ${storedData.rawId} on Gnosis...`);
 
-        console.log('Sending deployment transaction...');
         const txHash = await wallet.writeContract({
             address: FACTORY_ADDRESS,
             abi: FactoryABI,
             functionName: 'createSigner',
-            args: [x, y, verifiersValue], // Pass calculated value (using FCL)
+            args: [x, y, verifiersValue],
             account: account,
-            chain: gnosis
+            chain: gnosis // Explicitly set chain to gnosis
         });
 
         console.log('Deployment Transaction Hash:', txHash);
@@ -587,7 +637,7 @@ export async function deployPasskeySignerContract(): Promise<{ txHash: Hex; sign
 }
 
 /**
- * Verifies a passkey signature for a message hash using the factory.
+ * Verifies a passkey signature for a message hash using the FACTORY contract helper.
  */
 export async function checkSignature(
     message: string,
@@ -600,7 +650,7 @@ export async function checkSignature(
     try {
         // 1. Get assertion from passkey
         const messageHash = keccak256(new TextEncoder().encode(message));
-        console.log(`Requesting passkey signature for message: "${message}" (hash: ${messageHash})`);
+        console.log(`(Factory Check) Requesting passkey signature for message: "${message}" (hash: ${messageHash})`);
 
         const assertion = await navigator.credentials.get({
             publicKey: {
@@ -608,43 +658,119 @@ export async function checkSignature(
                 allowCredentials: [{ type: 'public-key', id: hexToBytes(storedData.rawId as Hex) }],
                 userVerification: 'required',
             },
-        }) as Assertion | null;
+        }) as PublicKeyCredential | null;
 
         if (!assertion) {
-            return { isCorrect: false, error: 'Failed to get signature from passkey (assertion is null).' };
+            return { isCorrect: false, error: '(Factory Check) Failed to get signature from passkey (assertion is null).' };
         }
-        console.log("Got assertion:", assertion);
+        console.log("(Factory Check) Got assertion:", assertion);
+
+        // ---> ADD Checks for required response fields
+        if (!assertion.response.authenticatorData || !assertion.response.signature) {
+            return { isCorrect: false, error: '(Factory Check) Assertion response missing authenticatorData or signature.' };
+        }
+        // ---> END Checks
 
         // 2. Format the signature for the contract
-        const formattedSignature = formatSignatureForEIP1271(assertion.response);
-        console.log("Formatted Signature for Contract:", formattedSignature);
+        // Cast response to the specific type after checks
+        const assertionResponse = assertion.response as AuthenticatorAssertionResponse;
+        const formattedSignature = formatSignatureForEIP1271(assertionResponse);
+        console.log("(Factory Check) Formatted Signature for Contract:", formattedSignature);
 
         // 3. Call the verification function on the factory contract
         const x = hexToBigInt(storedData.pubkeyCoordinates.x as Hex);
         const y = hexToBigInt(storedData.pubkeyCoordinates.y as Hex);
-        // Switch back to DAIMO verifier for the check
-        const verifiersValue = BigInt(DAIMO_VERIFIER_ADDRESS); // Use DAIMO
+        const verifiersValue = BigInt(FCL_VERIFIER_ADDRESS); // Using FCL for factory check consistency
 
-        console.log("Verifying signature via factory...");
+        console.log("(Factory Check) Verifying signature via factory...");
         const result = await publicClient.readContract({
-            address: FACTORY_ADDRESS,
+            address: FACTORY_ADDRESS, // Call FACTORY
             abi: FactoryABI,
             functionName: 'isValidSignatureForSigner',
-            args: [messageHash, formattedSignature, x, y, verifiersValue] // Pass calculated value (using FCL)
+            args: [messageHash, formattedSignature, x, y, verifiersValue]
         });
-        console.log("Verification Result (bytes4):", result);
+        console.log("(Factory Check) Verification Result (bytes4):", result);
 
         // 4. Check result against EIP-1271 magic value
         const isValid = result.toLowerCase() === EIP1271_MAGIC_VALUE.toLowerCase();
         return { isCorrect: isValid };
 
     } catch (error) {
-        console.error("Error verifying signature:", error);
-        const message = error instanceof Error ? error.message : 'Unknown verification error.';
-        // Handle specific errors like user cancellation during .get()
-        if (error instanceof Error && (error.name === 'NotAllowedError' || message.includes('cancelled'))) {
-            return { isCorrect: false, error: 'User cancelled signing operation.' };
+        console.error("(Factory Check) Error verifying signature:", error);
+        const errorMsg = error instanceof Error ? error.message : 'Unknown verification error.';
+        if (error instanceof Error && (error.name === 'NotAllowedError' || errorMsg.includes('cancelled'))) {
+            return { isCorrect: false, error: '(Factory Check) User cancelled signing operation.' };
         }
-        return { isCorrect: false, error: message };
+        return { isCorrect: false, error: `(Factory Check) ${errorMsg}` };
+    }
+}
+
+/**
+ * NEW: Verifies a passkey signature for a message hash using the DEPLOYED PROXY contract.
+ */
+export async function verifySignatureWithProxy(
+    message: string,
+    signerContractAddress: Address | undefined | null
+): Promise<{ isCorrect: boolean; error?: string }> {
+    if (!signerContractAddress) {
+        return { isCorrect: false, error: "Signer contract address is missing." };
+    }
+    const storedData = getStoredPasskeyData();
+    if (!storedData?.rawId) {
+        return { isCorrect: false, error: "No stored passkey rawId found." };
+    }
+
+    try {
+        // 1. Get assertion from passkey
+        const messageHash = keccak256(new TextEncoder().encode(message));
+        console.log(`(Proxy Check) Requesting passkey signature for message: "${message}" (hash: ${messageHash})`);
+
+        const assertion = await navigator.credentials.get({
+            publicKey: {
+                challenge: hexToBytes(messageHash),
+                allowCredentials: [{ type: 'public-key', id: hexToBytes(storedData.rawId as Hex) }],
+                userVerification: 'required',
+            },
+        }) as PublicKeyCredential | null;
+
+        if (!assertion) {
+            return { isCorrect: false, error: '(Proxy Check) Failed to get signature from passkey (assertion is null).' };
+        }
+        console.log("(Proxy Check) Got assertion:", assertion);
+
+        // ---> ADD Checks for required response fields
+        if (!assertion.response.authenticatorData || !assertion.response.signature) {
+            return { isCorrect: false, error: '(Proxy Check) Assertion response missing authenticatorData or signature.' };
+        }
+        // ---> END Checks
+
+        // 2. Format the signature using the *same* EIP-1271 formatting logic
+        // Cast response to the specific type after checks
+        const assertionResponse = assertion.response as AuthenticatorAssertionResponse;
+        const formattedSignature = formatSignatureForEIP1271(assertionResponse);
+        console.log("(Proxy Check) Formatted Signature for Contract:", formattedSignature);
+
+        // 3. Call the standard EIP-1271 isValidSignature on the deployed proxy contract
+        console.log(`(Proxy Check) Verifying signature via deployed proxy: ${signerContractAddress}`);
+        const result = await publicClient.readContract({
+            address: signerContractAddress, // Call DEPLOYED PROXY
+            abi: EIP1271ABI, // Use standard EIP-1271 ABI
+            functionName: 'isValidSignature',
+            args: [messageHash, formattedSignature]
+        });
+        console.log("(Proxy Check) Verification Result (bytes4):", result);
+
+        // 4. Check result against EIP-1271 magic value
+        const isValid = result.toLowerCase() === EIP1271_MAGIC_VALUE.toLowerCase();
+        return { isCorrect: isValid };
+
+    } catch (error) {
+        console.error("(Proxy Check) Error verifying signature:", error);
+        const errorMsg = error instanceof Error ? error.message : 'Unknown verification error.';
+        if (error instanceof Error && (error.name === 'NotAllowedError' || errorMsg.includes('cancelled'))) {
+            return { isCorrect: false, error: '(Proxy Check) User cancelled signing operation.' };
+        }
+        // Add more specific error checking for contract reverts if possible
+        return { isCorrect: false, error: `(Proxy Check) ${errorMsg}` };
     }
 }
