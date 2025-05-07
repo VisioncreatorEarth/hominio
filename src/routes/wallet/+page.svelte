@@ -18,7 +18,8 @@
 		getSessionSigsWithGnosisPasskeyVerification,
 		getPermittedAuthMethodsForPkp,
 		gnosisPasskeyVerifyActionCode,
-		mintPKPWithPasskeyAndAction
+		mintPKPWithPasskeyAndAction,
+		getOwnedCapacityCredits
 	} from '$lib/wallet/lit';
 	import type { LitNodeClient } from '@lit-protocol/lit-node-client';
 	import type { SessionSigs, ExecuteJsResponse } from '@lit-protocol/types';
@@ -35,7 +36,8 @@
 		'Auth Methods', // 4
 		'Session Sigs', // 5
 		'PKP Operations', // 6
-		'Profile' // 7 - New Step
+		'Profile', // 7 - New Step
+		'My Capacity Credits' // 8 - New Step for NFTs
 	];
 
 	function goToStep(index: number) {
@@ -102,7 +104,17 @@ go();`;
 	// --- State for displaying auth methods ---
 	let permittedAuthMethods: Array<{ authMethodType: bigint; id: Hex; userPubkey: Hex }> = [];
 	let isLoadingPermittedAuthMethods = false;
-	// --- END: State for displaying auth methods ---
+
+	// --- State for displaying owned Capacity Credits (NEW) ---
+	type OwnedCapacityCredit = {
+		tokenId: string;
+		requestsPerKilosecond: bigint;
+		expiresAt: bigint;
+	};
+	let ownedCapacityCredits: Array<OwnedCapacityCredit> = [];
+	let isLoadingCapacityCredits = false;
+	// --- END: State for displaying owned Capacity Credits ---
+
 	// General UI State
 	let generalIsLoading = false; // For general page loads or multiple step operations
 	let mainError = '';
@@ -132,11 +144,11 @@ go();`;
 					const storedPKPData = JSON.parse(storedPKPDataString);
 					if (
 						storedPKPData &&
-						storedPKPData.tokenId &&
+						storedPKPData.pkpTokenId &&
 						storedPKPData.pkpPublicKey &&
 						storedPKPData.pkpEthAddress
 					) {
-						mintedPkpTokenId = storedPKPData.tokenId;
+						mintedPkpTokenId = storedPKPData.pkpTokenId;
 						mintedPkpPublicKey = storedPKPData.pkpPublicKey;
 						mintedPkpEthAddress = storedPKPData.pkpEthAddress;
 						console.log('Loaded PKP details from localStorage:', storedPKPData);
@@ -362,22 +374,31 @@ go();`;
 				gnosisPasskeyVerifyActionCode
 			);
 
-			mintedPkpTokenId = pkpDetails.tokenId;
+			mintedPkpTokenId = pkpDetails.pkpTokenId;
 			mintedPkpPublicKey = pkpDetails.pkpPublicKey;
 			mintedPkpEthAddress = pkpDetails.pkpEthAddress;
 
 			if (browser) {
 				try {
+					console.log(
+						'[DEBUG] Attempting to save pkpDetails to localStorage. pkpDetails:',
+						JSON.parse(JSON.stringify(pkpDetails))
+					); // Added explicit stringify and parse for logging complex objects
 					localStorage.setItem('mintedPKPData', JSON.stringify(pkpDetails));
-					console.log('Saved PKP details to localStorage:', pkpDetails);
+					console.log(
+						'Saved PKP details to localStorage. Value set to:',
+						localStorage.getItem('mintedPKPData')
+					); // Verify it was set
 				} catch (error) {
-					console.error('Error saving PKP details to localStorage:', error);
+					console.error('CRITICAL: Error saving PKP details to localStorage:', error);
 				}
 			}
 
 			mainSuccess = `PKP Minted Successfully! Token ID: ${mintedPkpTokenId}`;
 
-			await handleFetchPermittedAuthMethods(mintedPkpTokenId);
+			if (mintedPkpTokenId) {
+				await handleFetchPermittedAuthMethods(mintedPkpTokenId);
+			}
 			goToStep(4); // Advance to View Auth Methods step
 		} catch (error: any) {
 			mainError = `PKP minting error: ${error.message}`;
@@ -566,6 +587,33 @@ go();`;
 		}
 	}
 
+	// --- Handler to fetch and display owned Capacity Credits (NEW) ---
+	async function handleFetchOwnedCapacityCredits() {
+		if (!mintedPkpEthAddress) {
+			mainError =
+				'PKP not minted or its ETH address is not available. Cannot fetch its capacity credits.';
+			return;
+		}
+
+		isLoadingCapacityCredits = true;
+		resetMainMessages();
+		ownedCapacityCredits = [];
+		try {
+			const credits = await getOwnedCapacityCredits(mintedPkpEthAddress);
+			ownedCapacityCredits = credits;
+			if (credits.length > 0) {
+				mainSuccess = `Found ${credits.length} Capacity Credit NFT(s) for your PKP (${mintedPkpEthAddress.slice(0, 6)}...).`;
+			} else {
+				mainSuccess = `No Capacity Credit NFTs found for your PKP (${mintedPkpEthAddress.slice(0, 6)}...).`;
+			}
+		} catch (err: any) {
+			mainError = err.message || 'Error fetching owned capacity credits.';
+			console.error('Error in handleFetchOwnedCapacityCredits:', err);
+		} finally {
+			isLoadingCapacityCredits = false;
+		}
+	}
+
 	// --- Profile Functions - NEW ---
 	async function handleSaveProfile() {
 		if (!profileName.trim()) {
@@ -603,8 +651,7 @@ go();`;
 			const { ciphertext, dataToEncryptHash } = await encryptString(
 				{
 					accessControlConditions,
-					chain: 'ethereum', // Consistent chain context for the encryption artifact itself
-					dataToEncrypt: profileName.trim() // Corrected: dataToEncrypt
+					dataToEncrypt: profileName.trim()
 				},
 				litNodeClient // The connected LitNodeClient instance
 			);
@@ -1376,6 +1423,71 @@ go();`;
 							</p>
 						{/if}
 					</div>
+				</div>
+			{/if}
+
+			<!-- Step 8: My Capacity Credits - NEW -->
+			{#if currentStepIndex === 8}
+				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
+					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
+						Step 8: PKP Capacity Credits (for PKP: {mintedPkpEthAddress
+							? mintedPkpEthAddress.slice(0, 6) + '...' + mintedPkpEthAddress.slice(-4)
+							: 'N/A'})
+					</h2>
+					<p class="mb-4 text-sm text-slate-500">
+						View Capacity Credit NFTs owned by your minted PKP on the Chronicle testnet.
+					</p>
+
+					{#if !mintedPkpEthAddress}
+						<div
+							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-sm text-orange-700"
+						>
+							Please mint a PKP (Step 3) first to view its capacity credits.
+						</div>
+					{:else}
+						<button
+							on:click={handleFetchOwnedCapacityCredits}
+							class="mb-6 w-full justify-center rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-teal-700 disabled:opacity-50"
+							disabled={isLoadingCapacityCredits || !mintedPkpEthAddress}
+						>
+							{#if isLoadingCapacityCredits}<span class="spinner mr-2"></span>Fetching PKP Capacity
+								Credits...{:else}Refresh PKP Capacity Credits{/if}
+						</button>
+
+						{#if isLoadingCapacityCredits}
+							<p class="text-center text-sm text-slate-500">Loading your PKP's NFTs...</p>
+						{:else if ownedCapacityCredits.length > 0}
+							<div class="space-y-4">
+								<h3 class="text-lg font-medium text-slate-600">Your PKP's Capacity Credit NFTs:</h3>
+								{#each ownedCapacityCredits as credit (credit.tokenId)}
+									<div class="rounded-lg border border-stone-200 bg-stone-50 p-4">
+										<p class="font-semibold text-slate-700">
+											Token ID: <code class="rounded bg-stone-200 px-1 py-0.5 font-mono text-sm"
+												>{credit.tokenId}</code
+											>
+										</p>
+										<p class="text-xs text-slate-500">
+											Requests/Kilosecond: <span class="font-medium text-slate-600"
+												>{credit.requestsPerKilosecond.toString()}</span
+											>
+										</p>
+										<p class="text-xs text-slate-500">
+											Expires At (UTC Timestamp): <span class="font-medium text-slate-600"
+												>{credit.expiresAt.toString()}</span
+											>
+											<span class="ml-2 text-stone-400"
+												>({new Date(Number(credit.expiresAt) * 1000).toLocaleString()})</span
+											>
+										</p>
+									</div>
+								{/each}
+							</div>
+						{:else}
+							<p class="text-center text-sm text-slate-500">
+								This PKP does not own any Capacity Credit NFTs.
+							</p>
+						{/if}
+					{/if}
 				</div>
 			{/if}
 		</div>

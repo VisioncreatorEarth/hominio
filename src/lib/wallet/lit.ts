@@ -19,7 +19,9 @@ import {
     PKP_PERMISSIONS_ABI,
     PKP_NFT_CONTRACT_ADDRESS_DATIL_DEV,
     PKP_HELPER_CONTRACT_ADDRESS_DATIL_DEV, // Re-importing Helper address
-    PKP_HELPER_ABI // Re-importing Helper ABI
+    PKP_HELPER_ABI, // Re-importing Helper ABI
+    RATE_LIMIT_NFT_CONTRACT_ADDRESS, // Added for Capacity Credits
+    RATE_LIMIT_NFT_ABI // Added for Capacity Credits
 } from './config';
 
 export const connectToLit = async (): Promise<LitNodeClient> => {
@@ -265,8 +267,9 @@ export const getPermittedAuthMethodsForPkp = async (
     pkpTokenId: string
     // No litNodeClient or sessionSigs needed for direct read
 ): Promise<Array<{ authMethodType: bigint; id: Hex; userPubkey: Hex }>> => {
-    if (!pkpTokenId) {
-        throw new Error("PKP Token ID cannot be empty.");
+    if (!pkpTokenId || typeof pkpTokenId !== 'string' || !pkpTokenId.trim()) {
+        console.error("PKP Token ID is invalid or empty.", pkpTokenId);
+        throw new Error("PKP Token ID cannot be empty or invalid.");
     }
 
     console.log(`Fetching permitted auth methods for PKP Token ID: ${pkpTokenId} via direct Viem read on chain ${chronicle.id}`);
@@ -562,14 +565,18 @@ export const getSessionSigsWithGnosisPasskeyVerification = async (
  * @param eoaAddress Address of the EOA paying for gas.
  * @param passkeyAuthMethodId The unique ID for the passkey auth method (keccak256 of rawId).
  * @param gnosisVerifyActionCode The JS code string of the verification Lit Action.
+ * @param capacityRequestsPerKilosecond The number of requests per kilosecond for the Capacity Credit NFT.
+ * @param capacityDaysUntilUTCMidnightExpiration The number of days until the Capacity Credit NFT expires at UTC midnight.
  * @returns Promise resolving to the new PKP's details.
  */
 export const mintPKPWithPasskeyAndAction = async (
     walletClient: WalletClient,
     eoaAddress: Address,
     passkeyAuthMethodId: Hex,
-    gnosisVerifyActionCode: string
-): Promise<{ tokenId: string; pkpPublicKey: Hex; pkpEthAddress: Address }> => {
+    gnosisVerifyActionCode: string,
+    capacityRequestsPerKilosecond: bigint = 80n,
+    capacityDaysUntilUTCMidnightExpiration: number = 1
+): Promise<{ pkpTokenId: string; pkpPublicKey: Hex; pkpEthAddress: Address; capacityTokenId: string; capacityMintTxHash: Hex; capacityTransferTxHash: Hex; }> => {
     console.log(
         `Attempting mint via direct walletClient.writeContract on Chronicle (${chronicle.id})...`
     );
@@ -729,12 +736,115 @@ export const mintPKPWithPasskeyAndAction = async (
         }) as Address;
 
         console.log("PKP Minted & Fetched Successfully:", { tokenId, pkpPublicKey, pkpEthAddress });
-        return { tokenId, pkpPublicKey, pkpEthAddress };
+
+        // --- Mint Capacity Credit NFT ---    
+        console.log("\n--- Starting Capacity Credit NFT Minting ---");
+
+        // 1. Calculate expiresAt timestamp for Capacity Credit
+        const expiresAtDate = new Date();
+        expiresAtDate.setUTCHours(0, 0, 0, 0); // Set to start of today UTC
+        expiresAtDate.setUTCDate(expiresAtDate.getUTCDate() + capacityDaysUntilUTCMidnightExpiration);
+        const capacityExpiresAtTimestamp = BigInt(Math.floor(expiresAtDate.getTime() / 1000));
+        console.log(`Calculated Capacity NFT expiresAt: ${capacityExpiresAtTimestamp} (UTC Epoch seconds)`);
+
+        // 2. Calculate mint cost for Capacity Credit
+        console.log(`Calculating cost for ${capacityRequestsPerKilosecond} req/ks, expiring at ${capacityExpiresAtTimestamp}...`);
+        const capacityMintCost = await publicClient.readContract({
+            address: RATE_LIMIT_NFT_CONTRACT_ADDRESS,
+            abi: RATE_LIMIT_NFT_ABI,
+            functionName: 'calculateCost',
+            args: [capacityRequestsPerKilosecond, capacityExpiresAtTimestamp]
+        }) as bigint;
+        console.log("Calculated Capacity NFT mint cost:", capacityMintCost.toString(), "wei tstLPX");
+
+        // 3. Mint the Capacity Credit NFT (mints to eoaAddress)
+        console.log("Sending transaction to mint Capacity Credit NFT...");
+        const capacityMintTxHash = await walletClient.writeContract({
+            address: RATE_LIMIT_NFT_CONTRACT_ADDRESS,
+            abi: RATE_LIMIT_NFT_ABI,
+            functionName: 'mint',
+            args: [capacityExpiresAtTimestamp],
+            account: eoaAddress,
+            chain: chronicle,
+            value: capacityMintCost
+        });
+        console.log('Capacity Credit NFT mint transaction sent, hash:', capacityMintTxHash);
+
+        // 4. Wait for Capacity Credit mint transaction receipt
+        console.log("Waiting for Capacity Credit NFT mint transaction receipt...");
+        const capacityMintReceipt = await publicClient.waitForTransactionReceipt({ hash: capacityMintTxHash });
+        console.log('Capacity Credit NFT mint transaction receipt:', capacityMintReceipt);
+
+        if (capacityMintReceipt.status !== 'success') {
+            throw new Error(`Capacity Credit NFT minting transaction failed. Receipt status: ${capacityMintReceipt.status}`);
+        }
+
+        // 5. Extract Capacity Credit Token ID from logs
+        let capacityTokenId: string | null = null;
+        const capacityTransferEventSignature = keccak256(toBytes("Transfer(address,address,uint256)"));
+        // For mint, 'from' is address(0)
+        const zeroAddressPaddedForCapacity = ethersUtils.hexZeroPad('0x0', 32).toLowerCase();
+        // 'to' is the eoaAddress (minter)
+        const eoaAddressPadded = ethersUtils.hexZeroPad(eoaAddress, 32).toLowerCase();
+
+        console.log("Searching for Capacity Credit NFT Transfer event in logs...");
+        console.log(`Expected Capacity NFT Contract: ${RATE_LIMIT_NFT_CONTRACT_ADDRESS}`);
+        console.log(`Expected Transfer Signature: ${capacityTransferEventSignature}`);
+        console.log(`Expected From Address (padded): ${zeroAddressPaddedForCapacity}`);
+        console.log(`Expected To Address (padded): ${eoaAddressPadded}`);
+
+        for (const log of capacityMintReceipt.logs) {
+            const logAddressLower = log.address.toLowerCase();
+            if (logAddressLower === RATE_LIMIT_NFT_CONTRACT_ADDRESS.toLowerCase() &&
+                log.topics[0]?.toLowerCase() === capacityTransferEventSignature.toLowerCase() &&
+                log.topics[1]?.toLowerCase() === zeroAddressPaddedForCapacity && // from address(0)
+                log.topics[2]?.toLowerCase() === eoaAddressPadded && // to eoaAddress
+                log.topics.length > 3 && log.topics[3] // tokenId exists
+            ) {
+                try {
+                    capacityTokenId = BigInt(log.topics[3] as Hex).toString();
+                    console.log("MATCH FOUND! Extracted Capacity Credit NFT Token ID:", capacityTokenId);
+                    break;
+                } catch (e: unknown) {
+                    console.warn("Error converting Capacity NFT tokenId from a matching log:", log.topics[3], e);
+                }
+            }
+        }
+
+        if (!capacityTokenId) {
+            console.error("Capacity Credit NFT Transfer event log not found in mint receipt:", capacityMintReceipt.logs);
+            throw new Error('Could not extract Capacity Credit NFT tokenId from mint transaction logs.');
+        }
+
+        // 6. Transfer Capacity Credit NFT to PKP's ETH Address
+        console.log(`Transferring Capacity Credit NFT ${capacityTokenId} from ${eoaAddress} to ${pkpEthAddress}...`);
+        const capacityTransferTxHash = await walletClient.writeContract({
+            address: RATE_LIMIT_NFT_CONTRACT_ADDRESS,
+            abi: RATE_LIMIT_NFT_ABI,
+            functionName: 'safeTransferFrom',
+            args: [eoaAddress, pkpEthAddress, BigInt(capacityTokenId)],
+            account: eoaAddress,
+            chain: chronicle
+        });
+        console.log('Capacity Credit NFT transfer transaction sent, hash:', capacityTransferTxHash);
+
+        // 7. Wait for Capacity Credit transfer transaction receipt
+        console.log("Waiting for Capacity Credit NFT transfer transaction receipt...");
+        const capacityTransferReceipt = await publicClient.waitForTransactionReceipt({ hash: capacityTransferTxHash });
+        console.log('Capacity Credit NFT transfer transaction receipt:', capacityTransferReceipt);
+
+        if (capacityTransferReceipt.status !== 'success') {
+            throw new Error(`Capacity Credit NFT transfer transaction failed. Receipt status: ${capacityTransferReceipt.status}`);
+        }
+        console.log(`Capacity Credit NFT ${capacityTokenId} successfully transferred to PKP ${pkpEthAddress}.`);
+        // --- End Capacity Credit NFT --- 
+
+        return { pkpTokenId: tokenId, pkpPublicKey, pkpEthAddress, capacityTokenId, capacityMintTxHash, capacityTransferTxHash };
 
     } catch (error: unknown) {
-        console.error('Error during PKP minting process:', error);
+        console.error('Error during PKP minting and Capacity Credit provisioning process:', error);
 
-        let errorMessage = 'An unknown error occurred during PKP minting.';
+        let errorMessage = 'An unknown error occurred during PKP minting and Capacity Credit provisioning.';
         let errorCode: number | string | undefined = undefined;
 
         if (error instanceof Error) {
@@ -769,7 +879,7 @@ export const mintPKPWithPasskeyAndAction = async (
         }
 
         // Construct a comprehensive error message
-        let finalErrorMessage = `PKP Minting Failed: ${errorMessage}`;
+        let finalErrorMessage = `PKP Minting and Capacity Credit Provisioning Failed: ${errorMessage}`;
         if (errorCode !== undefined) {
             finalErrorMessage += ` (Code: ${errorCode})`;
         }
@@ -780,5 +890,81 @@ export const mintPKPWithPasskeyAndAction = async (
             } catch { /* ignore stringify errors */ }
         }
         throw new Error(finalErrorMessage);
+    }
+};
+
+// --- NEW: Fetch Owned Capacity Credits --- 
+/**
+ * Fetches all Capacity Credit NFTs owned by a specific address on Chronicle.
+ * 
+ * @param ownerAddress The address of the owner.
+ * @param publicClient A Viem PublicClient configured for the Chronicle chain.
+ * @returns A promise that resolves to an array of owned capacity credits with their details.
+ */
+export const getOwnedCapacityCredits = async (
+    ownerAddress: Address,
+    // Allow publicClient to be passed or created if not provided, though passing is cleaner from Svelte
+    publicClient?: PublicClient
+): Promise<Array<{ tokenId: string; requestsPerKilosecond: bigint; expiresAt: bigint }>> => {
+    if (!ownerAddress) {
+        throw new Error("Owner address cannot be empty.");
+    }
+
+    const client = publicClient || createPublicClient({ chain: chronicle, transport: http() });
+
+    console.log(`Fetching Capacity Credit NFTs for owner: ${ownerAddress} on chain ${chronicle.id}`);
+
+    try {
+        const balance = await client.readContract({
+            address: RATE_LIMIT_NFT_CONTRACT_ADDRESS,
+            abi: RATE_LIMIT_NFT_ABI,
+            functionName: 'balanceOf',
+            args: [ownerAddress]
+        }) as bigint;
+
+        console.log(`Owner ${ownerAddress} has ${balance} Capacity Credit NFT(s).`);
+
+        if (balance === 0n) {
+            return [];
+        }
+
+        const ownedCredits: Array<{ tokenId: string; requestsPerKilosecond: bigint; expiresAt: bigint }> = [];
+        for (let i = 0n; i < balance; i++) {
+            try {
+                const tokenIdBigInt = await client.readContract({
+                    address: RATE_LIMIT_NFT_CONTRACT_ADDRESS,
+                    abi: RATE_LIMIT_NFT_ABI,
+                    functionName: 'tokenOfOwnerByIndex',
+                    args: [ownerAddress, i]
+                }) as bigint;
+                const tokenId = tokenIdBigInt.toString();
+
+                const capacityDetails = await client.readContract({
+                    address: RATE_LIMIT_NFT_CONTRACT_ADDRESS,
+                    abi: RATE_LIMIT_NFT_ABI,
+                    functionName: 'capacity',
+                    args: [tokenIdBigInt]
+                }) as { requestsPerKilosecond: bigint; expiresAt: bigint }; // Viem should return tuple as an object
+
+                ownedCredits.push({
+                    tokenId,
+                    requestsPerKilosecond: capacityDetails.requestsPerKilosecond,
+                    expiresAt: capacityDetails.expiresAt
+                });
+                console.log(`Fetched details for token ID: ${tokenId}`, capacityDetails);
+            } catch (loopError) {
+                console.error(`Error fetching details for token at index ${i}:`, loopError);
+                // Optionally, decide if one error should stop all, or just skip this token
+            }
+        }
+        return ownedCredits;
+
+    } catch (error: unknown) {
+        console.error('Error fetching owned Capacity Credits:', error);
+        let message = 'Unknown error fetching owned Capacity Credits';
+        if (error instanceof Error) {
+            message = error.message;
+        }
+        throw new Error(`Failed to fetch owned Capacity Credits: ${message}`);
     }
 };
