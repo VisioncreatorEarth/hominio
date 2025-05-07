@@ -14,26 +14,39 @@ import { utils as ethersUtils } from 'ethers';
 import * as ipfsOnlyHash from 'ipfs-only-hash';
 // Import constants from config
 import {
-    chronicle,
-    PKP_PERMISSIONS_CONTRACT_ADDRESS_DATIL_DEV,
+    currentChain,
+    currentLitEnvironment,
+    PKP_PERMISSIONS_CONTRACT_ADDRESS,
     PKP_PERMISSIONS_ABI,
-    PKP_NFT_CONTRACT_ADDRESS_DATIL_DEV,
-    PKP_HELPER_CONTRACT_ADDRESS_DATIL_DEV, // Re-importing Helper address
-    PKP_HELPER_ABI, // Re-importing Helper ABI
-    RATE_LIMIT_NFT_CONTRACT_ADDRESS, // Added for Capacity Credits
-    RATE_LIMIT_NFT_ABI // Added for Capacity Credits
-} from './config';
+    PKP_NFT_CONTRACT_ADDRESS,
+    PKP_HELPER_CONTRACT_ADDRESS,
+    PKP_HELPER_ABI,
+    RATE_LIMIT_NFT_CONTRACT_ADDRESS,
+    RATE_LIMIT_NFT_ABI
+} from './config/index';
+
+type LitNodeClientNetworkKey = 'datil-dev' | 'datil-test' | 'datil';
+
+// Map our environment names to Lit SDK network strings
+const litSdkNetworkMap: Record<typeof currentLitEnvironment, LitNodeClientNetworkKey> = {
+    'datil-dev': 'datil-dev',
+    'datil-test': 'datil-test',
+    'datil': 'datil'
+};
 
 export const connectToLit = async (): Promise<LitNodeClient> => {
     try {
-        // More information about the available Lit Networks: https://developer.litprotocol.com/category/networks
+        const sdkNetworkString: LitNodeClientNetworkKey = litSdkNetworkMap[currentLitEnvironment];
+        console.log(`Connecting to Lit Network using SDK string: "${sdkNetworkString}" for environment: "${currentLitEnvironment}"`);
+
         const litNodeClient = new LitNodeClient({
-            litNetwork: 'datil-dev', // Use string literal for network
-            debug: false
+            litNetwork: sdkNetworkString, // Now correctly typed
+            debug: false,
+            // alertWhenUnauthorized: false, // Consider adding if not default
         });
 
         await litNodeClient.connect();
-        console.log('Connected to Lit Network');
+        console.log(`Successfully connected to Lit Network: ${currentLitEnvironment}`);
         return litNodeClient;
     } catch (error) {
         console.error('Failed to connect to Lit Network:', error);
@@ -205,7 +218,7 @@ export const registerPasskeyAuthMethod = async (
     pkpTokenId: string,
     authMethodId: Hex
 ): Promise<Hex> => {
-    console.log(`Attempting to register passkey auth method for PKP ${pkpTokenId} on Chronicle testnet...`);
+    console.log(`Attempting to register passkey auth method for PKP ${pkpTokenId} on ${currentChain.name}...`);
 
     if (!authMethodId || !authMethodId.startsWith('0x')) {
         throw new Error("Auth method ID cannot be empty and must be a hex string.");
@@ -218,22 +231,22 @@ export const registerPasskeyAuthMethod = async (
     }
 
     try {
-        const currentChainId = await walletClient.getChainId();
-        if (currentChainId !== chronicle.id) {
-            throw new Error(`Wallet is connected to chain ${currentChainId}, but Chronicle (Chain ID: ${chronicle.id}) is required.`);
+        const currentWalletChainId = await walletClient.getChainId();
+        if (currentWalletChainId !== currentChain.id) {
+            throw new Error(`Wallet is connected to chain ${currentWalletChainId}, but ${currentChain.name} (Chain ID: ${currentChain.id}) is required.`);
         }
 
         const authMethod = {
             authMethodType: BigInt(AUTH_METHOD_TYPE_PASSKEY),
             id: authMethodId,
-            userPubkey: '0x' as Hex // Add empty userPubkey for PASSKEY type (as userPubkey is associated elsewhere)
+            userPubkey: '0x' as Hex
         };
         const scopesToGrant = [1n];
 
-        console.log(`Sending transaction to PKPPermissions contract (${PKP_PERMISSIONS_CONTRACT_ADDRESS_DATIL_DEV}) on chain ${chronicle.id} with explicit gas limit...`);
+        console.log(`Sending transaction to PKPPermissions contract (${PKP_PERMISSIONS_CONTRACT_ADDRESS}) on chain ${currentChain.id} with explicit gas limit...`);
 
         const txHash = await walletClient.writeContract({
-            address: PKP_PERMISSIONS_CONTRACT_ADDRESS_DATIL_DEV,
+            address: PKP_PERMISSIONS_CONTRACT_ADDRESS,
             abi: PKP_PERMISSIONS_ABI,
             functionName: 'addPermittedAuthMethod',
             args: [
@@ -242,7 +255,7 @@ export const registerPasskeyAuthMethod = async (
                 scopesToGrant
             ],
             account: eoaAddress,
-            chain: chronicle,
+            chain: currentChain,
             gas: 500000n // Explicitly set gas limit
         });
 
@@ -272,18 +285,18 @@ export const getPermittedAuthMethodsForPkp = async (
         throw new Error("PKP Token ID cannot be empty or invalid.");
     }
 
-    console.log(`Fetching permitted auth methods for PKP Token ID: ${pkpTokenId} via direct Viem read on chain ${chronicle.id}`);
+    console.log(`Fetching permitted auth methods for PKP Token ID: ${pkpTokenId} via direct Viem read on chain ${currentChain.id}`);
 
     try {
         // Create a Viem Public Client for the Chronicle network
         const chroniclePublicClient: PublicClient = createPublicClient({
-            chain: chronicle,
-            transport: http() // Uses default RPC defined in chronicle object
+            chain: currentChain,
+            transport: http() // Uses default RPC defined in currentChain object
         });
 
         // Call the contract read function
         const permittedMethodsRaw = await chroniclePublicClient.readContract({
-            address: PKP_PERMISSIONS_CONTRACT_ADDRESS_DATIL_DEV,
+            address: PKP_PERMISSIONS_CONTRACT_ADDRESS,
             abi: PKP_PERMISSIONS_ABI, // Use the full ABI imported from config
             functionName: 'getPermittedAuthMethods',
             args: [BigInt(pkpTokenId)] // Convert string token ID to BigInt for the contract call
@@ -349,9 +362,9 @@ export const addPermittedLitAction = async (
 
     try {
         const currentChainId = await walletClient.getChainId();
-        if (currentChainId !== chronicle.id) {
+        if (currentChainId !== currentChain.id) {
             throw new Error(
-                `Wallet is connected to chain ${currentChainId}, but Chronicle (Chain ID: ${chronicle.id}) is required.`
+                `Wallet is connected to chain ${currentChainId}, but ${currentChain.name} (Chain ID: ${currentChain.id}) is required.`
             );
         }
 
@@ -382,12 +395,12 @@ export const addPermittedLitAction = async (
         );
 
         const txHash = await walletClient.writeContract({
-            address: PKP_PERMISSIONS_CONTRACT_ADDRESS_DATIL_DEV,
+            address: PKP_PERMISSIONS_CONTRACT_ADDRESS,
             abi: PKP_PERMISSIONS_ABI,
             functionName: 'addPermittedAuthMethod',
             args: [BigInt(pkpTokenId), authMethodPayload, scopes],
             account: eoaAddress,
-            chain: chronicle,
+            chain: currentChain,
             gas: 500000n // Consider estimating gas later (Task 3.3)
         });
 
@@ -578,7 +591,7 @@ export const mintPKPWithPasskeyAndAction = async (
     capacityDaysUntilUTCMidnightExpiration: number = 1
 ): Promise<{ pkpTokenId: string; pkpPublicKey: Hex; pkpEthAddress: Address; capacityTokenId: string; capacityMintTxHash: Hex; capacityTransferTxHash: Hex; }> => {
     console.log(
-        `Attempting mint via direct walletClient.writeContract on Chronicle (${chronicle.id})...`
+        `Attempting mint via direct walletClient.writeContract on Chronicle (${currentChain.id})...`
     );
 
     // --- Argument Checks --- 
@@ -594,13 +607,13 @@ export const mintPKPWithPasskeyAndAction = async (
 
     // --- Ensure EOA Wallet is on Chronicle Chain --- 
     let currentChainId = await walletClient.getChainId();
-    if (currentChainId !== chronicle.id) {
-        console.log(`Requesting wallet switch to Chronicle (${chronicle.id})...`);
+    if (currentChainId !== currentChain.id) {
+        console.log(`Requesting wallet switch to Chronicle (${currentChain.id})...`);
         try {
-            await walletClient.switchChain({ id: chronicle.id });
+            await walletClient.switchChain({ id: currentChain.id });
             currentChainId = await walletClient.getChainId();
-            if (currentChainId !== chronicle.id) {
-                throw new Error(`Wallet switch failed. Please manually switch to Chronicle (ID: ${chronicle.id}).`);
+            if (currentChainId !== currentChain.id) {
+                throw new Error(`Wallet switch failed. Please manually switch to Chronicle (ID: ${currentChain.id}).`);
             }
             console.log(`Wallet switched to Chronicle.`);
         } catch (switchError: unknown) {
@@ -656,24 +669,24 @@ export const mintPKPWithPasskeyAndAction = async (
         });
 
         // 3. Call mint function using direct walletClient.writeContract
-        console.log(`Sending transaction to PKPHelper (${PKP_HELPER_CONTRACT_ADDRESS_DATIL_DEV})...`);
+        console.log(`Sending transaction to PKPHelper (${PKP_HELPER_CONTRACT_ADDRESS})...`);
         const explicitGasLimit = 15000000n; // Ensure this is defined only ONCE here.
         console.log(`Setting explicit gas limit to ${explicitGasLimit}`);
 
         const mintTxHash = await walletClient.writeContract({
-            address: PKP_HELPER_CONTRACT_ADDRESS_DATIL_DEV,
+            address: PKP_HELPER_CONTRACT_ADDRESS,
             abi: PKP_HELPER_ABI,
             functionName: 'mintNextAndAddAuthMethodsWithTypes',
             args: args,
             account: eoaAddress,
-            chain: chronicle,
+            chain: currentChain,
             value: 1n, // Send 1 wei of tstLPX (assuming 18 decimals)
             gas: explicitGasLimit
         });
         console.log('Mint transaction sent, hash:', mintTxHash);
 
         // 4. Wait for transaction receipt
-        const publicClient = createPublicClient({ chain: chronicle, transport: http() });
+        const publicClient = createPublicClient({ chain: currentChain, transport: http() });
         console.log("Waiting for transaction receipt...");
         const receipt = await publicClient.waitForTransactionReceipt({ hash: mintTxHash });
         console.log('Transaction receipt:', receipt);
@@ -688,7 +701,7 @@ export const mintPKPWithPasskeyAndAction = async (
         const zeroAddressPadded = ethersUtils.hexZeroPad('0x0', 32).toLowerCase();
 
         console.log("Searching for PKPNFT Transfer event in logs...");
-        console.log(`Expected PKPNFT Address: ${PKP_NFT_CONTRACT_ADDRESS_DATIL_DEV}`);
+        console.log(`Expected PKPNFT Address: ${PKP_NFT_CONTRACT_ADDRESS}`);
         console.log(`Expected Transfer Signature: ${transferEventSignature}`);
         console.log(`Expected From Address (padded): ${zeroAddressPadded}`);
 
@@ -697,8 +710,8 @@ export const mintPKPWithPasskeyAndAction = async (
             // The Transfer event for minting might be emitted by the PKPPermissions contract (proxy for PKPPermissionsLogic)
             // or directly by the PKPPermissionsLogic contract in some flows.
             const logAddressLower = log.address.toLowerCase();
-            if ((logAddressLower === PKP_NFT_CONTRACT_ADDRESS_DATIL_DEV.toLowerCase() ||
-                logAddressLower === PKP_PERMISSIONS_CONTRACT_ADDRESS_DATIL_DEV.toLowerCase() ||
+            if ((logAddressLower === PKP_NFT_CONTRACT_ADDRESS.toLowerCase() ||
+                logAddressLower === PKP_PERMISSIONS_CONTRACT_ADDRESS.toLowerCase() ||
                 logAddressLower === '0x02c4242f72d62c8fef2b2db088a35a9f4ec741c7') && // Explicitly check PKPPermissionsLogic address
                 log.topics[0]?.toLowerCase() === transferEventSignature.toLowerCase() &&
                 log.topics[1]?.toLowerCase() === zeroAddressPadded && // from address(0)
@@ -722,20 +735,20 @@ export const mintPKPWithPasskeyAndAction = async (
         // 6. Fetch PKP details using publicClient.readContract
         console.log("Fetching PKP details for tokenId:", tokenId);
         const pkpPublicKey = await publicClient.readContract({
-            address: PKP_PERMISSIONS_CONTRACT_ADDRESS_DATIL_DEV,
+            address: PKP_PERMISSIONS_CONTRACT_ADDRESS,
             abi: PKP_PERMISSIONS_ABI,
             functionName: 'getPubkey',
-            args: [BigInt(tokenId)] // Pass as BigInt for read
+            args: [BigInt(tokenId)]
         }) as Hex;
 
         const pkpEthAddress = await publicClient.readContract({
-            address: PKP_PERMISSIONS_CONTRACT_ADDRESS_DATIL_DEV,
+            address: PKP_PERMISSIONS_CONTRACT_ADDRESS,
             abi: PKP_PERMISSIONS_ABI,
             functionName: 'getEthAddress',
-            args: [BigInt(tokenId)] // Pass as BigInt for read
+            args: [BigInt(tokenId)]
         }) as Address;
 
-        console.log("PKP Minted & Fetched Successfully:", { tokenId, pkpPublicKey, pkpEthAddress });
+        console.log("PKP Minted & Fetched Successfully:", { pkpTokenId: tokenId, pkpPublicKey, pkpEthAddress });
 
         // --- Mint Capacity Credit NFT ---    
         console.log("\n--- Starting Capacity Credit NFT Minting ---");
@@ -765,7 +778,7 @@ export const mintPKPWithPasskeyAndAction = async (
             functionName: 'mint',
             args: [capacityExpiresAtTimestamp],
             account: eoaAddress,
-            chain: chronicle,
+            chain: currentChain,
             value: capacityMintCost
         });
         console.log('Capacity Credit NFT mint transaction sent, hash:', capacityMintTxHash);
@@ -824,7 +837,7 @@ export const mintPKPWithPasskeyAndAction = async (
             functionName: 'safeTransferFrom',
             args: [eoaAddress, pkpEthAddress, BigInt(capacityTokenId)],
             account: eoaAddress,
-            chain: chronicle
+            chain: currentChain
         });
         console.log('Capacity Credit NFT transfer transaction sent, hash:', capacityTransferTxHash);
 
@@ -904,15 +917,15 @@ export const mintPKPWithPasskeyAndAction = async (
 export const getOwnedCapacityCredits = async (
     ownerAddress: Address,
     // Allow publicClient to be passed or created if not provided, though passing is cleaner from Svelte
-    publicClient?: PublicClient
+    publicClientInput?: PublicClient
 ): Promise<Array<{ tokenId: string; requestsPerKilosecond: bigint; expiresAt: bigint }>> => {
     if (!ownerAddress) {
         throw new Error("Owner address cannot be empty.");
     }
 
-    const client = publicClient || createPublicClient({ chain: chronicle, transport: http() });
+    const client = publicClientInput || createPublicClient({ chain: currentChain, transport: http() });
 
-    console.log(`Fetching Capacity Credit NFTs for owner: ${ownerAddress} on chain ${chronicle.id}`);
+    console.log(`Fetching Capacity Credit NFTs for owner: ${ownerAddress} on chain ${currentChain.id} (${currentChain.name})`);
 
     try {
         const balance = await client.readContract({
