@@ -1,0 +1,32 @@
+{
+    "phases": [
+        {
+            "name": "Sahelanthropus",
+            "description": "Phase 1: Corresponds to the Sahelanthropus era."
+        },
+        {
+            "name": "Orrorin",
+            "description": "Phase 2: Corresponds to the Orrorin era."
+        },
+        {
+            "name": "Ardipithecus",
+            "description": "Phase 3: Corresponds to the Ardipithecus era."
+        },
+        {
+            "name": "Australopithecus",
+            "description": "Phase 4: Corresponds to the Australopithecus era."
+        },
+        {
+            "name": "Kenyanthropus",
+            "description": "Phase 5: Corresponds to the Kenyanthropus era."
+        },
+        {
+            "name": "Paranthropus",
+            "description": "Phase 6: Corresponds to the Paranthropus era."
+        },
+        {
+            "name": "Homo",
+            "description": "Phase 7: Corresponds to the Homo era, leading to modern human features."
+        }
+    ]
+}
