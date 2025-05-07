@@ -25,6 +25,25 @@
 	import type { Hex, Address, WalletClient } from 'viem';
 	import { keccak256, hexToBytes } from 'viem';
 
+	// --- UI State for Tabbed Navigation ---
+	let currentStepIndex = 0;
+	const steps = [
+		'Connections', // 0
+		'Passkey', // 1
+		'Deploy Signer', // 2
+		'Mint PKP', // 3
+		'Auth Methods', // 4
+		'Session Sigs', // 5
+		'PKP Operations', // 6
+		'Profile' // 7 - New Step
+	];
+
+	function goToStep(index: number) {
+		currentStepIndex = index;
+		resetMainMessages(); // Clear messages when changing steps
+	}
+	// --- END: UI State for Tabbed Navigation ---
+
 	// --- Unified State ---
 	// Passkey & EIP-1271 Signer State
 	let username = '';
@@ -89,6 +108,14 @@ go();`;
 	let mainError = '';
 	let mainSuccess = '';
 
+	// --- Profile State - NEW
+	let profileName = '';
+	const PROFILE_STORAGE_KEY = 'hominio_profile_data_encrypted';
+	let encryptedProfileDataString: string | null = null; // To store stringified encrypted object
+	let isEncryptingProfile = false;
+	let isDecryptingProfile = false;
+	// --- END: Profile State ---
+
 	onMount(async () => {
 		// localStorage operations must be client-side only
 		if (browser) {
@@ -121,6 +148,15 @@ go();`;
 					console.error('Error parsing PKP data from localStorage:', error);
 					localStorage.removeItem('mintedPKPData'); // Clear corrupted data
 				}
+			}
+
+			// Load Profile Name from localStorage - NEW & UPDATED FOR ENCRYPTION
+			encryptedProfileDataString = localStorage.getItem(PROFILE_STORAGE_KEY);
+			if (encryptedProfileDataString) {
+				console.log('Found encrypted profile data in localStorage.');
+				// Decryption will be triggered by reactive statement when sessionSigs are available
+			} else {
+				console.log('No encrypted profile data found in localStorage.');
 			}
 
 			// Auto-connect Lit and EOA
@@ -156,6 +192,7 @@ go();`;
 			if (newData) {
 				storedPasskey = newData;
 				mainSuccess = `Passkey created and stored for ${username}. AuthMethodID: ${newData.authMethodId}`;
+				goToStep(2); // Advance to Deploy Signer step
 			} else {
 				mainError = 'Failed to create and store passkey.';
 			}
@@ -179,10 +216,16 @@ go();`;
 		mintedPkpPublicKey = null;
 		mintedPkpEthAddress = null;
 		permittedAuthMethods = [];
+		sessionSigs = null;
+		sessionAuthMethod = null;
+		signatureResult = null;
+		litActionResult = null;
+
 		if (browser) {
 			localStorage.removeItem('mintedPKPData');
 		}
 		mainSuccess = 'Passkey and associated PKP data cleared.';
+		goToStep(1); // Go back to Passkey step
 	}
 
 	async function handleDeployContract() {
@@ -198,8 +241,9 @@ go();`;
 				if (result.signerAddress) {
 					deployedSignerAddress = result.signerAddress;
 					mainSuccess = `Signer contract deployment transaction sent: ${result.txHash}. Address: ${result.signerAddress}`;
+					goToStep(3); // Advance to Mint PKP step
 				} else {
-					mainSuccess = `Deployment transaction sent (${result.txHash}), but couldn't extract address from logs.`;
+					mainSuccess = `Deployment transaction sent (${result.txHash}), but couldn't extract address from logs. Check Gnosisscan.`;
 				}
 				storedPasskey = getStoredPasskeyData(); // Refresh to get updated signer address in storedPasskey
 			} else {
@@ -334,6 +378,7 @@ go();`;
 			mainSuccess = `PKP Minted Successfully! Token ID: ${mintedPkpTokenId}`;
 
 			await handleFetchPermittedAuthMethods(mintedPkpTokenId);
+			goToStep(4); // Advance to View Auth Methods step
 		} catch (error: any) {
 			mainError = `PKP minting error: ${error.message}`;
 			console.error('PKP minting error:', error);
@@ -416,6 +461,7 @@ go();`;
 			sessionAuthMethod = 'gnosis-passkey';
 			mainSuccess =
 				'Successfully obtained session signatures via Passkey (Gnosis On-Chain Verification)!';
+			goToStep(6); // Advance to PKP Operations step
 		} catch (err: any) {
 			mainError = err.message || 'Unknown error getting session signatures via Gnosis Passkey.';
 			sessionSigs = null;
@@ -519,510 +565,832 @@ go();`;
 			isLoadingPermittedAuthMethods = false;
 		}
 	}
+
+	// --- Profile Functions - NEW ---
+	async function handleSaveProfile() {
+		if (!profileName.trim()) {
+			mainError = 'Please enter a name for your profile.';
+			return;
+		}
+		if (!litNodeClient || !sessionSigs || !mintedPkpEthAddress) {
+			mainError =
+				'Cannot save profile: Lit connection, session signatures, and minted PKP details are required.';
+			return;
+		}
+
+		resetMainMessages();
+		try {
+			isEncryptingProfile = true;
+			console.log('Attempting to encrypt profile name...');
+
+			// Define Access Control Conditions
+			const accessControlConditions = [
+				{
+					contractAddress: '',
+					standardContractType: '',
+					chain: 'ethereum', // Chain context for PKP address on Chronicle
+					method: '', // Implies direct address check
+					parameters: [':userAddress'],
+					returnValueTest: {
+						comparator: '=',
+						value: mintedPkpEthAddress
+					}
+				}
+			];
+
+			const { encryptString } = await import('@lit-protocol/encryption');
+
+			const { ciphertext, dataToEncryptHash } = await encryptString(
+				{
+					accessControlConditions,
+					chain: 'ethereum', // Consistent chain context for the encryption artifact itself
+					dataToEncrypt: profileName.trim() // Corrected: dataToEncrypt
+				},
+				litNodeClient // The connected LitNodeClient instance
+			);
+
+			const dataToStore = {
+				ciphertext,
+				dataToEncryptHash,
+				accessControlConditions, // Store the ACCs used for encryption
+				chain: 'ethereum' // Store the chain used
+			};
+
+			encryptedProfileDataString = JSON.stringify(dataToStore);
+			localStorage.setItem(PROFILE_STORAGE_KEY, encryptedProfileDataString);
+			mainSuccess = 'Profile name encrypted and saved successfully!';
+			console.log('Profile encrypted and stored. Data:', dataToStore);
+		} catch (error: any) {
+			mainError = `Error saving profile: ${error.message}`;
+			console.error('Error saving profile to localStorage:', error);
+		} finally {
+			isEncryptingProfile = false;
+		}
+	}
+
+	// Reactive statement for decryption - NEW
+	$: if (
+		browser &&
+		litNodeClient &&
+		sessionSigs &&
+		encryptedProfileDataString &&
+		!profileName &&
+		!isDecryptingProfile
+	) {
+		(async () => {
+			isDecryptingProfile = true;
+			resetMainMessages();
+			console.log('Attempting to decrypt profile name...');
+			try {
+				const storedEncryptedData = JSON.parse(encryptedProfileDataString!);
+				if (
+					!storedEncryptedData.ciphertext ||
+					!storedEncryptedData.dataToEncryptHash ||
+					!storedEncryptedData.accessControlConditions ||
+					!storedEncryptedData.chain
+				) {
+					throw new Error('Stored encrypted data is missing required fields.');
+				}
+
+				const { decryptToString } = await import('@lit-protocol/encryption');
+
+				const decryptedNameStr = await decryptToString(
+					{
+						accessControlConditions: storedEncryptedData.accessControlConditions,
+						chain: storedEncryptedData.chain,
+						ciphertext: storedEncryptedData.ciphertext,
+						dataToEncryptHash: storedEncryptedData.dataToEncryptHash,
+						sessionSigs: sessionSigs! // Assert non-null as it's a condition for this block
+					},
+					litNodeClient! // Assert non-null
+				);
+				profileName = decryptedNameStr;
+				mainSuccess = 'Profile name decrypted and loaded.';
+				console.log('Profile decrypted:', profileName);
+			} catch (err: any) {
+				mainError = `Failed to decrypt profile: ${err.message}. You might need to re-save it or check your PKP permissions.`;
+				console.error('Error decrypting profile name:', err);
+				// Clear corrupted or undecryptable data
+				localStorage.removeItem(PROFILE_STORAGE_KEY);
+				encryptedProfileDataString = null;
+			} finally {
+				isDecryptingProfile = false;
+			}
+		})();
+	}
+	// --- END: Profile Functions ---
 </script>
 
-<div
-	class="flex min-h-screen flex-col items-center bg-gradient-to-b from-slate-900 to-slate-800 p-8 text-white"
->
-	<h1
-		class="mb-8 bg-gradient-to-r from-purple-400 to-pink-600 bg-clip-text text-4xl font-bold text-transparent"
-	>
-		Passkey-Controlled PKP Demo
-	</h1>
+<!-- 
+  To use a font like 'Inter' (similar to Hominio screenshots), 
+  you would typically add the font import to your main HTML file (e.g., app.html)
+  or via a <svelte:head> element here. For example:
+  <svelte:head>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  </svelte:head>
+  Then, ensure your Tailwind config or global styles apply it.
+  The `font-sans` class added below will use a system sans-serif stack.
+-->
 
-	{#if mainError}
-		<div class="mb-6 w-full max-w-3xl rounded-md bg-red-700 p-4 text-white shadow-lg">
-			<span class="font-bold">Error:</span>
-			{mainError}
-		</div>
-	{/if}
-
-	{#if mainSuccess}
-		<div class="mb-6 w-full max-w-3xl rounded-md bg-green-700 p-4 text-white shadow-lg">
-			<span class="font-bold">Success:</span>
-			{mainSuccess}
-		</div>
-	{/if}
-
-	<!-- Step 0: Initial Connections -->
-	<div
-		class="mb-8 w-full max-w-3xl rounded-lg bg-white/5 p-6 text-slate-100 shadow-xl backdrop-blur-sm"
-	>
-		<h2 class="mb-4 border-b border-slate-700 pb-3 text-2xl font-semibold text-cyan-300">
-			Step 0: Initial Connections
-		</h2>
-		<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-			<div>
-				<h3 class="mb-2 text-lg font-medium text-slate-300">A. Lit Network Status</h3>
-				{#if isLitConnecting}
-					<p class="text-sm text-yellow-400">Connecting to Lit Network...</p>
-				{:else if litConnected}
-					<p class="text-sm text-green-400">✅ Connected to Lit Network.</p>
-				{:else}
-					<p class="text-sm text-red-400">Not connected to Lit. Attempting on load...</p>
-					<button
-						on:click={handleConnectLit}
-						class="mt-1 flex w-full justify-center rounded-md border border-transparent bg-cyan-700 px-4 py-1 text-xs font-medium text-white shadow-sm hover:bg-cyan-800 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-						disabled={isLitConnecting}
-					>
-						Retry Lit Connection
-					</button>
-				{/if}
-			</div>
-			<div>
-				<h3 class="mb-2 text-lg font-medium text-slate-300">B. Connect Controller EOA Wallet</h3>
-				{#if isEoaConnecting}
-					<p class="text-center"><span class="spinner mr-2"></span>Connecting EOA Wallet...</p>
-				{:else if eoaAddress}
-					<p class="rounded bg-green-100 p-2 text-center text-green-600">
-						✅ EOA Connected: <span class="font-mono text-sm">{eoaAddress}</span>
-					</p>
-				{:else if mainError && mainError.toLowerCase().includes('eoa')}
-					<p class="rounded bg-red-100 p-2 text-center text-red-600">
-						EOA Connection Failed. {mainError.replace('Error connecting EOA wallet: ', '')}
-					</p>
-				{:else}
-					<p class="rounded bg-gray-100 p-2 text-center text-gray-500">
-						EOA Wallet not connected. Will attempt on load.
-					</p>
-				{/if}
-			</div>
-		</div>
-	</div>
-
-	<!-- Step 1: Passkey Management -->
-	<div
-		class="mb-8 w-full max-w-3xl rounded-lg bg-white/5 p-6 text-slate-100 shadow-xl backdrop-blur-sm"
-	>
-		<h2 class="mb-4 border-b border-slate-700 pb-3 text-2xl font-semibold text-purple-300">
-			Step 1: Passkey Management (User-specific)
-		</h2>
-		{#if !storedPasskey}
-			<form on:submit|preventDefault={handleCreatePasskey} class="space-y-4">
-				<p class="mb-4 text-sm text-slate-300">
-					Create a passkey credential. This will be stored locally in your browser.
-				</p>
-				<div>
-					<label for="username" class="mb-1 block text-sm font-medium text-slate-300"
-						>Username for Passkey</label
-					><input
-						type="text"
-						id="username"
-						bind:value={username}
-						class="w-full rounded-md border border-slate-600 bg-slate-700 px-3 py-2 text-white shadow-sm focus:border-pink-500 focus:ring-pink-500 focus:outline-none"
-						placeholder="e.g., my-device-passkey"
-						required
-					/>
-				</div>
-				<button
-					type="submit"
-					class="flex w-full justify-center rounded-md border border-transparent bg-purple-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-purple-700 focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-slate-800 focus:outline-none disabled:opacity-50"
-					disabled={generalIsLoading}
-					>{generalIsLoading ? 'Processing...' : 'Create Passkey'}</button
-				>
-			</form>
-		{:else}
-			<h3 class="mb-2 text-lg font-medium">
-				Passkey Created for: <span class="font-bold text-purple-400">{storedPasskey.username}</span>
-			</h3>
-			<div class="space-y-2 rounded-md bg-slate-800/50 p-4 text-xs">
-				<div class="break-all">
-					<span class="font-semibold text-slate-400">Raw ID (Hex):</span>
-					{storedPasskey.rawId}
-				</div>
-				<div class="break-all">
-					<span class="font-semibold text-slate-400">AuthMethod ID (for PKP):</span>
-					{storedPasskey.authMethodId}
-				</div>
-				<div class="break-all">
-					<span class="font-semibold text-slate-400">Public Key X:</span>
-					{storedPasskey.pubkeyCoordinates.x}
-				</div>
-				<div class="break-all">
-					<span class="font-semibold text-slate-400">Public Key Y:</span>
-					{storedPasskey.pubkeyCoordinates.y}
-				</div>
-				{#if storedPasskey.signerContractAddress}
-					<div class="break-all">
-						<span class="font-semibold text-slate-400">Deployed EIP-1271 Signer:</span><a
-							href={`https://gnosisscan.io/address/${storedPasskey.signerContractAddress}`}
-							target="_blank"
-							rel="noopener noreferrer"
-							class="ml-1 text-pink-400 hover:text-pink-300 hover:underline"
-							>{storedPasskey.signerContractAddress}</a
-						>
-					</div>
-				{/if}
-			</div>
-			<div class="mt-4 flex justify-end">
-				<button
-					on:click={handleClearPasskey}
-					class="ml-2 rounded bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-slate-800 focus:outline-none"
-					>Clear Passkey Data</button
-				>
-			</div>
-		{/if}
-	</div>
-
-	<!-- Step 2: Deploy & Verify EIP-1271 Signer Contract -->
-	<div
-		class="mb-8 w-full max-w-3xl rounded-lg bg-white/5 p-6 text-slate-100 shadow-xl backdrop-blur-sm"
-	>
-		<h2 class="mb-4 border-b border-slate-700 pb-3 text-2xl font-semibold text-pink-300">
-			Step 2: Deploy & Verify EIP-1271 Signer
-		</h2>
-		<p class="mb-4 text-sm text-slate-300">
-			Deploy an EIP-1271 signer proxy contract for the passkey (Step 1). This allows on-chain
-			verification of signatures and is **required** before minting a PKP (Step 3) that uses this
-			passkey for Lit Action authentication.
-			<strong>Requires Gnosis connection & funds.</strong>
-		</p>
-
-		{#if !storedPasskey}
-			<p class="rounded bg-orange-700/30 p-3 text-center text-orange-400">
-				Create a Passkey (Step 1) first.
-			</p>
-		{:else if !storedPasskey.signerContractAddress}
-			<button
-				on:click={handleDeployContract}
-				class="flex w-full justify-center rounded-md border border-transparent bg-pink-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-pink-700 focus:ring-2 focus:ring-pink-500 focus:ring-offset-2 focus:ring-offset-slate-800 focus:outline-none disabled:opacity-50"
-				disabled={generalIsLoading}
-			>
-				{generalIsLoading ? 'Deploying...' : 'Deploy EIP-1271 Signer'}
-			</button>
-			{#if deploymentTxHash && deploymentTxHash !== '0x'}
-				<p class="mt-2 text-center text-xs text-slate-400">
-					Tx Hash: <a
-						href={`https://gnosisscan.io/tx/${deploymentTxHash}`}
-						target="_blank"
-						rel="noopener noreferrer"
-						class="text-pink-400 hover:underline">{deploymentTxHash}</a
-					>
-				</p>
+<div class="min-h-screen bg-stone-50 font-sans text-slate-800">
+	<!-- Header Title -->
+	<header class="px-4 py-8 text-center sm:py-10">
+		<h1 class="text-3xl font-bold text-slate-800 sm:text-4xl md:text-5xl">
+			{#if profileName}
+				{profileName}'s PKP Control Center
+			{:else}
+				Hominio PKP Wallet
 			{/if}
-		{:else}
-			<p class="mb-4 rounded-md bg-green-800/50 p-3 text-center text-green-300">
-				EIP-1271 Signer already deployed at: <a
-					href={`https://gnosisscan.io/address/${storedPasskey.signerContractAddress}`}
-					target="_blank"
-					rel="noopener noreferrer"
-					class="font-mono text-xs hover:underline">{storedPasskey.signerContractAddress}</a
+		</h1>
+		<p class="mx-auto mt-2 max-w-xl text-sm text-slate-600 sm:text-base">
+			Manage your Passkey-controlled Programmable Key Pairs on the Lit Protocol network.
+		</p>
+	</header>
+
+	<!-- Sticky Tab Bar -->
+	<div class="sticky top-0 z-50 bg-stone-100/80 shadow-md backdrop-blur-md">
+		<nav
+			class="mx-auto flex max-w-5xl items-center justify-center space-x-1 overflow-x-auto p-2 sm:space-x-1"
+		>
+			{#each steps as step, i}
+				<button
+					on:click={() => goToStep(i)}
+					class="rounded-md px-2 py-2 text-xs font-medium whitespace-nowrap transition-colors duration-150 sm:px-3 sm:text-sm
+                           {currentStepIndex === i
+						? 'bg-slate-700 text-white shadow-sm'
+						: 'text-slate-600 hover:bg-stone-200 hover:text-slate-800'}"
 				>
-			</p>
-			<h3 class="mb-2 text-lg font-medium text-slate-300">Verify Signer Functionality</h3>
-			<div class="mb-4">
-				<label for="messageToSignEIP1271" class="mb-1 block text-sm font-medium text-slate-300"
-					>Message to Sign & Verify</label
-				>
-				<input
-					id="messageToSignEIP1271"
-					bind:value={messageToSign}
-					class="w-full rounded-md border border-slate-600 bg-slate-700 px-3 py-2 text-white shadow-sm focus:border-pink-500 focus:ring-pink-500 focus:outline-none"
-					placeholder="Enter a message"
-				/>
-			</div>
-			<button
-				on:click={handleSignAndVerifyEIP1271Proxy}
-				class="flex w-full justify-center rounded-md border border-transparent bg-cyan-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-cyan-700 focus:outline-none disabled:opacity-50"
-				disabled={isLoadingProxyVerify || !storedPasskey?.signerContractAddress}
-				>{isLoadingProxyVerify ? 'Verifying...' : 'Sign & Verify (Deployed Proxy)'}</button
-			>
-			{#if proxyVerificationResult !== null}
+					<span class="hidden sm:inline">{i}. </span>{step}
+				</button>
+			{/each}
+		</nav>
+	</div>
+
+	<!-- Main Content Area -->
+	<main class="px-4 py-8">
+		<div class="mx-auto max-w-3xl">
+			<!-- Global Messages (Moved inside content area but before step cards) -->
+			{#if mainError}
 				<div
-					class="mt-4 rounded-md p-3 text-center {proxyVerificationResult.isCorrect
-						? 'bg-green-800/50'
-						: 'bg-red-800/50'}"
+					class="mb-6 w-full rounded-lg border border-red-300 bg-red-100 p-4 text-red-700 shadow-md"
 				>
-					<p class="font-semibold">
-						{proxyVerificationResult.isCorrect
-							? '✅ Proxy Verification Successful!'
-							: '❌ Proxy Verification Failed'}
-					</p>
-					{#if proxyVerificationResult.error}
-						<p class="mt-1 text-xs text-red-300">{proxyVerificationResult.error}</p>
+					<span class="font-bold">Error:</span>
+					{mainError}
+				</div>
+			{/if}
+
+			{#if mainSuccess}
+				<div
+					class="mb-6 w-full rounded-lg border border-green-300 bg-green-100 p-4 text-green-700 shadow-md"
+				>
+					<span class="font-bold">Success:</span>
+					{mainSuccess}
+				</div>
+			{/if}
+
+			<!-- Step 0: Initial Connections -->
+			{#if currentStepIndex === 0}
+				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
+					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
+						Step 0: Initial Connections
+					</h2>
+					<div class="grid grid-cols-1 gap-6 md:grid-cols-2">
+						<div>
+							<h3 class="mb-2 text-lg font-medium text-slate-600">A. Lit Network Status</h3>
+							{#if isLitConnecting}
+								<p class="flex items-center text-sm text-yellow-600">
+									<span class="spinner mr-2"></span>Connecting to Lit Network...
+								</p>
+							{:else if litConnected}
+								<p class="text-sm text-green-600">✅ Connected to Lit Network.</p>
+							{:else}
+								<p class="text-sm text-red-600">Not connected to Lit. Attempting on load...</p>
+								<button
+									on:click={handleConnectLit}
+									class="mt-2 w-full justify-center rounded-lg bg-slate-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-slate-700 focus:ring-2 focus:ring-slate-500 focus:ring-offset-2 disabled:opacity-50"
+									disabled={isLitConnecting}
+								>
+									Retry Lit Connection
+								</button>
+							{/if}
+						</div>
+						<div>
+							<h3 class="mb-2 text-lg font-medium text-slate-600">
+								B. Connect Controller EOA Wallet
+							</h3>
+							{#if isEoaConnecting}
+								<p class="flex items-center text-sm text-yellow-600">
+									<span class="spinner mr-2"></span>Connecting EOA Wallet...
+								</p>
+							{:else if eoaAddress}
+								<div class="rounded-md bg-green-50 p-3 text-sm text-green-700">
+									<p class="font-semibold">✅ EOA Connected:</p>
+									<p class="font-mono text-xs break-all">{eoaAddress}</p>
+								</div>
+							{:else if mainError && mainError.toLowerCase().includes('eoa')}
+								<div class="rounded-md bg-red-50 p-3 text-sm text-red-700">
+									<p class="font-semibold">EOA Connection Failed:</p>
+									<p>{mainError.replace('Error connecting EOA wallet: ', '')}</p>
+								</div>
+							{:else}
+								<p class="text-sm text-stone-500">
+									EOA Wallet not connected. Will attempt on load.
+								</p>
+							{/if}
+						</div>
+					</div>
+				</div>
+			{/if}
+
+			<!-- Step 1: Passkey Management -->
+			{#if currentStepIndex === 1}
+				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
+					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
+						Step 1: Passkey Management (User-specific)
+					</h2>
+					{#if !storedPasskey}
+						<form on:submit|preventDefault={handleCreatePasskey} class="space-y-4">
+							<p class="mb-4 text-sm text-slate-500">
+								Create a passkey credential. This will be stored locally in your browser.
+							</p>
+							<div>
+								<label for="username" class="mb-1 block text-sm font-medium text-slate-600"
+									>Username for Passkey</label
+								><input
+									type="text"
+									id="username"
+									bind:value={username}
+									class="block w-full rounded-lg border-stone-300 bg-stone-50 p-2 text-slate-800 shadow-sm focus:border-slate-500 focus:ring-slate-500 sm:text-sm"
+									placeholder="e.g., my-device-passkey"
+									required
+								/>
+							</div>
+							<button
+								type="submit"
+								class="w-full justify-center rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 focus:ring-2 focus:ring-slate-500 focus:ring-offset-2 disabled:opacity-50"
+								disabled={generalIsLoading}
+							>
+								{#if generalIsLoading}<span class="spinner mr-2"></span>Processing...{:else}Create
+									Passkey{/if}
+							</button>
+						</form>
+					{:else}
+						<h3 class="mb-3 text-lg font-medium">
+							Passkey Created for:
+							<span class="font-bold text-slate-700">{storedPasskey.username}</span>
+						</h3>
+						<div
+							class="space-y-2 rounded-md border border-stone-200 bg-stone-50 p-4 text-xs text-slate-600"
+						>
+							<div class="break-all">
+								<span class="font-semibold text-slate-500">Raw ID (Hex):</span>
+								<code class="ml-1 rounded bg-stone-200 p-1">{storedPasskey.rawId}</code>
+							</div>
+							<div class="break-all">
+								<span class="font-semibold text-slate-500">AuthMethod ID (for PKP):</span>
+								<code class="ml-1 rounded bg-stone-200 p-1">{storedPasskey.authMethodId}</code>
+							</div>
+							<div class="break-all">
+								<span class="font-semibold text-slate-500">Public Key X:</span>
+								<code class="ml-1 rounded bg-stone-200 p-1"
+									>{storedPasskey.pubkeyCoordinates.x}</code
+								>
+							</div>
+							<div class="break-all">
+								<span class="font-semibold text-slate-500">Public Key Y:</span>
+								<code class="ml-1 rounded bg-stone-200 p-1"
+									>{storedPasskey.pubkeyCoordinates.y}</code
+								>
+							</div>
+							{#if storedPasskey.signerContractAddress}
+								<div class="break-all">
+									<span class="font-semibold text-slate-500">Deployed EIP-1271 Signer:</span><a
+										href={`https://gnosisscan.io/address/${storedPasskey.signerContractAddress}`}
+										target="_blank"
+										rel="noopener noreferrer"
+										class="ml-1 text-blue-600 hover:text-blue-500 hover:underline"
+										><code class="rounded bg-stone-200 p-1"
+											>{storedPasskey.signerContractAddress}</code
+										></a
+									>
+								</div>
+							{/if}
+						</div>
+						<div class="mt-6 flex justify-end">
+							<button
+								on:click={handleClearPasskey}
+								class="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-700 focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+								>Clear Passkey Data</button
+							>
+						</div>
 					{/if}
 				</div>
 			{/if}
-		{/if}
-	</div>
 
-	<!-- Step 3: Mint New PKP -->
-	<div
-		class="mb-8 w-full max-w-3xl rounded-lg bg-white/5 p-6 text-slate-100 shadow-xl backdrop-blur-sm"
-	>
-		<h2 class="mb-4 border-b border-slate-700 pb-3 text-2xl font-semibold text-teal-300">
-			Step 3: Mint PKP for Passkey
-		</h2>
+			<!-- Step 2: Deploy & Verify EIP-1271 Signer Contract -->
+			{#if currentStepIndex === 2}
+				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
+					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
+						Step 2: Deploy & Verify EIP-1271 Signer
+					</h2>
+					<p class="mb-4 text-sm text-slate-500">
+						Deploy an EIP-1271 signer proxy contract for the passkey (Step 1). This allows on-chain
+						verification of signatures and is <strong>required</strong> before minting a PKP (Step
+						3) that uses this passkey for Lit Action authentication.
+						<strong class="text-orange-600">Requires Gnosis connection & funds.</strong>
+					</p>
 
-		{#if !storedPasskey}
-			<p class="rounded-md bg-orange-700/30 p-3 text-orange-400">
-				Please create and store a passkey first (Step 1) to enable PKP minting.
-			</p>
-		{:else if !storedPasskey.signerContractAddress}
-			<p class="rounded-md bg-orange-700/30 p-3 text-orange-400">
-				Please deploy the EIP-1271 Signer (Step 2) first to enable PKP minting.
-			</p>
-		{:else if !eoaAddress}
-			<p class="rounded-md bg-orange-700/30 p-3 text-orange-400">
-				EOA Wallet not connected (Step 0). Please ensure your wallet is connected to enable PKP
-				minting.
-			</p>
-		{:else if !mintedPkpTokenId}
-			<p class="mb-4 text-sm text-slate-300">
-				Mint a new PKP on the Chronicle testnet. This PKP will be configured to allow authentication
-				using your passkey (via the Gnosis verification Lit Action) and will be transferred to its
-				own address.
-			</p>
-			<button
-				class="mb-3 flex w-full items-center justify-center rounded bg-purple-600 px-4 py-2 font-bold text-white transition duration-150 ease-in-out hover:bg-purple-700 disabled:opacity-50"
-				disabled={isMintingPkp ||
-					!storedPasskey?.authMethodId ||
-					!eoaAddress ||
-					!storedPasskey.signerContractAddress}
-				on:click={handleMintPkp}
-			>
-				{#if isMintingPkp}
-					<span class="spinner mr-2"></span>Minting PKP...
-				{:else}
-					Mint New PKP for Passkey
-				{/if}
-			</button>
-		{/if}
-
-		{#if mintedPkpTokenId}
-			<div class="mt-3 rounded-md border border-green-700 bg-green-800/50 p-3 text-slate-100">
-				<h4 class="font-semibold text-green-300">PKP Details (Minted / Loaded):</h4>
-				<p class="text-sm">
-					Token ID: <code class="rounded bg-slate-700 p-1 text-xs">{mintedPkpTokenId}</code>
-				</p>
-				<p class="text-sm">
-					Public Key: <code class="rounded bg-slate-700 p-1 text-xs break-all"
-						>{mintedPkpPublicKey}</code
-					>
-				</p>
-				<p class="text-sm">
-					ETH Address: <code class="rounded bg-slate-700 p-1 text-xs">{mintedPkpEthAddress}</code>
-				</p>
-			</div>
-		{/if}
-	</div>
-
-	<!-- Step 4: View Auth Methods -->
-	{#if litConnected && (mintedPkpTokenId || eoaAddress)}
-		<div
-			class="mb-8 w-full max-w-3xl rounded-lg bg-white/5 p-6 text-slate-100 shadow-xl backdrop-blur-sm"
-		>
-			<h2 class="mb-4 border-b border-slate-700 pb-3 text-2xl font-semibold text-lime-300">
-				Step 4: View PKP Auth Methods
-			</h2>
-			<p class="mb-3 text-sm text-slate-300">
-				Fetch and display all auth methods registered for the PKP Token ID <code class="text-xs"
-					>{mintedPkpTokenId ?? 'N/A (Using manual input below)'}</code
-				> from the Chronicle testnet.
-			</p>
-
-			<button
-				on:click={() => mintedPkpTokenId && handleFetchPermittedAuthMethods(mintedPkpTokenId)}
-				class="mb-3 flex w-full justify-center rounded-md border border-transparent bg-yellow-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-yellow-700 disabled:opacity-50"
-				disabled={isLoadingPermittedAuthMethods || !mintedPkpTokenId || !litConnected}
-			>
-				{isLoadingPermittedAuthMethods ? 'Fetching Methods...' : 'Fetch Permitted Auth Methods'}
-			</button>
-
-			{#if permittedAuthMethods.length > 0}
-				<div class="mt-4 space-y-3">
-					{#each permittedAuthMethods as method, i}
-						<div class="rounded-md bg-slate-800/50 p-3 text-xs">
-							<p><span class="font-semibold text-slate-400">Method {i + 1}</span></p>
-							<p>
-								<span class="font-semibold text-slate-400">Type:</span>
-								{method.authMethodType.toString()}
-								{#if method.authMethodType === 2n}
-									<span class="text-cyan-300">(Lit Action)</span>
-								{:else}
-									(Other)
-								{/if}
-							</p>
-							<p class="break-all">
-								<span class="font-semibold text-slate-400">ID (Hex):</span>
-								{method.id}
-							</p>
-							<p class="break-all">
-								<span class="font-semibold text-slate-400">User Pubkey (Hex):</span>
-								{method.userPubkey}
-							</p>
+					{#if !storedPasskey}
+						<div
+							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-center text-sm text-orange-700"
+						>
+							Create a Passkey (Step 1) first.
 						</div>
-					{/each}
+					{:else if !storedPasskey.signerContractAddress}
+						<button
+							on:click={handleDeployContract}
+							class="w-full justify-center rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 focus:ring-2 focus:ring-slate-500 focus:ring-offset-2 disabled:opacity-50"
+							disabled={generalIsLoading}
+						>
+							{#if generalIsLoading}<span class="spinner mr-2"></span>Deploying...{:else}Deploy
+								EIP-1271 Signer{/if}
+						</button>
+						{#if deploymentTxHash && deploymentTxHash !== '0x'}
+							<p class="mt-3 text-center text-xs text-slate-500">
+								Tx Hash:
+								<a
+									href={`https://gnosisscan.io/tx/${deploymentTxHash}`}
+									target="_blank"
+									rel="noopener noreferrer"
+									class="text-blue-600 hover:underline">{deploymentTxHash}</a
+								>
+							</p>
+						{/if}
+					{:else}
+						<div
+							class="mb-6 rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-700"
+						>
+							EIP-1271 Signer already deployed at:
+							<a
+								href={`https://gnosisscan.io/address/${storedPasskey.signerContractAddress}`}
+								target="_blank"
+								rel="noopener noreferrer"
+								class="font-mono text-xs hover:underline"
+								><code class="rounded bg-green-100 p-0.5"
+									>{storedPasskey.signerContractAddress}</code
+								></a
+							>
+						</div>
+						<h3 class="mb-3 text-lg font-medium text-slate-600">Verify Signer Functionality</h3>
+						<div class="mb-4">
+							<label
+								for="messageToSignEIP1271"
+								class="mb-1 block text-sm font-medium text-slate-600"
+								>Message to Sign & Verify</label
+							>
+							<input
+								id="messageToSignEIP1271"
+								bind:value={messageToSign}
+								class="block w-full rounded-lg border-stone-300 bg-stone-50 p-2 text-slate-800 shadow-sm focus:border-slate-500 focus:ring-slate-500 sm:text-sm"
+								placeholder="Enter a message"
+							/>
+						</div>
+						<button
+							on:click={handleSignAndVerifyEIP1271Proxy}
+							class="w-full justify-center rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-sky-700 focus:outline-none disabled:opacity-50"
+							disabled={isLoadingProxyVerify || !storedPasskey?.signerContractAddress}
+						>
+							{#if isLoadingProxyVerify}<span class="spinner mr-2"></span>Verifying...{:else}Sign &
+								Verify (Deployed Proxy){/if}</button
+						>
+						{#if proxyVerificationResult !== null}
+							<div
+								class="mt-4 rounded-md p-3 text-center text-sm {proxyVerificationResult.isCorrect
+									? 'border border-green-300 bg-green-100 text-green-700'
+									: 'border border-red-300 bg-red-100 text-red-700'}"
+							>
+								<p class="font-semibold">
+									{proxyVerificationResult.isCorrect
+										? '✅ Proxy Verification Successful!'
+										: '❌ Proxy Verification Failed'}
+								</p>
+								{#if proxyVerificationResult.error}
+									<p class="mt-1 text-xs">{proxyVerificationResult.error}</p>
+								{/if}
+							</div>
+						{/if}
+					{/if}
 				</div>
-			{:else if !isLoadingPermittedAuthMethods && (mainSuccess.includes('No permitted auth methods') || mainSuccess.includes('permitted auth method(s)'))}
-				<p class="mt-3 text-center text-sm text-slate-400">No methods found or fetch completed.</p>
 			{/if}
-		</div>
-	{/if}
 
-	<!-- Step 5: Generate Session Signatures for PKP -->
-	{#if litConnected && mintedPkpTokenId}
-		<div
-			class="mb-8 w-full max-w-3xl rounded-lg bg-white/5 p-6 text-slate-100 shadow-xl backdrop-blur-sm"
-		>
-			<h2 class="mb-4 border-b border-slate-700 pb-3 text-2xl font-semibold text-emerald-300">
-				Step 5: Generate Session Signatures for PKP
-			</h2>
-			<p class="mb-4 text-sm text-slate-300">
-				Use your passkey (authenticated via the Gnosis verification Lit Action) to obtain temporary
-				session keys to use the PKP ({mintedPkpTokenId}).
-			</p>
+			<!-- Step 3: Mint New PKP -->
+			{#if currentStepIndex === 3}
+				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
+					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
+						Step 3: Mint PKP for Passkey
+					</h2>
 
-			<div class="space-y-4">
-				<!-- Method: Gnosis Verified Passkey -->
-				<div class="rounded-lg border border-slate-700 p-4">
-					<h3 class="mb-2 font-medium text-blue-300">
-						Authenticate with Passkey (Gnosis On-Chain Verification)
-					</h3>
-					{#if storedPasskey?.rawId && storedPasskey?.pubkeyCoordinates}
-						<p class="mb-2 text-xs text-slate-400">
-							Uses a Lit Action to verify your passkey signature directly against your deployed
-							EIP-1271 Gnosis Chain contract (Step 2).
+					{#if !storedPasskey}
+						<div
+							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-sm text-orange-700"
+						>
+							Please create and store a passkey first (Step 1) to enable PKP minting.
+						</div>
+					{:else if !storedPasskey.signerContractAddress}
+						<div
+							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-sm text-orange-700"
+						>
+							Please deploy the EIP-1271 Signer (Step 2) first to enable PKP minting.
+						</div>
+					{:else if !eoaAddress}
+						<div
+							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-sm text-orange-700"
+						>
+							EOA Wallet not connected (Step 0). Please ensure your wallet is connected to enable
+							PKP minting.
+						</div>
+					{:else if !mintedPkpTokenId}
+						<p class="mb-4 text-sm text-slate-500">
+							Mint a new PKP on the Chronicle testnet. This PKP will be configured to allow
+							authentication using your passkey (via the Gnosis verification Lit Action) and will be
+							transferred to its own address.
 						</p>
 						<button
-							on:click={handleGetSessionSigsGnosisPasskey}
-							class="flex w-full justify-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
-							disabled={isLoadingSessionSigsGnosisPasskey ||
-								(!!sessionSigs && sessionAuthMethod !== 'gnosis-passkey') ||
-								!storedPasskey?.rawId ||
-								!storedPasskey?.pubkeyCoordinates ||
-								!storedPasskey?.signerContractAddress ||
-								!mintedPkpPublicKey}
+							class="flex w-full items-center justify-center rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:opacity-50"
+							disabled={isMintingPkp ||
+								!storedPasskey?.authMethodId ||
+								!eoaAddress ||
+								!storedPasskey.signerContractAddress}
+							on:click={handleMintPkp}
 						>
-							{#if isLoadingSessionSigsGnosisPasskey}Generating Sigs...{:else if sessionSigs && sessionAuthMethod === 'gnosis-passkey'}✅
-								Sigs Obtained{:else}Get Session Sigs (Gnosis Passkey){/if}
+							{#if isMintingPkp}
+								<span class="spinner mr-2"></span>Minting PKP...
+							{:else}
+								Mint New PKP for Passkey
+							{/if}
 						</button>
-					{:else}
-						<p class="text-sm text-amber-400">Create a passkey (Step 1) first.</p>
+					{/if}
+
+					{#if mintedPkpTokenId}
+						<div class="mt-4 rounded-lg border border-green-300 bg-green-50 p-4 text-slate-700">
+							<h4 class="mb-2 font-semibold text-green-700">PKP Details (Minted / Loaded):</h4>
+							<p class="mb-1 text-sm">
+								Token ID:
+								<code class="ml-1 rounded bg-stone-200 p-1 text-xs">{mintedPkpTokenId}</code>
+							</p>
+							<p class="mb-1 text-sm break-all">
+								Public Key:
+								<code class="ml-1 rounded bg-stone-200 p-1 text-xs">{mintedPkpPublicKey}</code>
+							</p>
+							<p class="text-sm break-all">
+								ETH Address:
+								<code class="ml-1 rounded bg-stone-200 p-1 text-xs">{mintedPkpEthAddress}</code>
+							</p>
+						</div>
 					{/if}
 				</div>
-			</div>
-
-			{#if sessionSigs}
-				<div class="mt-6 rounded-md bg-slate-700 p-4">
-					<h3 class="mb-2 font-semibold text-emerald-400">
-						Active Session Signatures (Authenticated via: {sessionAuthMethod?.toUpperCase()})
-					</h3>
-					<pre class="overflow-x-auto text-xs whitespace-pre-wrap">{JSON.stringify(
-							sessionSigs,
-							null,
-							2
-						)}</pre>
-				</div>
 			{/if}
-		</div>
-	{/if}
 
-	<!-- Step 6: PKP Operations -->
-	{#if sessionSigs}
-		<div
-			class="mb-8 w-full max-w-3xl rounded-lg bg-white/5 p-6 text-slate-100 shadow-xl backdrop-blur-sm"
-		>
-			<h2 class="mb-4 border-b border-slate-700 pb-3 text-2xl font-semibold text-sky-300">
-				Step 6: PKP Operations (Requires Session Sigs)
-			</h2>
-			<p class="mb-4 text-xs text-slate-400">
-				Current session authenticated via: <span class="font-medium text-yellow-300"
-					>{sessionAuthMethod?.toUpperCase() ?? 'N/A'}</span
-				>
-			</p>
+			<!-- Step 4: View Auth Methods -->
+			{#if currentStepIndex === 4}
+				{#if litConnected && (mintedPkpTokenId || eoaAddress)}
+					<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
+						<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
+							Step 4: View PKP Auth Methods
+						</h2>
+						<p class="mb-4 text-sm text-slate-500">
+							Fetch and display all auth methods registered for the PKP Token ID
+							<code class="rounded bg-stone-200 p-0.5 text-xs"
+								>{mintedPkpTokenId ?? 'N/A (Mint PKP in Step 3)'}</code
+							>
+							from the Chronicle testnet.
+						</p>
 
-			<!-- Sign Message with PKP -->
-			<div class="mb-6 rounded-lg border border-slate-700 p-4">
-				<h3 class="mb-3 text-lg font-medium text-sky-300">6A. Sign Message with PKP</h3>
-				<div class="mb-4">
-					<label for="messageToSignPkp" class="mb-1 block text-sm font-medium text-slate-300"
-						>Message to Sign</label
-					>
-					<input
-						id="messageToSignPkp"
-						bind:value={messageToSign}
-						class="w-full rounded-md border border-slate-600 bg-slate-700 px-3 py-2 text-white shadow-sm focus:border-sky-500 focus:ring-sky-500 focus:outline-none"
-					/>
-				</div>
-				<button
-					on:click={handleSignMessageWithPkp}
-					class="flex w-full justify-center rounded-md border border-transparent bg-sky-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-sky-700 disabled:opacity-50"
-					disabled={isSigningMessage || !sessionSigs || !mintedPkpPublicKey}
-				>
-					{isSigningMessage ? 'Signing...' : 'Sign Message with PKP'}
-				</button>
-				{#if signatureResult}
-					<div class="mt-4 space-y-2 rounded-md bg-slate-800/50 p-3 text-xs">
-						<p class="font-semibold text-green-400">PKP Signature Successful!</p>
-						<div>
-							<p class="font-medium text-slate-400">Data Signed (Hashed Message):</p>
-							<code class="block break-all text-slate-200">{signatureResult.dataSigned}</code>
-						</div>
-						<div>
-							<p class="font-medium text-slate-400">Signature:</p>
-							<code class="block break-all text-slate-200">{signatureResult.signature}</code>
-						</div>
+						<button
+							on:click={() => mintedPkpTokenId && handleFetchPermittedAuthMethods(mintedPkpTokenId)}
+							class="mb-4 w-full justify-center rounded-lg bg-yellow-500 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-yellow-600 disabled:opacity-50"
+							disabled={isLoadingPermittedAuthMethods || !mintedPkpTokenId || !litConnected}
+						>
+							{#if isLoadingPermittedAuthMethods}<span class="spinner mr-2"></span>Fetching
+								Methods...{:else}Fetch Permitted Auth Methods{/if}
+						</button>
+
+						{#if permittedAuthMethods.length > 0}
+							<div class="mt-4 space-y-3">
+								{#each permittedAuthMethods as method, i}
+									<div
+										class="rounded-lg border border-stone-200 bg-stone-50 p-3 text-xs text-slate-600"
+									>
+										<p class="mb-1">
+											<span class="font-semibold text-slate-500">Method {i + 1}</span>
+										</p>
+										<p>
+											<span class="font-semibold text-slate-500">Type:</span>
+											{method.authMethodType.toString()}
+											{#if method.authMethodType === 2n}
+												<span class="ml-1 text-cyan-600">(Lit Action)</span>
+											{:else}
+												<span class="ml-1 text-stone-500">(Other)</span>
+											{/if}
+										</p>
+										<p class="break-all">
+											<span class="font-semibold text-slate-500">ID (Hex):</span>
+											<code class="ml-1 rounded bg-stone-200 p-0.5">{method.id}</code>
+										</p>
+										<p class="break-all">
+											<span class="font-semibold text-slate-500">User Pubkey (Hex):</span>
+											<code class="ml-1 rounded bg-stone-200 p-0.5">{method.userPubkey}</code>
+										</p>
+									</div>
+								{/each}
+							</div>
+						{:else if !isLoadingPermittedAuthMethods && (mainSuccess.includes('No permitted auth methods') || mainSuccess.includes('permitted auth method(s)'))}
+							<p class="mt-3 text-center text-sm text-slate-400">
+								No methods found or fetch completed.
+							</p>
+						{/if}
+					</div>
+				{:else}
+					<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
+						<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
+							Step 4: View PKP Auth Methods
+						</h2>
+						<p
+							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-sm text-orange-700"
+						>
+							{#if !litConnected}Please connect to Lit (Step 0).{/if}
+							{#if !mintedPkpTokenId && litConnected}Please mint a PKP (Step 3) first.{/if}
+						</p>
 					</div>
 				{/if}
-			</div>
+			{/if}
 
-			<!-- Execute Lit Action -->
-			<div class="rounded-lg border border-slate-700 p-4">
-				<h3 class="mb-3 text-lg font-medium text-indigo-300">6B. Execute Inline Lit Action</h3>
-				<p class="mb-3 text-xs text-slate-400">
-					This action checks if a number is >= 42. Code is defined below.
-				</p>
-				<div class="mb-4">
-					<label for="magicNumber" class="mb-1 block text-sm font-medium text-slate-300"
-						>Number to Check (magicNumber)</label
-					>
-					<input
-						id="magicNumber"
-						type="number"
-						bind:value={magicNumber}
-						class="w-full rounded-md border border-slate-600 bg-slate-700 px-3 py-2 text-white shadow-sm focus:border-indigo-500 focus:ring-indigo-500 focus:outline-none"
-					/>
-				</div>
-				<button
-					on:click={handleExecuteLitAction}
-					class="flex w-full justify-center rounded-md border border-transparent bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
-					disabled={isExecutingAction}
-				>
-					{#if isExecutingAction}Executing Action...{:else}Execute Lit Action{/if}
-				</button>
-				{#if litActionResult}
-					<div class="mt-4 space-y-2 rounded-md bg-slate-800/50 p-3 text-xs">
-						<p class="font-semibold text-green-400">Lit Action Executed!</p>
-						<div>
-							<p class="font-medium text-slate-400">Response:</p>
-							<pre class="block break-all whitespace-pre-wrap text-slate-200">{JSON.stringify(
-									litActionResult.response,
-									null,
-									2
-								)}</pre>
+			<!-- Step 5: Generate Session Signatures for PKP -->
+			{#if currentStepIndex === 5}
+				{#if litConnected && mintedPkpTokenId}
+					<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
+						<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
+							Step 5: Generate Session Signatures for PKP
+						</h2>
+						<p class="mb-4 text-sm text-slate-500">
+							Use your passkey (authenticated via the Gnosis verification Lit Action) to obtain
+							temporary session keys to use the PKP (<code
+								class="rounded bg-stone-200 p-0.5 text-xs">{mintedPkpTokenId}</code
+							>).
+						</p>
+
+						<div class="space-y-4">
+							<!-- Method: Gnosis Verified Passkey -->
+							<div class="rounded-lg border border-stone-200 p-4">
+								<h3 class="mb-2 font-medium text-slate-600">
+									Authenticate with Passkey (Gnosis On-Chain Verification)
+								</h3>
+								{#if storedPasskey?.rawId && storedPasskey?.pubkeyCoordinates && storedPasskey?.signerContractAddress}
+									<p class="mb-3 text-xs text-slate-500">
+										Uses a Lit Action to verify your passkey signature directly against your
+										deployed EIP-1271 Gnosis Chain contract (Step 2).
+									</p>
+									<button
+										on:click={handleGetSessionSigsGnosisPasskey}
+										class="w-full justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
+										disabled={isLoadingSessionSigsGnosisPasskey ||
+											(!!sessionSigs && sessionAuthMethod !== 'gnosis-passkey') ||
+											!mintedPkpPublicKey}
+									>
+										{#if isLoadingSessionSigsGnosisPasskey}<span class="spinner mr-2"
+											></span>Generating Sigs...{:else if sessionSigs && sessionAuthMethod === 'gnosis-passkey'}✅
+											Sigs Obtained{:else}Get Session Sigs (Gnosis Passkey){/if}
+									</button>
+								{:else}
+									<p
+										class="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-600"
+									>
+										{#if !storedPasskey?.rawId || !storedPasskey?.pubkeyCoordinates}
+											Create a passkey (Step 1) first.
+										{:else if !storedPasskey?.signerContractAddress}
+											Deploy EIP-1271 Signer (Step 2) first.
+										{/if}
+									</p>
+								{/if}
+							</div>
 						</div>
-						{#if litActionResult.logs}
-							<div>
-								<p class="font-medium text-slate-400">Logs:</p>
+
+						{#if sessionSigs}
+							<div class="mt-6 rounded-lg border border-stone-200 bg-stone-100 p-4">
+								<h3 class="mb-2 font-semibold text-slate-700">
+									Active Session Signatures (Authenticated via: {sessionAuthMethod?.toUpperCase()})
+								</h3>
 								<pre
-									class="block break-all whitespace-pre-wrap text-slate-200">{litActionResult.logs}</pre>
+									class="overflow-x-auto rounded-md bg-white p-3 text-xs whitespace-pre-wrap shadow-sm">{JSON.stringify(
+										sessionSigs,
+										null,
+										2
+									)}</pre>
 							</div>
 						{/if}
 					</div>
+				{:else}
+					<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
+						<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
+							Step 5: Generate Session Signatures
+						</h2>
+						<p
+							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-sm text-orange-700"
+						>
+							{#if !litConnected}Please connect to Lit (Step 0).{/if}
+							{#if !mintedPkpTokenId && litConnected}Please mint a PKP (Step 3) first.{/if}
+						</p>
+					</div>
 				{/if}
-			</div>
+			{/if}
+
+			<!-- Step 6: PKP Operations -->
+			{#if currentStepIndex === 6}
+				{#if sessionSigs}
+					<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
+						<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
+							Step 6: PKP Operations (Requires Session Sigs)
+						</h2>
+						<p class="mb-4 text-xs text-slate-500">
+							Current session authenticated via:
+							<span class="font-medium text-slate-700"
+								>{sessionAuthMethod?.toUpperCase() ?? 'N/A'}</span
+							>
+						</p>
+
+						<!-- Sign Message with PKP -->
+						<div class="mb-6 rounded-lg border border-stone-200 p-4">
+							<h3 class="mb-3 text-lg font-medium text-slate-600">6A. Sign Message with PKP</h3>
+							<div class="mb-4">
+								<label for="messageToSignPkp" class="mb-1 block text-sm font-medium text-slate-600"
+									>Message to Sign</label
+								>
+								<input
+									id="messageToSignPkp"
+									bind:value={messageToSign}
+									class="block w-full rounded-lg border-stone-300 bg-stone-50 p-2 text-slate-800 shadow-sm focus:border-slate-500 focus:ring-slate-500 sm:text-sm"
+								/>
+							</div>
+							<button
+								on:click={handleSignMessageWithPkp}
+								class="w-full justify-center rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-sky-700 disabled:opacity-50"
+								disabled={isSigningMessage || !sessionSigs || !mintedPkpPublicKey}
+							>
+								{#if isSigningMessage}<span class="spinner mr-2"></span>Signing...{:else}Sign
+									Message with PKP{/if}
+							</button>
+							{#if signatureResult}
+								<div
+									class="mt-4 space-y-2 rounded-lg border border-stone-200 bg-stone-50 p-3 text-xs"
+								>
+									<p class="font-semibold text-green-600">PKP Signature Successful!</p>
+									<div>
+										<p class="font-medium text-slate-500">Data Signed (Hashed Message):</p>
+										<code class="block rounded bg-stone-200 p-1 break-all text-slate-700"
+											>{signatureResult.dataSigned}</code
+										>
+									</div>
+									<div>
+										<p class="font-medium text-slate-500">Signature:</p>
+										<code class="block rounded bg-stone-200 p-1 break-all text-slate-700"
+											>{signatureResult.signature}</code
+										>
+									</div>
+								</div>
+							{/if}
+						</div>
+
+						<!-- Execute Lit Action -->
+						<div class="rounded-lg border border-stone-200 p-4">
+							<h3 class="mb-3 text-lg font-medium text-slate-600">6B. Execute Inline Lit Action</h3>
+							<p class="mb-3 text-xs text-slate-500">
+								This action checks if a number is >= 42. Code is defined below.
+							</p>
+							<div class="mb-4">
+								<label for="magicNumber" class="mb-1 block text-sm font-medium text-slate-600"
+									>Number to Check (magicNumber)</label
+								>
+								<input
+									id="magicNumber"
+									type="number"
+									bind:value={magicNumber}
+									class="block w-full rounded-lg border-stone-300 bg-stone-50 p-2 text-slate-800 shadow-sm focus:border-slate-500 focus:ring-slate-500 sm:text-sm"
+								/>
+							</div>
+							<button
+								on:click={handleExecuteLitAction}
+								class="w-full justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
+								disabled={isExecutingAction}
+							>
+								{#if isExecutingAction}<span class="spinner mr-2"></span>Executing Action...{:else}Execute
+									Lit Action{/if}
+							</button>
+							{#if litActionResult}
+								<div
+									class="mt-4 space-y-2 rounded-lg border border-stone-200 bg-stone-50 p-3 text-xs"
+								>
+									<p class="font-semibold text-green-600">Lit Action Executed!</p>
+									<div>
+										<p class="font-medium text-slate-500">Response:</p>
+										<pre
+											class="block rounded bg-white p-2 break-all whitespace-pre-wrap text-slate-700 shadow-sm">{JSON.stringify(
+												litActionResult.response,
+												null,
+												2
+											)}</pre>
+									</div>
+									{#if litActionResult.logs}
+										<div>
+											<p class="font-medium text-slate-500">Logs:</p>
+											<pre
+												class="block rounded bg-white p-2 break-all whitespace-pre-wrap text-slate-700 shadow-sm">{litActionResult.logs}</pre>
+										</div>
+									{/if}
+								</div>
+							{/if}
+						</div>
+					</div>
+				{:else}
+					<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
+						<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
+							Step 6: PKP Operations
+						</h2>
+						<p
+							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-sm text-orange-700"
+						>
+							Please generate session signatures (Step 5) first.
+						</p>
+					</div>
+				{/if}
+			{/if}
+
+			<!-- Step 7: Profile Management - NEW -->
+			{#if currentStepIndex === 7}
+				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
+					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
+						Step 7: Your Profile
+					</h2>
+					<p class="mb-4 text-sm text-slate-500">
+						Set your profile name. This will be stored locally and used to personalize your
+						experience.
+					</p>
+					<div class="space-y-4">
+						<div>
+							<label for="profileNameInput" class="mb-1 block text-sm font-medium text-slate-600"
+								>Profile Name</label
+							>
+							<input
+								type="text"
+								id="profileNameInput"
+								bind:value={profileName}
+								class="block w-full rounded-lg border-stone-300 bg-stone-50 p-2 text-slate-800 shadow-sm focus:border-slate-500 focus:ring-slate-500 sm:text-sm"
+								placeholder={isDecryptingProfile
+									? 'Decrypting profile...'
+									: 'Enter your preferred name'}
+								readonly={isEncryptingProfile || isDecryptingProfile}
+							/>
+						</div>
+						<button
+							on:click={handleSaveProfile}
+							class="w-full justify-center rounded-lg bg-slate-700 px-6 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 focus:ring-2 focus:ring-slate-500 focus:ring-offset-2 disabled:opacity-50 sm:w-auto"
+							disabled={isEncryptingProfile ||
+								isDecryptingProfile ||
+								!sessionSigs ||
+								!mintedPkpEthAddress ||
+								!litNodeClient}
+						>
+							{#if isEncryptingProfile}
+								<span class="spinner mr-2"></span>Encrypting & Saving...
+							{:else if isDecryptingProfile}
+								<span class="spinner mr-2"></span>Decrypting...
+							{:else}
+								Save Encrypted Profile
+							{/if}
+						</button>
+						{#if !sessionSigs || !mintedPkpEthAddress}
+							<p class="mt-2 text-xs text-orange-600">
+								Note: Session Signatures (Step 5) and a minted PKP (Step 3) are required to encrypt
+								and save your profile.
+							</p>
+						{/if}
+					</div>
+				</div>
+			{/if}
 		</div>
-	{/if}
+	</main>
 </div>
 
 <style>
-	/* Keeping previous styles, can be refactored later if needed */
+	/* Global styles (e.g., from a layout file or app.html) would be ideal for fonts */
+	/* For this component, we can ensure sans-serif stack is preferred via `font-sans` on root div */
+
 	.spinner {
 		display: inline-block;
-		width: 1em;
-		height: 1em;
-		border: 2px solid currentColor;
+		width: 1em; /* Adjust size as needed */
+		height: 1em; /* Adjust size as needed */
+		border: 2px solid currentColor; /* Adapts to text color */
 		border-right-color: transparent;
 		border-radius: 50%;
 		animation: spin 0.75s linear infinite;
@@ -1037,5 +1405,15 @@ go();`;
 	/* Ensure buttons in flex containers don't shrink unnecessarily */
 	button {
 		flex-shrink: 0;
+	}
+
+	/* Improve readability of code blocks slightly */
+	code {
+		word-break: break-all;
+	}
+	pre code {
+		display: block;
+		padding: 0.5rem;
+		border-radius: 0.25rem;
 	}
 </style>

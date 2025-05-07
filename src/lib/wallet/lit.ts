@@ -6,8 +6,6 @@ import type { SessionSigs, AuthCallbackParams, GetSessionSigsProps, AuthSig, Sig
 import {
     AUTH_METHOD_TYPE_PASSKEY,
     formatSignatureForEIP1271,
-    FACTORY_ADDRESS,
-    FCL_VERIFIER_ADDRESS,
     EIP1271_MAGIC_VALUE,
     type StoredPasskeyData,
     type AuthenticatorAssertionResponse
@@ -404,88 +402,68 @@ export const addPermittedLitAction = async (
     }
 };
 
-// --- NEW: Gnosis Passkey Verification Lit Action & Session Sig Function ---
+// Define a default external RPC URL for Gnosis Chain
+const DEFAULT_GNOSIS_RPC_URL = 'https://rpc.gnosischain.com';
 
 /**
  * Lit Action code for verifying a passkey signature against Gnosis Chain contracts.
- * This action attempts to verify against a deployed EIP-1271 proxy first,
- * then falls back to the SafeWebAuthnSignerFactory if needed.
  */
 export const gnosisPasskeyVerifyActionCode = `
-  const go = async () => {
-    console.log("[LitAction_GnosisVerify] Starting. Using provider.call via getRpcUrl('xdai'). Checking result with startsWith. PROXY ONLY.");
-    
-    if (typeof ethers === 'undefined') {
-      throw new Error("[LitAction_GnosisVerify] ethers.js is not available globally!");
-    }
-    if (typeof Lit === 'undefined' || typeof Lit.Actions === 'undefined' || typeof Lit.Actions.getRpcUrl === 'undefined' || typeof Lit.Actions.setResponse === 'undefined') {
-      throw new Error("[LitAction_GnosisVerify] Lit.Actions or required functions not available.");
-    }
+const go = async () => {
+  if (typeof ethers === 'undefined') { throw new Error("ethers.js unavailable"); }
+  if (typeof Lit === 'undefined' || !Lit.Actions || !Lit.Actions.getRpcUrl || !Lit.Actions.setResponse) { throw new Error("Lit.Actions unavailable"); }
 
-    // Factory fallback removed - proxy address is now mandatory for this action to succeed.
-    const nullAddress = '0x0000000000000000000000000000000000000000';
-    if (!messageHash || !formattedSignature || !publicKeyX || !publicKeyY || !JS_EIP1271_MAGIC_VALUE || typeof authMethodType === 'undefined' || !authMethodId || !passkeySignerContractAddress || passkeySignerContractAddress.toLowerCase() === nullAddress) {
-        throw new Error("[LitAction_GnosisVerify] A required jsParam (including a non-null passkeySignerContractAddress) is missing.");
+  const nullAddress = '0x0000000000000000000000000000000000000000';
+  // Check for jsParams strictly used in THIS action. External RPC URL is now mandatory if internal fails.
+  if (!messageHash || !formattedSignature || !JS_EIP1271_MAGIC_VALUE || !passkeySignerContractAddress || passkeySignerContractAddress.toLowerCase() === nullAddress || !externalGnosisRpcUrl) {
+    throw new Error("Missing required jsParams (messageHash, formattedSignature, JS_EIP1271_MAGIC_VALUE, valid passkeySignerContractAddress, or externalGnosisRpcUrl).");
+  }
+
+  let verified = false;
+  let rpcUrlToUse = null;
+
+  try {
+    const potentialInternalRpcUrl = await Lit.Actions.getRpcUrl({ chain: 'xdai' });
+    if (potentialInternalRpcUrl && typeof potentialInternalRpcUrl === 'string' && potentialInternalRpcUrl.startsWith('http')) {
+      rpcUrlToUse = potentialInternalRpcUrl;
     }
+  } catch (e) { /* Internal RPC fetch failed or returned invalid, will try external */ }
 
-    let verificationResult;
-    let verified = false;
-    const chainIdentifiersToTry = ['xdai', 'gnosis'];
-    const publicGnosisRpcUrl = 'https://rpc.gnosischain.com';
-    let rpcUrl = null;
-
-    // Logic to get RPC URL (try 'xdai', 'gnosis', then fallback)
-    for (const chainName of chainIdentifiersToTry) {
-        try {
-            const potentialRpcUrl = await Lit.Actions.getRpcUrl({ chain: chainName });
-            if (potentialRpcUrl && typeof potentialRpcUrl === 'string' && potentialRpcUrl.startsWith('http')) {
-                rpcUrl = potentialRpcUrl;
-                console.log("[LitAction_GnosisVerify] Successfully obtained RPC URL from Lit.Actions.getRpcUrl('" + chainName + "'):", rpcUrl);
-                break; 
-            }
-        } catch (e) { /* ignore errors and try next or fallback */ }
-    }
-    if (!rpcUrl) {
-        rpcUrl = publicGnosisRpcUrl;
-        console.log("[LitAction_GnosisVerify] Using public fallback RPC URL:", rpcUrl);
-    }
-    
-    const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
-    const magicValueLower = JS_EIP1271_MAGIC_VALUE.toLowerCase();
-
-    // --- Proxy Check --- 
-    // Note: We already checked passkeySignerContractAddress is non-null above
-    console.log("[LitAction_GnosisVerify] Attempting PROXY verification:", passkeySignerContractAddress);
-    try {
-        const proxyAbi = [ { "inputs": [{ "internalType": "bytes32", "name": "_hash", "type": "bytes32" }, { "internalType": "bytes", "name": "_signature", "type": "bytes" }], "name": "isValidSignature", "outputs": [{ "internalType": "bytes4", "name": "magicValue", "type": "bytes4" }], "stateMutability": "view", "type": "function" } ];
-        const iface = new ethers.utils.Interface(proxyAbi);
-        const calldata = iface.encodeFunctionData("isValidSignature", [messageHash, formattedSignature]);
-        
-        verificationResult = await provider.call({ to: passkeySignerContractAddress, data: calldata });
-        console.log("[LitAction_GnosisVerify] Proxy provider.call result:", verificationResult);
-
-        // ***** USE startsWith *****
-        if (verificationResult && typeof verificationResult === 'string' && verificationResult.toLowerCase().startsWith(magicValueLower)) {
-            verified = true;
-            console.log("[LitAction_GnosisVerify] Proxy verification successful (startsWith).");
-        }
-    } catch (e) {
-        console.error("[LitAction_GnosisVerify] Error during proxy provider.call:", e.message || JSON.stringify(e));
-        // No need to set verified = false, it starts as false
-    }
-    
-    // --- Factory Check Removed --- 
-
-    if (verified) {
-        console.log("[LitAction_GnosisVerify] Proxy verification complete: SUCCESS. RPC Used: " + rpcUrl);
-        Lit.Actions.setResponse({ response: JSON.stringify({ verified: true, finalResultFromAction: verificationResult, rpcUsed: rpcUrl }) });
+  if (!rpcUrlToUse) {
+    if (typeof externalGnosisRpcUrl === 'string' && externalGnosisRpcUrl.startsWith('http')) {
+        rpcUrlToUse = externalGnosisRpcUrl;
     } else {
-        console.error("[LitAction_GnosisVerify] Proxy verification complete: FAILED. RPC Used: " + rpcUrl);
-        // Include last verificationResult for debugging failed comparisons
-        throw new Error("Passkey sig verify failed via Proxy. Proxy address: " + passkeySignerContractAddress + ". RPC: " + rpcUrl + ". Last verification result: " + verificationResult + ". Error logged above if call failed."); 
+        throw new Error("Invalid or missing externalGnosisRpcUrl jsParam, and internal Lit RPC for 'xdai' failed or was invalid.");
     }
-  };
-  go(); 
+  }
+  
+  const provider = new ethers.providers.JsonRpcProvider(rpcUrlToUse);
+  const magicValueLower = JS_EIP1271_MAGIC_VALUE.toLowerCase();
+  let contractCallResult;
+
+  try {
+    const proxyAbi = [{"inputs":[{"internalType":"bytes32","name":"_hash","type":"bytes32"},{"internalType":"bytes","name":"_signature","type":"bytes"}],"name":"isValidSignature","outputs":[{"internalType":"bytes4","name":"magicValue","type":"bytes4"}],"stateMutability":"view","type":"function"}];
+    const iface = new ethers.utils.Interface(proxyAbi);
+    const calldata = iface.encodeFunctionData("isValidSignature", [messageHash, formattedSignature]);
+    
+    contractCallResult = await provider.call({ to: passkeySignerContractAddress, data: calldata });
+
+    if (contractCallResult && typeof contractCallResult === 'string' && contractCallResult.toLowerCase().startsWith(magicValueLower)) {
+      verified = true;
+    }
+  } catch (e) { /* Verification failed */ }
+  
+  if (verified) {
+    Lit.Actions.setResponse({ response: JSON.stringify({ verified: true }) });
+  } else {
+    let errMsg = "Gnosis proxy verification failed. Proxy: " + passkeySignerContractAddress + ". RPC: " + rpcUrlToUse;
+    if (contractCallResult !== undefined) { 
+        errMsg += ". Call result: " + contractCallResult;
+    }
+    throw new Error(errMsg); 
+  }
+};
+go();
 `;
 
 /**
@@ -527,22 +505,15 @@ export const getSessionSigsWithGnosisPasskeyVerification = async (
         const formattedSignature = formatSignatureForEIP1271(assertionResponse);
         console.log('Formatted signature for EIP-1271:', formattedSignature);
 
-        // 3. Prepare jsParams for the Lit Action
+        // 3. Prepare jsParams for the Lit Action (minimized set)
         const jsParams = {
             messageHash: messageHash,
             formattedSignature: formattedSignature,
             passkeySignerContractAddress: passkeyData.signerContractAddress || '0x0000000000000000000000000000000000000000',
-            publicKeyX: passkeyData.pubkeyCoordinates.x,
-            publicKeyY: passkeyData.pubkeyCoordinates.y,
-            gnosisRpcUrl: 'https://rpc.gnosischain.com',
-            JS_FCL_VERIFIER_ADDRESS: FCL_VERIFIER_ADDRESS,
-            JS_FACTORY_ADDRESS: FACTORY_ADDRESS,
             JS_EIP1271_MAGIC_VALUE: EIP1271_MAGIC_VALUE,
-            // ADD authMethodType and authMethodId from passkeyData
-            authMethodType: AUTH_METHOD_TYPE_PASSKEY, // Exported constant from passkeySigner
-            authMethodId: passkeyData.authMethodId // From stored passkey data
+            externalGnosisRpcUrl: DEFAULT_GNOSIS_RPC_URL // Pass the default external RPC URL
         };
-        console.log('jsParams for Gnosis Passkey Verification Lit Action:', jsParams);
+        console.log('jsParams for Gnosis Passkey Verification Lit Action (minimized):', jsParams);
 
         // 4. Encode Lit Action code
         let encodedLitActionCode;

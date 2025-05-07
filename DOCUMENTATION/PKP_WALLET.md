@@ -61,7 +61,9 @@ This effectively allows the user's passkey, anchored to their device, to control
         *   Takes the passkey assertion response.
         *   Formats the signature using `formatSignatureForEIP1271`.
         *   Prepares `jsParams` containing the signature, message hash, pubkey coords, contract addresses, and critically, the passkey's `authMethodType` and `authMethodId`.
-        *   Calls `litNodeClient.getLitActionSessionSigs`. This method implicitly tells the Lit nodes to authenticate using a registered Lit Action (Type 2). The nodes identify the correct action using the IPFS CID of the `gnosisPasskeyVerifyActionCode` string (which must match a CID registered via `addPermittedLitAction`). The `jsParams` are passed securely to the executing action.
+        *   Calls `litNodeClient.getLitActionSessionSigs`. The Lit Action's code (`gnosisPasskeyVerifyActionCode` string) is Base64 encoded and passed directly in this call.
+        *   The Lit nodes receive this code string, calculate its IPFS CID on the fly, and verify that this calculated CID matches one of the CIDs registered as a permitted Type 2 auth method for the PKP.
+        *   The `jsParams` are passed securely to the executing action if the CID matches.
     *   `signWithPKP`: Uses `SessionSigs` and `litNodeClient.pkpSign` to sign a message hash with the PKP.
     *   `executeLitAction`: Uses `SessionSigs` and `litNodeClient.executeJs` to execute arbitrary JS code using the PKP context.
 
@@ -118,8 +120,13 @@ This effectively allows the user's passkey, anchored to their device, to control
      - Creates a challenge message (`Sign in...`) and hashes it (`keccak256`).
      - Prompts user for passkey signature via `navigator.credentials.get`, using the hashed message as the `challenge` and the stored `rawId`.
      - Formats the signature from the `assertionResponse` using `formatSignatureForEIP1271`.
-     - Calls `getSessionSigsWithGnosisPasskeyVerification`, passing the PKP public key, original message, formatted signature, passkey data (including `authMethodId`, `AUTH_METHOD_TYPE_PASSKEY`, coords, proxy address), and chain ('xdai/gnosis').
-     - `getSessionSigsWithGnosisPasskeyVerification` calls `litNodeClient.getLitActionSessionSigs({ pkpPublicKey, litActionCode: btoa(gnosisPasskeyVerifyActionCode), jsParams: {...} })`. **Crucially, this relies on the IPFS CID of the provided code having been previously registered as a Type 2 auth method.** The `jsParams` securely pass all necessary data for verification *inside* the action.
+     - Calls `getSessionSigsWithGnosisPasskeyVerification`, passing the PKP public key, original message, formatted signature, passkey data (including `authMethodId`, `AUTH_METHOD_TYPE_PASSKEY`, coords, proxy address), and chain ('ethereum' or 'gnosis').
+     - `getSessionSigsWithGnosisPasskeyVerification` calls `litNodeClient.getLitActionSessionSigs({ pkpPublicKey, litActionCode: btoa(gnosisPasskeyVerifyActionCode), jsParams: {...} })`.
+     - **Mechanism:** The full JavaScript code of `gnosisPasskeyVerifyActionCode` is Base64 encoded and sent directly to the Lit nodes. The nodes then:
+        1. Decode the provided code string.
+        2. Calculate its IPFS CID.
+        3. Check if this dynamically calculated CID is registered as a permitted Type 2 auth method for the target PKP.
+        4. If the CID is permitted, the `jsParams` are securely passed, and the action code is executed.
      - The Lit Nodes execute the `gnosisPasskeyVerifyActionCode` (details in Component #5 above).
      - If the action calls `Lit.Actions.setResponse({ verified: true, ...})`, the nodes generate and return `SessionSigs`.
      - Frontend stores `SessionSigs` and sets `sessionAuthMethod = 'gnosis-passkey'`.

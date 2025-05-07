@@ -6,7 +6,7 @@ alwaysApply: true
 This repository uses the following techstack
 
 - bun
-- SvelteKit (use svelte5 syntax)
+- SvelteKit (use svelte5 syntax - make sure to use the correct comment syntax)
 - Tailwind (always use inline syntax)
 - Drizzle as ORM-Adapter to our neon postgres database
 - BetterAuth for everything Auth / Account related
