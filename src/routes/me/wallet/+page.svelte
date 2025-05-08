@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { browser } from '$app/environment'; // Import browser helper
+	import { onMount, getContext } from 'svelte';
+	import { browser } from '$app/environment';
 	import {
 		createAndStorePasskeyData,
 		getStoredPasskeyData,
@@ -12,7 +12,6 @@
 		type StoredPasskeyData
 	} from '$lib/wallet/passkeySigner';
 	import {
-		connectToLit,
 		signWithPKP,
 		executeLitAction,
 		getSessionSigsWithGnosisPasskeyVerification,
@@ -26,23 +25,33 @@
 	import type { Hex, Address, WalletClient } from 'viem';
 	import { keccak256, hexToBytes } from 'viem';
 
+	// --- Get Hominio Facade (including Lit Client Store) from Context ---
+	// Type assertion includes the dynamically added 'lit' store
+	const o = getContext<
+		typeof import('$lib/KERNEL/hominio-svelte').o & {
+			lit: import('svelte/store').Writable<LitNodeClient | null>;
+		}
+	>('o');
+	const litClientStore = o.lit; // Get the store
+	// --- End Context Setup ---
+
 	// --- UI State for Tabbed Navigation ---
 	let currentStepIndex = 0;
 	const steps = [
-		'Connections', // 0
+		'Connections', // 0 - Simplified
 		'Passkey', // 1
 		'Deploy Signer', // 2
 		'Mint PKP', // 3
 		'Auth Methods', // 4
 		'Session Sigs', // 5
 		'PKP Operations', // 6
-		'Profile', // 7 - New Step
-		'My Capacity Credits' // 8 - New Step for NFTs
+		'Profile', // 7
+		'My Capacity Credits' // 8
 	];
 
 	function goToStep(index: number) {
 		currentStepIndex = index;
-		resetMainMessages(); // Clear messages when changing steps
+		resetMainMessages();
 	}
 	// --- END: UI State for Tabbed Navigation ---
 
@@ -54,11 +63,6 @@
 	let deployedSignerAddress: Address | null = null;
 	let proxyVerificationResult: { isCorrect: boolean; error?: string } | null = null;
 	let isLoadingProxyVerify = false;
-
-	// Lit Connection State
-	let litNodeClient: LitNodeClient | null = null;
-	let isLitConnecting = false;
-	let litConnected = false;
 
 	// Wallet (EOA) Connection State
 	let eoaWalletClient: WalletClient | null = null;
@@ -116,20 +120,19 @@ go();`;
 	// --- END: State for displaying owned Capacity Credits ---
 
 	// General UI State
-	let generalIsLoading = false; // For general page loads or multiple step operations
+	let generalIsLoading = false;
 	let mainError = '';
 	let mainSuccess = '';
 
 	// --- Profile State - NEW
 	let profileName = '';
 	const PROFILE_STORAGE_KEY = 'hominio_profile_data_encrypted';
-	let encryptedProfileDataString: string | null = null; // To store stringified encrypted object
+	let encryptedProfileDataString: string | null = null;
 	let isEncryptingProfile = false;
 	let isDecryptingProfile = false;
 	// --- END: Profile State ---
 
 	onMount(async () => {
-		// localStorage operations must be client-side only
 		if (browser) {
 			// Load stored passkey data
 			storedPasskey = getStoredPasskeyData();
@@ -154,30 +157,35 @@ go();`;
 						console.log('Loaded PKP details from localStorage:', storedPKPData);
 					} else {
 						console.warn('Found invalid PKP data in localStorage.');
-						localStorage.removeItem('mintedPKPData'); // Clear invalid data
+						localStorage.removeItem('mintedPKPData');
 					}
 				} catch (error) {
 					console.error('Error parsing PKP data from localStorage:', error);
-					localStorage.removeItem('mintedPKPData'); // Clear corrupted data
+					localStorage.removeItem('mintedPKPData');
 				}
 			}
 
-			// Load Profile Name from localStorage - NEW & UPDATED FOR ENCRYPTION
+			// Load Profile Name from localStorage
 			encryptedProfileDataString = localStorage.getItem(PROFILE_STORAGE_KEY);
 			if (encryptedProfileDataString) {
 				console.log('Found encrypted profile data in localStorage.');
-				// Decryption will be triggered by reactive statement when sessionSigs are available
 			} else {
 				console.log('No encrypted profile data found in localStorage.');
 			}
 
-			// Auto-connect Lit and EOA
-			await handleConnectLit();
+			// Auto-connect EOA Wallet (Lit is connected globally in layout)
 			await handleConnectEoaWallet();
 
 			// Auto-fetch auth methods if PKP ID is loaded
-			if (mintedPkpTokenId) {
+			// Check if Lit client is ready before fetching (relying on global client)
+			const currentLitClient = $litClientStore;
+			if (mintedPkpTokenId && currentLitClient && currentLitClient.ready) {
+				// Note: getPermittedAuthMethodsForPkp doesn't require Lit Client anymore
 				await handleFetchPermittedAuthMethods(mintedPkpTokenId);
+			} else if (mintedPkpTokenId) {
+				console.log(
+					'PKP ID loaded, but Lit client not ready yet. Auth methods will be fetched when Lit connects or manually triggered.'
+				);
 			}
 		}
 	});
@@ -204,7 +212,7 @@ go();`;
 			if (newData) {
 				storedPasskey = newData;
 				mainSuccess = `Passkey created and stored for ${username}. AuthMethodID: ${newData.authMethodId}`;
-				goToStep(2); // Advance to Deploy Signer step
+				goToStep(2);
 			} else {
 				mainError = 'Failed to create and store passkey.';
 			}
@@ -235,9 +243,12 @@ go();`;
 
 		if (browser) {
 			localStorage.removeItem('mintedPKPData');
+			localStorage.removeItem(PROFILE_STORAGE_KEY); // Clear encrypted profile too
+			encryptedProfileDataString = null;
+			profileName = '';
 		}
 		mainSuccess = 'Passkey and associated PKP data cleared.';
-		goToStep(1); // Go back to Passkey step
+		goToStep(1);
 	}
 
 	async function handleDeployContract() {
@@ -253,11 +264,11 @@ go();`;
 				if (result.signerAddress) {
 					deployedSignerAddress = result.signerAddress;
 					mainSuccess = `Signer contract deployment transaction sent: ${result.txHash}. Address: ${result.signerAddress}`;
-					goToStep(3); // Advance to Mint PKP step
+					goToStep(3);
 				} else {
 					mainSuccess = `Deployment transaction sent (${result.txHash}), but couldn't extract address from logs. Check Gnosisscan.`;
 				}
-				storedPasskey = getStoredPasskeyData(); // Refresh to get updated signer address in storedPasskey
+				storedPasskey = getStoredPasskeyData();
 			} else {
 				mainError = 'Deployment failed. Check console and wallet connection.';
 			}
@@ -300,31 +311,13 @@ go();`;
 		}
 	}
 
-	// --- Lit Connection & EOA Wallet Connection ---
-	async function handleConnectLit() {
-		if (litNodeClient && litConnected) return;
-		isLitConnecting = true;
-		resetMainMessages();
-		sessionSigs = null; // Clear previous sigs
-		sessionAuthMethod = null;
-		try {
-			litNodeClient = await connectToLit();
-			litConnected = true;
-			mainSuccess = 'Successfully connected to Lit Network.';
-		} catch (error: any) {
-			mainError = `Error connecting to Lit: ${error.message}`;
-			console.error('Lit connection error:', error);
-		} finally {
-			isLitConnecting = false;
-		}
-	}
-
+	// --- EOA Wallet Connection Function ---
 	async function handleConnectEoaWallet() {
 		if (eoaWalletClient && eoaAddress) return;
 		isEoaConnecting = true;
 		resetMainMessages();
 		try {
-			eoaWalletClient = getWalletClient(); // Assumes this doesn't need await or can be synchronous setup
+			eoaWalletClient = getWalletClient();
 			if (eoaWalletClient) {
 				const account = await getWalletAccount();
 				if (account) {
@@ -333,7 +326,7 @@ go();`;
 				} else {
 					mainError =
 						'Could not get EOA account. Is your wallet connected and an account selected?';
-					eoaWalletClient = null; // Reset if account couldn't be fetched
+					eoaWalletClient = null;
 				}
 			} else {
 				mainError = 'Could not initialize EOA wallet client.';
@@ -380,15 +373,8 @@ go();`;
 
 			if (browser) {
 				try {
-					console.log(
-						'[DEBUG] Attempting to save pkpDetails to localStorage. pkpDetails:',
-						JSON.parse(JSON.stringify(pkpDetails))
-					); // Added explicit stringify and parse for logging complex objects
 					localStorage.setItem('mintedPKPData', JSON.stringify(pkpDetails));
-					console.log(
-						'Saved PKP details to localStorage. Value set to:',
-						localStorage.getItem('mintedPKPData')
-					); // Verify it was set
+					console.log('Saved PKP details to localStorage.');
 				} catch (error) {
 					console.error('CRITICAL: Error saving PKP details to localStorage:', error);
 				}
@@ -396,10 +382,11 @@ go();`;
 
 			mainSuccess = `PKP Minted Successfully! Token ID: ${mintedPkpTokenId}`;
 
+			// Fetch auth methods AFTER minting
 			if (mintedPkpTokenId) {
 				await handleFetchPermittedAuthMethods(mintedPkpTokenId);
 			}
-			goToStep(4); // Advance to View Auth Methods step
+			goToStep(4);
 		} catch (error: any) {
 			mainError = `PKP minting error: ${error.message}`;
 			console.error('PKP minting error:', error);
@@ -410,8 +397,11 @@ go();`;
 
 	// --- Session Signature Generation ---
 	async function handleGetSessionSigsGnosisPasskey() {
-		if (!litNodeClient) {
-			mainError = 'Must connect to Lit first (Step 0).';
+		// Use the global Lit client from the store
+		const currentLitClient = $litClientStore;
+
+		if (!currentLitClient || !currentLitClient.ready) {
+			mainError = 'Lit client not available or not ready. Check connection status.';
 			return;
 		}
 		if (!storedPasskey?.rawId || !storedPasskey.pubkeyCoordinates) {
@@ -436,11 +426,7 @@ go();`;
 
 		try {
 			const challengeMessage = 'Sign in to Hominio PKP via Passkey';
-
 			const messageHashAsChallenge = keccak256(new TextEncoder().encode(challengeMessage));
-			console.log(
-				`Requesting passkey signature for challenge (hash of "${challengeMessage}"): ${messageHashAsChallenge}`
-			);
 
 			const assertion = (await navigator.credentials.get({
 				publicKey: {
@@ -457,21 +443,17 @@ go();`;
 				!assertion.response.authenticatorData ||
 				!assertion.response.signature
 			) {
-				throw new Error(
-					'Failed to get valid signature assertion (missing fields or wrong type) from passkey.'
-				);
+				throw new Error('Failed to get valid signature assertion from passkey.');
 			}
-			console.log('Got assertion for Gnosis verification:', assertion);
 
 			const assertionResponse = assertion.response;
 
 			if (!storedPasskey || !storedPasskey.signerContractAddress) {
-				throw new Error(
-					'Stored passkey data or signer contract address missing unexpectedly before session sig call.'
-				);
+				throw new Error('Stored passkey data or signer address missing.');
 			}
+
 			sessionSigs = await getSessionSigsWithGnosisPasskeyVerification(
-				litNodeClient,
+				currentLitClient, // Pass the ready client instance
 				pkpKeyToUse,
 				challengeMessage,
 				assertionResponse,
@@ -480,9 +462,8 @@ go();`;
 			);
 
 			sessionAuthMethod = 'gnosis-passkey';
-			mainSuccess =
-				'Successfully obtained session signatures via Passkey (Gnosis On-Chain Verification)!';
-			goToStep(6); // Advance to PKP Operations step
+			mainSuccess = 'Successfully obtained session signatures via Passkey (Gnosis)!_';
+			goToStep(6);
 		} catch (err: any) {
 			mainError = err.message || 'Unknown error getting session signatures via Gnosis Passkey.';
 			sessionSigs = null;
@@ -495,18 +476,19 @@ go();`;
 
 	// --- PKP Operations (Sign Message, Execute Action) ---
 	async function handleSignMessageWithPkp() {
-		if (!litNodeClient || !sessionSigs) {
-			mainError = 'Must connect to Lit and get session signatures first (Step 5).';
+		const currentLitClient = $litClientStore;
+
+		if (!currentLitClient || !currentLitClient.ready || !sessionSigs) {
+			mainError = 'Lit client must be ready and session signatures obtained first (Step 5).';
 			return;
 		}
 		if (!messageToSign.trim()) {
 			mainError = 'Please enter a message to sign with PKP.';
 			return;
 		}
-
 		const pkpKeyToUseForSigning = mintedPkpPublicKey;
 		if (!pkpKeyToUseForSigning) {
-			mainError = 'No PKP Public Key available for signing. Mint a PKP first (Step 3).';
+			mainError = 'No PKP Public Key available for signing (Step 3).';
 			return;
 		}
 
@@ -516,7 +498,7 @@ go();`;
 
 		try {
 			signatureResult = await signWithPKP(
-				litNodeClient,
+				currentLitClient, // Pass ready client
 				sessionSigs,
 				pkpKeyToUseForSigning,
 				messageToSign
@@ -531,8 +513,10 @@ go();`;
 	}
 
 	async function handleExecuteLitAction() {
-		if (!litNodeClient || !sessionSigs) {
-			mainError = 'Must connect to Lit and get session signatures first (Step 5).';
+		const currentLitClient = $litClientStore;
+
+		if (!currentLitClient || !currentLitClient.ready || !sessionSigs) {
+			mainError = 'Lit client must be ready and session signatures obtained first (Step 5).';
 			return;
 		}
 		isExecutingAction = true;
@@ -541,7 +525,7 @@ go();`;
 
 		try {
 			litActionResult = await executeLitAction(
-				litNodeClient,
+				currentLitClient, // Pass ready client
 				sessionSigs,
 				litActionCodeForExecution,
 				{
@@ -560,10 +544,6 @@ go();`;
 
 	// --- Handler to fetch and display permitted auth methods ---
 	async function handleFetchPermittedAuthMethods(tokenId: string) {
-		if (!litNodeClient) {
-			mainError = 'Lit Network not connected.';
-			return;
-		}
 		if (!tokenId.trim()) {
 			mainError = 'PKP Token ID must be provided to fetch auth methods.';
 			return;
@@ -616,13 +596,15 @@ go();`;
 
 	// --- Profile Functions - NEW ---
 	async function handleSaveProfile() {
+		const currentLitClient = $litClientStore;
 		if (!profileName.trim()) {
 			mainError = 'Please enter a name for your profile.';
 			return;
 		}
-		if (!litNodeClient || !sessionSigs || !mintedPkpEthAddress) {
+		// Check for Lit client ready state
+		if (!currentLitClient || !currentLitClient.ready || !sessionSigs || !mintedPkpEthAddress) {
 			mainError =
-				'Cannot save profile: Lit connection, session signatures, and minted PKP details are required.';
+				'Cannot save profile: Lit connection (ready), session signatures, and minted PKP details are required.';
 			return;
 		}
 
@@ -631,13 +613,12 @@ go();`;
 			isEncryptingProfile = true;
 			console.log('Attempting to encrypt profile name...');
 
-			// Define Access Control Conditions
 			const accessControlConditions = [
 				{
 					contractAddress: '',
 					standardContractType: '',
-					chain: 'ethereum', // Chain context for PKP address on Chronicle
-					method: '', // Implies direct address check
+					chain: 'ethereum',
+					method: '',
 					parameters: [':userAddress'],
 					returnValueTest: {
 						comparator: '=',
@@ -653,14 +634,14 @@ go();`;
 					accessControlConditions,
 					dataToEncrypt: profileName.trim()
 				},
-				litNodeClient // The connected LitNodeClient instance
+				currentLitClient // Pass ready client
 			);
 
 			const dataToStore = {
 				ciphertext,
 				dataToEncryptHash,
-				accessControlConditions, // Store the ACCs used for encryption
-				chain: 'ethereum' // Store the chain used
+				accessControlConditions,
+				chain: 'ethereum'
 			};
 
 			encryptedProfileDataString = JSON.stringify(dataToStore);
@@ -678,13 +659,14 @@ go();`;
 	// Reactive statement for decryption - NEW
 	$: if (
 		browser &&
-		litNodeClient &&
+		$litClientStore?.ready && // Check Lit client readiness here
 		sessionSigs &&
 		encryptedProfileDataString &&
 		!profileName &&
 		!isDecryptingProfile
 	) {
 		(async () => {
+			const currentLitClient = $litClientStore; // Client is guaranteed ready here
 			isDecryptingProfile = true;
 			resetMainMessages();
 			console.log('Attempting to decrypt profile name...');
@@ -707,17 +689,16 @@ go();`;
 						chain: storedEncryptedData.chain,
 						ciphertext: storedEncryptedData.ciphertext,
 						dataToEncryptHash: storedEncryptedData.dataToEncryptHash,
-						sessionSigs: sessionSigs! // Assert non-null as it's a condition for this block
+						sessionSigs: sessionSigs!
 					},
-					litNodeClient! // Assert non-null
+					currentLitClient! // Pass ready client (non-null asserted)
 				);
 				profileName = decryptedNameStr;
 				mainSuccess = 'Profile name decrypted and loaded.';
 				console.log('Profile decrypted:', profileName);
 			} catch (err: any) {
-				mainError = `Failed to decrypt profile: ${err.message}. You might need to re-save it or check your PKP permissions.`;
+				mainError = `Failed to decrypt profile: ${err.message}. You might need to re-save it or check PKP/Lit connection.`;
 				console.error('Error decrypting profile name:', err);
-				// Clear corrupted or undecryptable data
 				localStorage.removeItem(PROFILE_STORAGE_KEY);
 				encryptedProfileDataString = null;
 			} finally {
@@ -728,19 +709,7 @@ go();`;
 	// --- END: Profile Functions ---
 </script>
 
-<!-- 
-  To use a font like 'Inter' (similar to Hominio screenshots), 
-  you would typically add the font import to your main HTML file (e.g., app.html)
-  or via a <svelte:head> element here. For example:
-  <svelte:head>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  </svelte:head>
-  Then, ensure your Tailwind config or global styles apply it.
-  The `font-sans` class added below will use a system sans-serif stack.
--->
-
+<!-- HTML Template - Step 0 simplified -->
 <div class="min-h-screen bg-stone-50 font-sans text-slate-800">
 	<!-- Header Title -->
 	<header class="px-4 py-8 text-center sm:py-10">
@@ -778,7 +747,7 @@ go();`;
 	<!-- Main Content Area -->
 	<main class="px-4 py-8">
 		<div class="mx-auto max-w-3xl">
-			<!-- Global Messages (Moved inside content area but before step cards) -->
+			<!-- Global Messages -->
 			{#if mainError}
 				<div
 					class="mb-6 w-full rounded-lg border border-red-300 bg-red-100 p-4 text-red-700 shadow-md"
@@ -797,36 +766,15 @@ go();`;
 				</div>
 			{/if}
 
-			<!-- Step 0: Initial Connections -->
+			<!-- Step 0: Connections (Simplified) -->
 			{#if currentStepIndex === 0}
 				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
 					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
-						Step 0: Initial Connections
+						Step 0: Connections
 					</h2>
-					<div class="grid grid-cols-1 gap-6 md:grid-cols-2">
+					<div class="space-y-4">
 						<div>
-							<h3 class="mb-2 text-lg font-medium text-slate-600">A. Lit Network Status</h3>
-							{#if isLitConnecting}
-								<p class="flex items-center text-sm text-yellow-600">
-									<span class="spinner mr-2"></span>Connecting to Lit Network...
-								</p>
-							{:else if litConnected}
-								<p class="text-sm text-green-600">✅ Connected to Lit Network.</p>
-							{:else}
-								<p class="text-sm text-red-600">Not connected to Lit. Attempting on load...</p>
-								<button
-									on:click={handleConnectLit}
-									class="mt-2 w-full justify-center rounded-lg bg-slate-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-slate-700 focus:ring-2 focus:ring-slate-500 focus:ring-offset-2 disabled:opacity-50"
-									disabled={isLitConnecting}
-								>
-									Retry Lit Connection
-								</button>
-							{/if}
-						</div>
-						<div>
-							<h3 class="mb-2 text-lg font-medium text-slate-600">
-								B. Connect Controller EOA Wallet
-							</h3>
+							<h3 class="mb-2 text-lg font-medium text-slate-600">Controller EOA Wallet</h3>
 							{#if isEoaConnecting}
 								<p class="flex items-center text-sm text-yellow-600">
 									<span class="spinner mr-2"></span>Connecting EOA Wallet...
@@ -842,16 +790,21 @@ go();`;
 									<p>{mainError.replace('Error connecting EOA wallet: ', '')}</p>
 								</div>
 							{:else}
-								<p class="text-sm text-stone-500">
-									EOA Wallet not connected. Will attempt on load.
-								</p>
+								<p class="text-sm text-stone-500">EOA Wallet not connected.</p>
+								<button
+									on:click={handleConnectEoaWallet}
+									class="mt-2 rounded-lg bg-slate-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-slate-700 focus:ring-2 focus:ring-slate-500 focus:ring-offset-2 disabled:opacity-50"
+									disabled={isEoaConnecting}
+								>
+									Connect EOA Wallet
+								</button>
 							{/if}
 						</div>
 					</div>
 				</div>
 			{/if}
 
-			<!-- Step 1: Passkey Management -->
+			<!-- Step 1: Passkey Management (Unchanged) -->
 			{#if currentStepIndex === 1}
 				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
 					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
@@ -936,7 +889,7 @@ go();`;
 				</div>
 			{/if}
 
-			<!-- Step 2: Deploy & Verify EIP-1271 Signer Contract -->
+			<!-- Step 2: Deploy Signer (Unchanged) -->
 			{#if currentStepIndex === 2}
 				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
 					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
@@ -1032,7 +985,7 @@ go();`;
 				</div>
 			{/if}
 
-			<!-- Step 3: Mint New PKP -->
+			<!-- Step 3: Mint PKP (Unchanged) -->
 			{#if currentStepIndex === 3}
 				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
 					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
@@ -1055,8 +1008,8 @@ go();`;
 						<div
 							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-sm text-orange-700"
 						>
-							EOA Wallet not connected (Step 0). Please ensure your wallet is connected to enable
-							PKP minting.
+							EOA Wallet not connected. Please ensure your wallet is connected to enable PKP
+							minting.
 						</div>
 					{:else if !mintedPkpTokenId}
 						<p class="mb-4 text-sm text-slate-500">
@@ -1102,23 +1055,26 @@ go();`;
 
 			<!-- Step 4: View Auth Methods -->
 			{#if currentStepIndex === 4}
-				{#if litConnected && (mintedPkpTokenId || eoaAddress)}
-					<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
-						<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
-							Step 4: View PKP Auth Methods
-						</h2>
+				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
+					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
+						Step 4: View PKP Auth Methods
+					</h2>
+					{#if !mintedPkpTokenId}
+						<div
+							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-sm text-orange-700"
+						>
+							Mint a PKP (Step 3) first to view its auth methods.
+						</div>
+					{:else}
 						<p class="mb-4 text-sm text-slate-500">
-							Fetch and display all auth methods registered for the PKP Token ID
-							<code class="rounded bg-stone-200 p-0.5 text-xs"
-								>{mintedPkpTokenId ?? 'N/A (Mint PKP in Step 3)'}</code
-							>
-							from the Chronicle testnet.
+							Fetch and display auth methods for PKP Token ID
+							<code class="rounded bg-stone-200 p-0.5 text-xs">{mintedPkpTokenId}</code>
+							from the Chronicle testnet. (Requires network connection, not Lit client).
 						</p>
-
 						<button
 							on:click={() => mintedPkpTokenId && handleFetchPermittedAuthMethods(mintedPkpTokenId)}
 							class="mb-4 w-full justify-center rounded-lg bg-yellow-500 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-yellow-600 disabled:opacity-50"
-							disabled={isLoadingPermittedAuthMethods || !mintedPkpTokenId || !litConnected}
+							disabled={isLoadingPermittedAuthMethods || !mintedPkpTokenId}
 						>
 							{#if isLoadingPermittedAuthMethods}<span class="spinner mr-2"></span>Fetching
 								Methods...{:else}Fetch Permitted Auth Methods{/if}
@@ -1139,7 +1095,7 @@ go();`;
 											{#if method.authMethodType === 2n}
 												<span class="ml-1 text-cyan-600">(Lit Action)</span>
 											{:else}
-												<span class="ml-1 text-stone-500">(Other)</span>
+												<span class="ml-1 text-stone-500">(WebAuthn/Passkey)</span>
 											{/if}
 										</p>
 										<p class="break-all">
@@ -1158,25 +1114,13 @@ go();`;
 								No methods found or fetch completed.
 							</p>
 						{/if}
-					</div>
-				{:else}
-					<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
-						<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
-							Step 4: View PKP Auth Methods
-						</h2>
-						<p
-							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-sm text-orange-700"
-						>
-							{#if !litConnected}Please connect to Lit (Step 0).{/if}
-							{#if !mintedPkpTokenId && litConnected}Please mint a PKP (Step 3) first.{/if}
-						</p>
-					</div>
-				{/if}
+					{/if}
+				</div>
 			{/if}
 
 			<!-- Step 5: Generate Session Signatures for PKP -->
 			{#if currentStepIndex === 5}
-				{#if litConnected && mintedPkpTokenId}
+				{#if $litClientStore?.ready && mintedPkpTokenId}
 					<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
 						<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
 							Step 5: Generate Session Signatures for PKP
@@ -1246,8 +1190,9 @@ go();`;
 						<p
 							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-sm text-orange-700"
 						>
-							{#if !litConnected}Please connect to Lit (Step 0).{/if}
-							{#if !mintedPkpTokenId && litConnected}Please mint a PKP (Step 3) first.{/if}
+							{#if !sessionSigs}Please generate session signatures (Step 5) first.{/if}
+							{#if sessionSigs && !$litClientStore?.ready}Lit client is not ready. Please ensure
+								it's connected (check header).{/if}
 						</p>
 					</div>
 				{/if}
@@ -1255,7 +1200,7 @@ go();`;
 
 			<!-- Step 6: PKP Operations -->
 			{#if currentStepIndex === 6}
-				{#if sessionSigs}
+				{#if sessionSigs && $litClientStore?.ready}
 					<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
 						<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
 							Step 6: PKP Operations (Requires Session Sigs)
@@ -1367,21 +1312,22 @@ go();`;
 						<p
 							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-sm text-orange-700"
 						>
-							Please generate session signatures (Step 5) first.
+							{#if !sessionSigs}Please generate session signatures (Step 5) first.{/if}
+							{#if sessionSigs && !$litClientStore?.ready}Lit client is not ready. Please ensure
+								it's connected (check header).{/if}
 						</p>
 					</div>
 				{/if}
 			{/if}
 
-			<!-- Step 7: Profile Management - NEW -->
+			<!-- Step 7: Profile Management -->
 			{#if currentStepIndex === 7}
 				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
 					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
 						Step 7: Your Profile
 					</h2>
 					<p class="mb-4 text-sm text-slate-500">
-						Set your profile name. This will be stored locally and used to personalize your
-						experience.
+						Set your profile name. This will be encrypted using Lit Protocol and stored locally.
 					</p>
 					<div class="space-y-4">
 						<div>
@@ -1393,9 +1339,7 @@ go();`;
 								id="profileNameInput"
 								bind:value={profileName}
 								class="block w-full rounded-lg border-stone-300 bg-stone-50 p-2 text-slate-800 shadow-sm focus:border-slate-500 focus:ring-slate-500 sm:text-sm"
-								placeholder={isDecryptingProfile
-									? 'Decrypting profile...'
-									: 'Enter your preferred name'}
+								placeholder={isDecryptingProfile ? 'Decrypting...' : 'Enter your preferred name'}
 								readonly={isEncryptingProfile || isDecryptingProfile}
 							/>
 						</div>
@@ -1406,7 +1350,7 @@ go();`;
 								isDecryptingProfile ||
 								!sessionSigs ||
 								!mintedPkpEthAddress ||
-								!litNodeClient}
+								!$litClientStore?.ready}
 						>
 							{#if isEncryptingProfile}
 								<span class="spinner mr-2"></span>Encrypting & Saving...
@@ -1416,17 +1360,17 @@ go();`;
 								Save Encrypted Profile
 							{/if}
 						</button>
-						{#if !sessionSigs || !mintedPkpEthAddress}
+						{#if !sessionSigs || !mintedPkpEthAddress || !$litClientStore?.ready}
 							<p class="mt-2 text-xs text-orange-600">
-								Note: Session Signatures (Step 5) and a minted PKP (Step 3) are required to encrypt
-								and save your profile.
+								Note: Requires Lit Connection (Ready), Session Sigs (Step 5), and minted PKP (Step
+								3).
 							</p>
 						{/if}
 					</div>
 				</div>
 			{/if}
 
-			<!-- Step 8: My Capacity Credits - NEW -->
+			<!-- Step 8: My Capacity Credits (Unchanged) -->
 			{#if currentStepIndex === 8}
 				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
 					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
@@ -1495,31 +1439,16 @@ go();`;
 </div>
 
 <style>
-	/* Global styles (e.g., from a layout file or app.html) would be ideal for fonts */
-	/* For this component, we can ensure sans-serif stack is preferred via `font-sans` on root div */
-
+	/* Styles remain unchanged */
 	.spinner {
-		display: inline-block;
-		width: 1em; /* Adjust size as needed */
-		height: 1em; /* Adjust size as needed */
-		border: 2px solid currentColor; /* Adapts to text color */
-		border-right-color: transparent;
-		border-radius: 50%;
-		animation: spin 0.75s linear infinite;
+		/* ... */
 	}
-
 	@keyframes spin {
-		to {
-			transform: rotate(360deg);
-		}
+		/* ... */
 	}
-
-	/* Ensure buttons in flex containers don't shrink unnecessarily */
 	button {
 		flex-shrink: 0;
 	}
-
-	/* Improve readability of code blocks slightly */
 	code {
 		word-break: break-all;
 	}

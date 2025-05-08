@@ -1,6 +1,9 @@
 <script lang="ts">
 	import '../app.css';
 	import { onMount, onDestroy, setContext } from 'svelte';
+	import { writable, get } from 'svelte/store';
+	import type { LitNodeClient } from '@lit-protocol/lit-node-client';
+	import { initializeLitClient } from '$lib/wallet/lit-connect';
 	import { startCall, endCall } from '$lib/ultravox/callFunctions';
 	import CallInterface from '$lib/components/CallInterface.svelte';
 	import { o } from '$lib/KERNEL/hominio-svelte';
@@ -17,10 +20,19 @@
 	// Get the session store using o.authClient
 	const sessionStore = o.authClient.useSession();
 
+	// --- Lit Client Setup ---
+	// Create a Svelte store for the Lit client instance
+	const litClientStore = writable<LitNodeClient | null>(null);
+
+	// Extend the 'o' object to include the lit client store
+	// This makes $o.lit available reactively to components that get 'o' from context.
+	(o as any).lit = litClientStore;
+	// --- End Lit Client Setup ---
+
 	// Provide the session store to child components via context
 	setContext('sessionStore', sessionStore);
 
-	// Provide the entire 'o' object via context using key 'o'
+	// Provide the entire 'o' object (now including .lit store) via context using key 'o'
 	setContext('o', o);
 
 	const DEFAULT_VIBE = 'home';
@@ -160,14 +172,36 @@
 		console.log(
 			'[Layout] Mounted. HominioDB and HominioIndexing singletons initialized via import.'
 		);
+
+		// Initialize Lit Client
+		try {
+			console.log('[Layout] Initializing Lit Client...');
+			const client = await initializeLitClient();
+			litClientStore.set(client);
+			console.log('[Layout] Lit Client initialized and set in store.');
+		} catch (err: any) {
+			console.error('[Layout] Failed to initialize Lit Client:', err);
+			litClientStore.set(null); // Ensure store is null on error
+			// Optionally, set an error message in a global notification store or state here
+		}
 	});
 
 	onDestroy(async () => {
 		if (isCallActive) {
 			await handleEndCall();
 		}
-		// Optionally destroy indexing service if needed?
-		// hominioIndexing.destroy();
+
+		// Disconnect Lit Client
+		// Use get(litClientStore) to get the current value non-reactively for cleanup
+		const currentLitClient = get(litClientStore);
+		if (currentLitClient && currentLitClient.ready) {
+			try {
+				await currentLitClient.disconnect();
+				console.log('[Layout] Disconnected from Lit Network.');
+			} catch (error) {
+				console.error('[Layout] Error disconnecting from Lit Network:', error);
+			}
+		}
 	});
 
 	// --- Props ---
