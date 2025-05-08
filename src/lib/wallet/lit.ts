@@ -1,7 +1,7 @@
 import { LitNodeClient } from '@lit-protocol/lit-node-client';
 import { createSiweMessageWithRecaps, LitActionResource, LitPKPResource } from '@lit-protocol/auth-helpers';
-import { hashMessage, hexToBytes, keccak256, toBytes, createPublicClient, http } from 'viem';
-import type { Address, Hex, WalletClient, PublicClient } from 'viem';
+import { hashMessage, hexToBytes, keccak256, toBytes, createPublicClient, http, serializeTransaction } from 'viem';
+import type { Address, Hex, WalletClient, PublicClient, Signature } from 'viem';
 import type { SessionSigs, AuthCallbackParams, GetSessionSigsProps, AuthSig, SigResponse, ExecuteJsResponse } from '@lit-protocol/types';
 import {
     AUTH_METHOD_TYPE_PASSKEY,
@@ -24,6 +24,8 @@ import {
     RATE_LIMIT_NFT_CONTRACT_ADDRESS,
     RATE_LIMIT_NFT_ABI
 } from './config/index';
+// import { 준비된쿼리StringToBytes, uint8arrayToString } from '@lit-protocol/uint8arrays'; // This line is removed/commented out
+import type { TransactionSerializable } from 'viem';
 
 type LitNodeClientNetworkKey = 'datil-dev' | 'datil-test' | 'datil';
 
@@ -1042,3 +1044,81 @@ export const getOwnedCapacityCredits = async (
         throw new Error(`Failed to fetch owned Capacity Credits: ${message}`);
     }
 };
+
+/**
+ * Signs a raw Ethereum transaction object using a PKP with existing SessionSigs.
+ *
+ * @param {LitNodeClient} litNodeClient - The initialized Lit Node client.
+ * @param {SessionSigs} sessionSigs - The active session signatures authorizing PKP operations.
+ * @param {Hex} pkpPublicKey - The public key of the PKP to use for signing.
+ * @param {TransactionSerializable} unsignedTxObject - The Viem-compatible unsigned transaction object (e.g., EIP1559).
+ * @returns {Promise<Signature>} The structured signature object for viem.
+ * @throws {Error} If signing fails or any prerequisite is missing.
+ */
+export async function signTransactionWithPKP(
+    litNodeClient: LitNodeClient,
+    sessionSigs: SessionSigs,
+    pkpPublicKey: Hex,
+    unsignedTxObject: TransactionSerializable
+    // chainId is part of unsignedTxObject in viem for EIP-155 and later,
+    // so not needed as separate param for signing hash, it's implicitly part of the hash.
+): Promise<Signature> {
+    if (!litNodeClient || !litNodeClient.ready) {
+        throw new Error('Lit Node Client not ready or not provided.');
+    }
+    if (!sessionSigs) {
+        throw new Error('SessionSigs are required for signing.');
+    }
+    if (!pkpPublicKey) {
+        throw new Error('PKP Public Key is required.');
+    }
+    if (!unsignedTxObject) {
+        throw new Error('Unsigned transaction object is required.');
+    }
+
+    // 1. Serialize the transaction to RLP-encoded bytes.
+    // For EIP-155 transactions and later, the chainId is part of the serialized payload if present in unsignedTxObject.
+    // Viem's serializeTransaction handles this correctly based on the transaction type and properties.
+    const serializedTx = serializeTransaction(unsignedTxObject);
+
+    // 2. Hash the serialized transaction bytes.
+    // This is the hash that needs to be signed for an Ethereum transaction.
+    const txHash = keccak256(serializedTx); // keccak256 returns a Hex string
+
+    // 3. Convert the hex string hash to Uint8Array for litNodeClient.pkpSign.
+    const hashToSignBytes = toBytes(txHash); // viem.toBytes converts hex to Uint8Array
+
+    // 4. Call litNodeClient.pkpSign.
+    // The sigAlgorithm: 'ETH_SIGN' might imply specific hashing or prefixing (e.g. Ethereum signed message prefix).
+    // However, for signing a transaction hash, we've already prepared the exact 32-byte hash.
+    // It's safer to ensure pkpSign is signing this raw hash without further modification.
+    // If 'ETH_SIGN' is for personal_sign, it adds the prefix. For raw hash, often no sigAlgorithm or a specific one is needed.
+    // Let's assume for now that by providing the direct hash, it will be signed as is.
+    // The Lit SDK examples for direct signing usually show signing a Uint8Array hash.
+    const result: SigResponse = await litNodeClient.pkpSign({
+        toSign: hashToSignBytes,
+        pubKey: pkpPublicKey,
+        sessionSigs: sessionSigs
+        // No explicit sigAlgorithm mentioned for raw hash signing in some PKP examples, relying on toSign being the final hash.
+    });
+
+    if (!result || !result.signature) {
+        throw new Error('Failed to sign transaction with PKP. No signature returned.');
+    }
+
+    // 5. Construct and return the Signature object for viem
+    // For EIP-1559 transactions, viem expects yParity (0 or 1), which corresponds to result.recid
+    // and v can be derived or is sometimes expected as recid + 27 + (chainId * 2 + 35) for legacy replay protected, 
+    // but for EIP-1559, just yParity is often enough for serializeTransaction when passing the signature object.
+    // Viem's `Signature` type includes `r`, `s`, and `v` (or `yParity`).
+    // Let's use v = result.recid + 27 for broader compatibility if needed, though for EIP1559, yParity is more direct.
+    // However, pkpSign provides r, s, recid (0 or 1). `v` for EIP-1559 should be `recid` (0 or 1).
+    // Let's return yParity and let viem handle it.
+    return {
+        r: result.r as Hex,
+        s: result.s as Hex,
+        yParity: result.recid as 0 | 1, // recid is 0 or 1, matching yParity
+        // v: BigInt(result.recid + 27) // Not strictly needed if yParity is provided for EIP-1559
+    };
+    // Old: return result.signature as Hex;
+}

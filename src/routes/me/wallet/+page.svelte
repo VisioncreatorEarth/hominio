@@ -5,13 +5,24 @@
 	import {
 		signWithPKP,
 		executeLitAction,
-		getSessionSigsWithGnosisPasskeyVerification
+		getSessionSigsWithGnosisPasskeyVerification,
+		signTransactionWithPKP
 	} from '$lib/wallet/lit';
 	import type { LitNodeClient } from '@lit-protocol/lit-node-client';
 	import type { SessionSigs, ExecuteJsResponse, AuthCallbackParams } from '@lit-protocol/types';
 	import { LitPKPResource, LitActionResource } from '@lit-protocol/auth-helpers';
 	import type { Hex, Address, WalletClient } from 'viem';
-	import { keccak256, hexToBytes, formatUnits, createPublicClient, http } from 'viem';
+	import {
+		keccak256,
+		hexToBytes,
+		formatUnits,
+		createPublicClient,
+		http,
+		parseUnits,
+		encodeFunctionData,
+		serializeTransaction,
+		type TransactionSerializableEIP1559
+	} from 'viem';
 	import { gnosis } from 'viem/chains';
 	import type { Writable } from 'svelte/store';
 	import { o as baseHominioFacade } from '$lib/KERNEL/hominio-svelte';
@@ -96,18 +107,28 @@ go();`);
 
 	const erc20Abi = [
 		{
-			constant: true,
+			stateMutability: 'view' as const,
 			inputs: [{ name: '_owner', type: 'address' }],
 			name: 'balanceOf',
 			outputs: [{ name: 'balance', type: 'uint256' }],
 			type: 'function'
 		},
 		{
-			constant: true,
+			stateMutability: 'view' as const,
 			inputs: [],
 			name: 'decimals',
 			outputs: [{ name: '', type: 'uint8' }],
 			type: 'function'
+		},
+		{
+			name: 'transfer',
+			type: 'function' as const,
+			stateMutability: 'nonpayable' as const,
+			inputs: [
+				{ name: 'to', type: 'address' },
+				{ name: 'amount', type: 'uint256' }
+			],
+			outputs: [{ name: 'success', type: 'bool' }]
 		}
 	] as const;
 
@@ -117,6 +138,16 @@ go();`);
 	let pkpSahelBalanceError = $state<string | null>(null);
 	let formattedPkpSahelBalance = $state<string | null>(null);
 	// --- End Sahel Token Balance State & Config ---
+
+	// --- Send Sahel Token State ---
+	let isSendingSahel = $state<boolean>(false);
+	let sendSahelTxHash = $state<string | null>(null);
+	let sendSahelError = $state<string | null>(null);
+	// --- End Send Sahel Token State ---
+
+	// --- Config Access for Explorer Link ---
+	const sahelExplorerBaseUrl = sahelPhaseConfig?.blockExplorers?.default?.url;
+	// --- End Config Access ---
 
 	onMount(async () => {
 		if (browser) {
@@ -522,15 +553,119 @@ go();`);
 		}
 	});
 	// --- End Fetch PKP Sahel Token Balance Logic ---
+
+	// --- Handle Send Sahel Token ---
+	async function handleSendSahelToken() {
+		isSendingSahel = true;
+		sendSahelTxHash = null;
+		sendSahelError = null;
+		console.log('[WalletPage] Initiating Send Sahel Token process...');
+
+		// 1. Prerequisite Checks
+		if (!$litClientStore?.ready) {
+			sendSahelError = 'Lit client not ready.';
+		} else if (!sessionSigs) {
+			sendSahelError = 'User session not active. Please login.';
+		} else if (!mintedPkpPublicKey || !mintedPkpEthAddress) {
+			sendSahelError = 'PKP details not available.';
+		} else if (!$guardianEoaAddressStore) {
+			sendSahelError = 'Guardian EOA address not available.';
+		} else if (!SAHEL_TOKEN_ADDRESS) {
+			sendSahelError = 'SAHEL Token address not configured.';
+		} else if (!GNOSIS_RPC_URL) {
+			sendSahelError = 'Gnosis RPC URL not configured.';
+		} else if (pkpSahelTokenDecimals === null || pkpSahelTokenDecimals === undefined) {
+			// Fetch decimals if not already available from the balance check section
+			// This is a fallback, ideally they are fetched by the balance display logic
+			sendSahelError = 'SAHEL token decimals not available. Cannot determine amount.';
+		}
+
+		if (sendSahelError) {
+			isSendingSahel = false;
+			console.error('[WalletPage] Send Sahel prerequisite error:', sendSahelError);
+			return;
+		}
+
+		try {
+			// 2. Define Constants
+			const recipientAddress = $guardianEoaAddressStore!;
+			const amountToSend = parseUnits('0.1', pkpSahelTokenDecimals);
+
+			// 3. Create Public Client
+			const publicClient = createPublicClient({ chain: gnosis, transport: http(GNOSIS_RPC_URL!) });
+
+			// 4. Transaction Parameters
+			const nonce = await publicClient.getTransactionCount({
+				address: mintedPkpEthAddress!,
+				blockTag: 'pending'
+			});
+			const { maxFeePerGas, maxPriorityFeePerGas } = await publicClient.estimateFeesPerGas();
+
+			if (!maxFeePerGas || !maxPriorityFeePerGas) {
+				throw new Error('Could not estimate EIP-1559 gas fees.');
+			}
+
+			const encodedTransferData = encodeFunctionData({
+				abi: erc20Abi, // Assumes erc20Abi is defined in the component scope
+				functionName: 'transfer',
+				args: [recipientAddress, amountToSend]
+			});
+
+			const estimatedGas = await publicClient.estimateGas({
+				account: mintedPkpEthAddress!,
+				to: SAHEL_TOKEN_ADDRESS!,
+				data: encodedTransferData,
+				value: 0n
+			});
+
+			// 5. Construct Unsigned Transaction Object (EIP-1559)
+			const transaction: TransactionSerializableEIP1559 = {
+				to: SAHEL_TOKEN_ADDRESS!,
+				value: 0n,
+				data: encodedTransferData,
+				nonce: nonce,
+				gas: estimatedGas,
+				maxFeePerGas: maxFeePerGas,
+				maxPriorityFeePerGas: maxPriorityFeePerGas,
+				chainId: EXPECTED_CHAIN_ID_SAHEL, // Assumes EXPECTED_CHAIN_ID_SAHEL is defined
+				type: 'eip1559'
+			};
+
+			// 6. Sign Transaction
+			console.log('[WalletPage] Signing transaction with PKP...', transaction);
+			const signature = await signTransactionWithPKP(
+				$litClientStore!,
+				sessionSigs!,
+				mintedPkpPublicKey!,
+				transaction
+			);
+			console.log('[WalletPage] Signature received:', signature);
+
+			// 7. Serialize Signed Transaction
+			const signedRawTx = serializeTransaction(transaction, signature);
+			console.log('[WalletPage] Broadcasting signed transaction:', signedRawTx);
+
+			// 8. Broadcast Transaction
+			const txHash = await publicClient.sendRawTransaction({ serializedTransaction: signedRawTx });
+			sendSahelTxHash = txHash;
+			console.log('[WalletPage] Transaction broadcasted. Hash:', txHash);
+		} catch (err: any) {
+			sendSahelError = err.message || 'An unknown error occurred during sending.';
+			console.error('[WalletPage] Send Sahel Token error:', err);
+		} finally {
+			isSendingSahel = false;
+		}
+	}
+	// --- End Handle Send Sahel Token ---
 </script>
 
-<div class="min-h-screen font-sans bg-stone-50 text-slate-800">
+<div class="min-h-screen bg-stone-50 font-sans text-slate-800">
 	<main class="px-4 py-8">
-		<div class="max-w-3xl mx-auto">
+		<div class="mx-auto max-w-3xl">
 			<!-- Sahel Token Balance Card -->
 			{#if mintedPkpEthAddress}
-				<div class="p-6 mb-8 bg-white shadow-lg rounded-xl md:p-8">
-					<h2 class="pb-3 mb-4 text-2xl font-semibold border-b border-stone-200 text-slate-700">
+				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
+					<h2 class="mb-4 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
 						{SAHEL_TOKEN_SYMBOL} Balance
 					</h2>
 					<div class="mb-2">
@@ -539,19 +674,19 @@ go();`);
 					</div>
 
 					{#if !sahelPhaseConfig}
-						<div class="p-4 text-red-700 bg-red-100 border border-red-400 rounded">
+						<div class="rounded border border-red-400 bg-red-100 p-4 text-red-700">
 							Configuration error: Sahelanthropus phase data is not defined in `roadmap/config.ts`.
 						</div>
 					{:else if !SAHEL_TOKEN_ADDRESS}
-						<div class="p-4 text-red-700 bg-red-100 border border-red-400 rounded">
+						<div class="rounded border border-red-400 bg-red-100 p-4 text-red-700">
 							Configuration error: Sahel token address is not defined.
 						</div>
 					{:else if !GNOSIS_RPC_URL}
-						<div class="p-4 text-red-700 bg-red-100 border border-red-400 rounded">
+						<div class="rounded border border-red-400 bg-red-100 p-4 text-red-700">
 							Configuration error: Gnosis RPC URL is not defined.
 						</div>
 					{:else if isLoadingPkpSahelBalance}
-						<p class="py-2 animate-pulse text-slate-500">Loading {SAHEL_TOKEN_SYMBOL} balance...</p>
+						<p class="animate-pulse py-2 text-slate-500">Loading {SAHEL_TOKEN_SYMBOL} balance...</p>
 					{:else if pkpSahelBalanceError}
 						<p class="py-2 text-red-600">{pkpSahelBalanceError}</p>
 					{:else if formattedPkpSahelBalance !== null}
@@ -568,9 +703,74 @@ go();`);
 			{/if}
 			<!-- End Sahel Token Balance Card -->
 
+			<!-- Send Sahel Token Card -->
+			{#if mintedPkpEthAddress && $guardianEoaAddressStore && SAHEL_TOKEN_ADDRESS}
+				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
+					<h2 class="mb-4 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
+						Send {SAHEL_TOKEN_SYMBOL}
+					</h2>
+					<p class="mb-2 text-sm text-slate-600">
+						This will send <strong>0.1 {SAHEL_TOKEN_SYMBOL}</strong> from your PKP Address ({mintedPkpEthAddress
+							? `${mintedPkpEthAddress.slice(0, 6)}...${mintedPkpEthAddress.slice(-4)}`
+							: 'N/A'}) to your Guardian EOA Address ({$guardianEoaAddressStore
+							? `${$guardianEoaAddressStore.slice(0, 6)}...${$guardianEoaAddressStore.slice(-4)}`
+							: 'N/A'}).
+					</p>
+
+					<button
+						on:click={handleSendSahelToken}
+						disabled={isSendingSahel ||
+							!$litClientStore?.ready ||
+							!sessionSigs ||
+							!mintedPkpPublicKey}
+						class="w-full justify-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
+					>
+						{#if isSendingSahel}
+							<span class="spinner mr-2"></span>Sending...
+						{:else}
+							Send 0.1 {SAHEL_TOKEN_SYMBOL} to Guardian EOA
+						{/if}
+					</button>
+
+					{#if sendSahelTxHash}
+						<div
+							class="mt-4 space-y-2 rounded-lg border border-green-300 bg-green-100 p-3 text-xs text-green-700"
+						>
+							<p class="font-semibold">Send initiated successfully!</p>
+							<div>
+								<p class="font-medium">Transaction Hash:</p>
+								{#if sahelExplorerBaseUrl}
+									<a
+										href={`${sahelExplorerBaseUrl.endsWith('/') ? sahelExplorerBaseUrl : sahelExplorerBaseUrl + '/'}tx/${sendSahelTxHash}`}
+										target="_blank"
+										rel="noopener noreferrer"
+										class="block rounded bg-green-200 p-1 break-all text-green-800 hover:underline"
+									>
+										{sendSahelTxHash}
+									</a>
+								{:else}
+									<code class="block rounded bg-green-200 p-1 break-all text-green-800"
+										>{sendSahelTxHash}</code
+									>
+								{/if}
+							</div>
+						</div>
+					{/if}
+					{#if sendSahelError}
+						<div
+							class="mt-4 space-y-2 rounded-lg border border-red-300 bg-red-100 p-3 text-xs text-red-700"
+						>
+							<p class="font-semibold">Error Sending Token:</p>
+							<p>{sendSahelError}</p>
+						</div>
+					{/if}
+				</div>
+			{/if}
+			<!-- End Send Sahel Token Card -->
+
 			{#if mainError}
 				<div
-					class="w-full p-4 mb-6 text-red-700 bg-red-100 border border-red-300 rounded-lg shadow-md"
+					class="mb-6 w-full rounded-lg border border-red-300 bg-red-100 p-4 text-red-700 shadow-md"
 				>
 					<span class="font-bold">Error:</span>
 					{mainError}
@@ -578,7 +778,7 @@ go();`);
 			{/if}
 			{#if mainSuccess && !(isLoadingPkpSessionResume && mainSuccess.includes('Attempting'))}
 				<div
-					class="w-full p-4 mb-6 text-green-700 bg-green-100 border border-green-300 rounded-lg shadow-md"
+					class="mb-6 w-full rounded-lg border border-green-300 bg-green-100 p-4 text-green-700 shadow-md"
 				>
 					<span class="font-bold">Status:</span>
 					{mainSuccess}
@@ -586,19 +786,19 @@ go();`);
 			{/if}
 
 			{#if !sessionSigs}
-				<div class="p-6 mb-8 bg-white shadow-lg rounded-xl md:p-8">
-					<h2 class="pb-3 mb-6 text-2xl font-semibold border-b border-stone-200 text-slate-700">
+				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
+					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
 						Login Required
 					</h2>
 					{#if isLoadingPkpSessionResume}
-						<p class="mb-4 text-sm animate-pulse text-slate-500">Attempting to resume session...</p>
+						<p class="mb-4 animate-pulse text-sm text-slate-500">Attempting to resume session...</p>
 					{:else}
 						<p class="mb-4 text-sm text-slate-500">
 							Please login with your passkey to access wallet functions. Ensure you have completed
 							the setup on the Settings page.
 						</p>
 						<div class="space-y-4">
-							<div class="p-4 border rounded-lg border-stone-200">
+							<div class="rounded-lg border border-stone-200 p-4">
 								<h3 class="mb-2 font-medium text-slate-600">Login with Passkey</h3>
 								{#if storedPasskey?.rawId && storedPasskey?.pubkeyCoordinates && storedPasskey?.signerContractAddress && mintedPkpPublicKey}
 									<p class="mb-3 text-xs text-slate-500">
@@ -606,22 +806,22 @@ go();`);
 									</p>
 									<button
 										on:click={handleLoginWithPasskey}
-										class="justify-center w-full px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg shadow-sm hover:bg-blue-700 disabled:opacity-50"
+										class="w-full justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
 										disabled={isLoadingSessionSigsGnosisPasskey ||
 											isLoadingPkpSessionResume ||
 											!mintedPkpPublicKey}
 									>
 										{#if isLoadingSessionSigsGnosisPasskey}
-											<span class="mr-2 spinner"></span>Logging in...
+											<span class="spinner mr-2"></span>Logging in...
 										{:else if isLoadingPkpSessionResume}
-											<span class="mr-2 spinner"></span>Checking session...
+											<span class="spinner mr-2"></span>Checking session...
 										{:else}
 											Login with Passkey
 										{/if}
 									</button>
 								{:else}
 									<p
-										class="p-3 text-sm border rounded-md border-amber-200 bg-amber-50 text-amber-600"
+										class="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-600"
 									>
 										Cannot login: Missing Passkey, PKP details, or deployed Signer address. Please
 										check the Settings page.
@@ -632,8 +832,8 @@ go();`);
 					{/if}
 				</div>
 			{:else}
-				<div class="p-6 bg-white shadow-lg rounded-xl md:p-8">
-					<h2 class="pb-3 mb-6 text-2xl font-semibold border-b border-stone-200 text-slate-700">
+				<div class="rounded-xl bg-white p-6 shadow-lg md:p-8">
+					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
 						{profileName}'s Wallet
 					</h2>
 					<p class="mb-4 text-xs text-slate-500">
@@ -646,7 +846,7 @@ go();`);
 					</p>
 
 					<div class="flex flex-col md:flex-row md:space-x-6">
-						<aside class="w-full mb-6 shrink-0 md:mb-0 md:w-48">
+						<aside class="mb-6 w-full shrink-0 md:mb-0 md:w-48">
 							<nav
 								class="flex flex-row space-x-2 overflow-x-auto md:flex-col md:space-y-1 md:space-x-0"
 							>
@@ -682,41 +882,41 @@ go();`);
 
 						<div class="flex-grow">
 							{#if selectedWalletSection === 'sign'}
-								<div class="p-4 border rounded-lg border-stone-200">
+								<div class="rounded-lg border border-stone-200 p-4">
 									<h3 class="mb-3 text-lg font-medium text-slate-600">Sign Message with PKP</h3>
 									<div class="mb-4">
 										<label
 											for="messageToSignPkp"
-											class="block mb-1 text-sm font-medium text-slate-600">Message to Sign</label
+											class="mb-1 block text-sm font-medium text-slate-600">Message to Sign</label
 										>
 										<input
 											id="messageToSignPkp"
 											bind:value={messageToSign}
-											class="block w-full p-2 rounded-lg shadow-sm border-stone-300 bg-stone-50 text-slate-800 focus:border-slate-500 focus:ring-slate-500 sm:text-sm"
+											class="block w-full rounded-lg border-stone-300 bg-stone-50 p-2 text-slate-800 shadow-sm focus:border-slate-500 focus:ring-slate-500 sm:text-sm"
 										/>
 									</div>
 									<button
 										on:click={handleSignMessageWithPkp}
-										class="justify-center w-full px-4 py-2 text-sm font-semibold text-white rounded-lg shadow-sm bg-sky-600 hover:bg-sky-700 disabled:opacity-50"
+										class="w-full justify-center rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-sky-700 disabled:opacity-50"
 										disabled={isSigningMessage || !sessionSigs || !mintedPkpPublicKey}
 									>
-										{#if isSigningMessage}<span class="mr-2 spinner"></span>Signing...{:else}Sign
+										{#if isSigningMessage}<span class="spinner mr-2"></span>Signing...{:else}Sign
 											Message with PKP{/if}
 									</button>
 									{#if signatureResult}
 										<div
-											class="p-3 mt-4 space-y-2 text-xs border rounded-lg border-stone-200 bg-stone-50"
+											class="mt-4 space-y-2 rounded-lg border border-stone-200 bg-stone-50 p-3 text-xs"
 										>
 											<p class="font-semibold text-green-600">PKP Signature Successful!</p>
 											<div>
 												<p class="font-medium text-slate-500">Data Signed (Hashed Message):</p>
-												<code class="block p-1 break-all rounded bg-stone-200 text-slate-700"
+												<code class="block rounded bg-stone-200 p-1 break-all text-slate-700"
 													>{signatureResult.dataSigned}</code
 												>
 											</div>
 											<div>
 												<p class="font-medium text-slate-500">Signature:</p>
-												<code class="block p-1 break-all rounded bg-stone-200 text-slate-700"
+												<code class="block rounded bg-stone-200 p-1 break-all text-slate-700"
 													>{signatureResult.signature}</code
 												>
 											</div>
@@ -724,39 +924,39 @@ go();`);
 									{/if}
 								</div>
 							{:else if selectedWalletSection === 'action'}
-								<div class="p-4 border rounded-lg border-stone-200">
+								<div class="rounded-lg border border-stone-200 p-4">
 									<h3 class="mb-3 text-lg font-medium text-slate-600">Execute Inline Lit Action</h3>
 									<p class="mb-3 text-xs text-slate-500">
 										This action checks if a number is >= 42.
 									</p>
 									<div class="mb-4">
-										<label for="magicNumber" class="block mb-1 text-sm font-medium text-slate-600"
+										<label for="magicNumber" class="mb-1 block text-sm font-medium text-slate-600"
 											>Number to Check (magicNumber)</label
 										>
 										<input
 											id="magicNumber"
 											type="number"
 											bind:value={magicNumber}
-											class="block w-full p-2 rounded-lg shadow-sm border-stone-300 bg-stone-50 text-slate-800 focus:border-slate-500 focus:ring-slate-500 sm:text-sm"
+											class="block w-full rounded-lg border-stone-300 bg-stone-50 p-2 text-slate-800 shadow-sm focus:border-slate-500 focus:ring-slate-500 sm:text-sm"
 										/>
 									</div>
 									<button
 										on:click={handleExecuteLitAction}
-										class="justify-center w-full px-4 py-2 text-sm font-semibold text-white bg-indigo-600 rounded-lg shadow-sm hover:bg-indigo-700 disabled:opacity-50"
+										class="w-full justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
 										disabled={isExecutingAction || !sessionSigs}
 									>
-										{#if isExecutingAction}<span class="mr-2 spinner"></span>Executing Action...{:else}Execute
+										{#if isExecutingAction}<span class="spinner mr-2"></span>Executing Action...{:else}Execute
 											Lit Action{/if}
 									</button>
 									{#if litActionResult}
 										<div
-											class="p-3 mt-4 space-y-2 text-xs border rounded-lg border-stone-200 bg-stone-50"
+											class="mt-4 space-y-2 rounded-lg border border-stone-200 bg-stone-50 p-3 text-xs"
 										>
 											<p class="font-semibold text-green-600">Lit Action Executed!</p>
 											<div>
 												<p class="font-medium text-slate-500">Response:</p>
 												<pre
-													class="block p-2 break-all whitespace-pre-wrap bg-white rounded shadow-sm text-slate-700">{JSON.stringify(
+													class="block rounded bg-white p-2 break-all whitespace-pre-wrap text-slate-700 shadow-sm">{JSON.stringify(
 														litActionResult.response,
 														null,
 														2
@@ -765,13 +965,13 @@ go();`);
 											{#if litActionResult.logs}<div>
 													<p class="font-medium text-slate-500">Logs:</p>
 													<pre
-														class="block p-2 break-all whitespace-pre-wrap bg-white rounded shadow-sm text-slate-700">{litActionResult.logs}</pre>
+														class="block rounded bg-white p-2 break-all whitespace-pre-wrap text-slate-700 shadow-sm">{litActionResult.logs}</pre>
 												</div>{/if}
 										</div>
 									{/if}
 								</div>
 							{:else if selectedWalletSection === 'profile'}
-								<div class="p-4 border rounded-lg border-stone-200">
+								<div class="rounded-lg border border-stone-200 p-4">
 									<h3 class="mb-3 text-lg font-medium text-slate-600">Manage Profile</h3>
 									<p class="mb-4 text-sm text-slate-500">
 										Set your profile name. This will be encrypted using Lit Protocol and stored
@@ -781,13 +981,13 @@ go();`);
 										<div>
 											<label
 												for="profileNameInput"
-												class="block mb-1 text-sm font-medium text-slate-600">Profile Name</label
+												class="mb-1 block text-sm font-medium text-slate-600">Profile Name</label
 											>
 											<input
 												type="text"
 												id="profileNameInput"
 												bind:value={profileName}
-												class="block w-full p-2 rounded-lg shadow-sm border-stone-300 bg-stone-50 text-slate-800 focus:border-slate-500 focus:ring-slate-500 sm:text-sm"
+												class="block w-full rounded-lg border-stone-300 bg-stone-50 p-2 text-slate-800 shadow-sm focus:border-slate-500 focus:ring-slate-500 sm:text-sm"
 												placeholder={isDecryptingProfile
 													? 'Decrypting...'
 													: 'Enter your preferred name'}
@@ -796,15 +996,15 @@ go();`);
 										</div>
 										<button
 											on:click={handleSaveProfile}
-											class="justify-center w-full px-6 py-2 text-sm font-semibold text-white rounded-lg shadow-sm bg-slate-700 hover:bg-slate-800 focus:ring-2 focus:ring-slate-500 focus:ring-offset-2 disabled:opacity-50 sm:w-auto"
+											class="w-full justify-center rounded-lg bg-slate-700 px-6 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 focus:ring-2 focus:ring-slate-500 focus:ring-offset-2 disabled:opacity-50 sm:w-auto"
 											disabled={isEncryptingProfile ||
 												isDecryptingProfile ||
 												!sessionSigs ||
 												!mintedPkpEthAddress ||
 												!$litClientStore?.ready}
 										>
-											{#if isEncryptingProfile}<span class="mr-2 spinner"></span>Encrypting &
-												Saving...{:else if isDecryptingProfile}<span class="mr-2 spinner"
+											{#if isEncryptingProfile}<span class="spinner mr-2"></span>Encrypting &
+												Saving...{:else if isDecryptingProfile}<span class="spinner mr-2"
 												></span>Decrypting...{:else}Save Encrypted Profile{/if}
 										</button>
 										{#if !sessionSigs || !mintedPkpEthAddress || !$litClientStore?.ready}<p
