@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, getContext } from 'svelte';
+	import { onMount, getContext, onDestroy } from 'svelte';
 	import { browser } from '$app/environment';
 	import {
 		createAndStorePasskeyData,
@@ -19,7 +19,8 @@
 		getOwnedCapacityCredits
 	} from '$lib/wallet/lit';
 	import type { LitNodeClient } from '@lit-protocol/lit-node-client';
-	import type { SessionSigs, ExecuteJsResponse } from '@lit-protocol/types';
+	import type { SessionSigs, ExecuteJsResponse, AuthCallbackParams } from '@lit-protocol/types';
+	import { LitPKPResource, LitActionResource } from '@lit-protocol/auth-helpers';
 	import type { Hex, Address, WalletClient } from 'viem';
 	import { keccak256, hexToBytes } from 'viem';
 	import type { Writable } from 'svelte/store';
@@ -50,7 +51,7 @@
 		'Deploy Signer',
 		'Mint PKP',
 		'Auth Methods',
-		'Session Sigs',
+		'Authenticate PKP (Passkey)',
 		'PKP Operations',
 		'Profile',
 		'My Capacity Credits'
@@ -74,8 +75,9 @@
 	let isMintingPkp = false;
 
 	let sessionSigs: SessionSigs | null = null;
-	let sessionAuthMethod: 'gnosis-passkey' | null = null;
+	let sessionAuthMethod: 'gnosis-passkey' | 'resumed-from-cache' | null = null;
 	let isLoadingSessionSigsGnosisPasskey = false;
+	let isLoadingPkpSessionResume = false;
 
 	let messageToSign = 'Hello from Lit PKP!';
 	let signatureResult: { signature: Hex; dataSigned: Hex } | null = null;
@@ -120,6 +122,8 @@ go();`;
 	let isEncryptingProfile = false;
 	let isDecryptingProfile = false;
 
+	let unsubscribeLitClient: () => void = () => {};
+
 	onMount(async () => {
 		if (browser) {
 			storedPasskey = getStoredPasskeyData();
@@ -158,21 +162,105 @@ go();`;
 				console.log('No encrypted profile data found in localStorage.');
 			}
 
-			const currentLitClient = $litClientStore;
-			if (mintedPkpTokenId && currentLitClient && currentLitClient.ready) {
-				await handleFetchPermittedAuthMethods(mintedPkpTokenId);
-			} else if (mintedPkpTokenId) {
-				console.log(
-					'PKP ID loaded, but Lit client not ready yet. Auth methods will be fetched when Lit connects or manually triggered.'
-				);
-			}
+			unsubscribeLitClient = litClientStore.subscribe(async (client) => {
+				if (client && client.ready && browser) {
+					console.log('Lit client is ready. Checking for PKP session resumption...');
+					if (
+						mintedPkpPublicKey &&
+						!sessionSigs &&
+						!isLoadingPkpSessionResume &&
+						!generalIsLoading &&
+						!isLoadingSessionSigsGnosisPasskey
+					) {
+						await tryResumePkpSession(client, mintedPkpPublicKey);
+					}
+					if (
+						mintedPkpTokenId &&
+						permittedAuthMethods.length === 0 &&
+						!isLoadingPermittedAuthMethods
+					) {
+						await handleFetchPermittedAuthMethods(mintedPkpTokenId);
+					}
+				}
+			});
 		}
 	});
+
+	onDestroy(() => {
+		if (unsubscribeLitClient) {
+			unsubscribeLitClient();
+		}
+	});
+
+	async function tryResumePkpSession(currentLitClient: LitNodeClient, pkpKeyToResume: Hex) {
+		if (sessionSigs) {
+			console.log(
+				'PKP session already active in this component instance (tryResumePkpSession check).'
+			);
+			if (currentStepIndex < 4) {
+				goToStep(5);
+			}
+			return;
+		}
+
+		isLoadingPkpSessionResume = true;
+		resetMainMessages();
+		const initialMessage = 'Attempting to resume PKP session from device storage...';
+		mainSuccess = initialMessage;
+
+		try {
+			console.log(
+				`Attempting litNodeClient.getSessionSigs for PKP: ${pkpKeyToResume} for session resumption...`
+			);
+
+			const resumedSessionSigs = await currentLitClient.getSessionSigs({
+				pkpPublicKey: pkpKeyToResume,
+				chain: 'ethereum',
+				resourceAbilityRequests: [
+					{ resource: new LitPKPResource('*'), ability: 'pkp-signing' as const },
+					{ resource: new LitActionResource('*'), ability: 'lit-action-execution' as const }
+				],
+				authNeededCallback: async (params: AuthCallbackParams) => {
+					console.warn(
+						'authNeededCallback triggered during PKP session resumption. Cached AuthSig insufficient, expired, or not found for the PKP.',
+						params
+					);
+					throw new Error('Authentication required; cached Lit session not viable for this PKP.');
+				}
+			});
+
+			sessionSigs = resumedSessionSigs;
+			sessionAuthMethod = 'resumed-from-cache';
+			mainSuccess = 'PKP session resumed successfully from device storage!';
+			console.log('PKP Session Resumed from Lit SDK cache:', sessionSigs);
+			if (currentStepIndex < 4) {
+				goToStep(5);
+			}
+		} catch (error: any) {
+			console.warn('Failed to resume PKP session automatically:', error.message);
+			if (error.message && error.message.includes('Authentication required')) {
+				mainSuccess =
+					'No active PKP session found in device storage. Please authenticate (Step 4).';
+			} else {
+				if (!mainSuccess.includes('No active PKP session found')) {
+					mainSuccess = 'Could not resume PKP session. Ready to authenticate (Step 4).';
+					// mainError = `Error resuming PKP session: ${error.message || 'Unknown error'}`; // Optionally set error
+				}
+			}
+			sessionSigs = null;
+			sessionAuthMethod = null;
+		} finally {
+			isLoadingPkpSessionResume = false;
+			if (mainSuccess === initialMessage && !sessionSigs) {
+				mainSuccess = '';
+			}
+		}
+	}
 
 	function resetMainMessages() {
 		mainError = '';
 		mainSuccess = '';
-		generalIsLoading = false;
+		// generalIsLoading = false; // generalIsLoading is usually set by specific handlers
 	}
 
 	async function handleCreatePasskey() {
@@ -228,6 +316,10 @@ go();`;
 			localStorage.removeItem(PROFILE_STORAGE_KEY);
 			encryptedProfileDataString = null;
 			profileName = '';
+			// Also clear Lit's own storage for a full reset demonstration if desired
+			// localStorage.removeItem('lit-session-key');
+			// localStorage.removeItem('lit-wallet-sig');
+			// console.log("Cleared lit-session-key and lit-wallet-sig for full reset test.");
 		}
 		mainSuccess = 'Passkey and associated PKP data cleared.';
 		goToStep(0);
@@ -258,7 +350,7 @@ go();`;
 				} else {
 					mainSuccess = `Deployment transaction sent (${result.txHash}), but couldn't extract address from logs. Check Gnosisscan.`;
 				}
-				storedPasskey = getStoredPasskeyData();
+				storedPasskey = getStoredPasskeyData(); // Re-fetch in case signerAddress was added
 			} else {
 				mainError = 'Deployment failed. Check console and wallet connection.';
 			}
@@ -375,7 +467,8 @@ go();`;
 			return;
 		}
 		if (!storedPasskey?.signerContractAddress) {
-			mainError = 'EIP-1271 Signer contract must be deployed first (Step 1) to get session sigs.';
+			mainError =
+				'EIP-1271 Signer contract must be deployed first (Step 1) to authenticate PKP session.';
 			return;
 		}
 
@@ -386,12 +479,13 @@ go();`;
 		}
 
 		isLoadingSessionSigsGnosisPasskey = true;
+		generalIsLoading = true;
 		resetMainMessages();
 		sessionSigs = null;
 		sessionAuthMethod = null;
 
 		try {
-			const challengeMessage = 'Sign in to Hominio PKP via Passkey';
+			const challengeMessage = 'Authenticate to use Hominio PKP with Passkey';
 			const messageHashAsChallenge = keccak256(new TextEncoder().encode(challengeMessage));
 
 			const assertion = (await navigator.credentials.get({
@@ -415,7 +509,7 @@ go();`;
 			const assertionResponse = assertion.response;
 
 			if (!storedPasskey || !storedPasskey.signerContractAddress) {
-				throw new Error('Stored passkey data or signer address missing.');
+				throw new Error('Stored passkey data or signer address missing for authentication.');
 			}
 
 			sessionSigs = await getSessionSigsWithGnosisPasskeyVerification(
@@ -428,18 +522,20 @@ go();`;
 			);
 
 			sessionAuthMethod = 'gnosis-passkey';
-			mainSuccess = 'Successfully obtained session signatures via Passkey (Gnosis)!_';
+			mainSuccess =
+				'Successfully authenticated PKP session via Passkey (Gnosis)! Session Sigs obtained.';
 			goToStep(5);
 		} catch (err: unknown) {
 			mainError =
 				err instanceof Error
-					? err.message
-					: 'Unknown error getting session signatures via Gnosis Passkey.';
+					? `PKP Authentication Failed: ${err.message}`
+					: 'Unknown error during PKP authentication via Gnosis Passkey.';
 			sessionSigs = null;
 			sessionAuthMethod = null;
-			console.error('Error in handleGetSessionSigsGnosisPasskey:', err);
+			console.error('Error in handleGetSessionSigsGnosisPasskey (Authenticate PKP):', err);
 		} finally {
 			isLoadingSessionSigsGnosisPasskey = false;
+			generalIsLoading = false;
 		}
 	}
 
@@ -447,7 +543,7 @@ go();`;
 		const currentLitClient = $litClientStore;
 
 		if (!currentLitClient || !currentLitClient.ready || !sessionSigs) {
-			mainError = 'Lit client must be ready and session signatures obtained first (Step 4).';
+			mainError = 'Lit client must be ready and PKP session authenticated first (Step 4).';
 			return;
 		}
 		if (!messageToSign.trim()) {
@@ -484,7 +580,7 @@ go();`;
 		const currentLitClient = $litClientStore;
 
 		if (!currentLitClient || !currentLitClient.ready || !sessionSigs) {
-			mainError = 'Lit client must be ready and session signatures obtained first (Step 4).';
+			mainError = 'Lit client must be ready and PKP session authenticated first (Step 4).';
 			return;
 		}
 		isExecutingAction = true;
@@ -568,7 +664,7 @@ go();`;
 		}
 		if (!currentLitClient || !currentLitClient.ready || !sessionSigs || !mintedPkpEthAddress) {
 			mainError =
-				'Cannot save profile: Lit connection (ready), session signatures (Step 4), and minted PKP details (Step 2) are required.';
+				'Cannot save profile: Lit connection (ready), PKP session authenticated (Step 4), and minted PKP details (Step 2) are required.';
 			return;
 		}
 
@@ -598,7 +694,7 @@ go();`;
 					accessControlConditions,
 					dataToEncrypt: profileName.trim()
 				},
-				currentLitClient // Pass ready client
+				currentLitClient
 			);
 
 			const dataToStore = {
@@ -629,13 +725,14 @@ go();`;
 		sessionSigs &&
 		encryptedProfileDataString &&
 		!profileName &&
-		!isDecryptingProfile
+		!isDecryptingProfile &&
+		!isEncryptingProfile
 	) {
 		(async () => {
 			const currentLitClient = $litClientStore;
 			isDecryptingProfile = true;
 			resetMainMessages();
-			console.log('Attempting to decrypt profile name...');
+			console.log('Attempting to decrypt profile name with active sessionSigs...');
 			try {
 				const storedEncryptedData = JSON.parse(encryptedProfileDataString!);
 				if (
@@ -644,7 +741,7 @@ go();`;
 					!storedEncryptedData.accessControlConditions ||
 					!storedEncryptedData.chain
 				) {
-					throw new Error('Stored encrypted data is missing required fields.');
+					throw new Error('Stored encrypted data is missing required fields for decryption.');
 				}
 
 				const { decryptToString } = await import('@lit-protocol/encryption');
@@ -657,7 +754,7 @@ go();`;
 						dataToEncryptHash: storedEncryptedData.dataToEncryptHash,
 						sessionSigs: sessionSigs!
 					},
-					currentLitClient! // Pass ready client
+					currentLitClient!
 				);
 				profileName = decryptedNameStr;
 				mainSuccess = 'Profile name decrypted and loaded.';
@@ -668,8 +765,10 @@ go();`;
 						? `Failed to decrypt profile: ${err.message}`
 						: 'Failed to decrypt profile: Unknown error.';
 				console.error('Error decrypting profile name:', err);
-				localStorage.removeItem(PROFILE_STORAGE_KEY);
-				encryptedProfileDataString = null;
+				// Do not clear localStorage on decryption failure if sessionSigs might have been the issue.
+				// Let user re-authenticate if needed.
+				// localStorage.removeItem(PROFILE_STORAGE_KEY);
+				// encryptedProfileDataString = null;
 			} finally {
 				isDecryptingProfile = false;
 			}
@@ -1049,13 +1148,14 @@ go();`;
 			{#if currentStepIndex === 4}
 				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
 					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
-						Step 4: Generate Session Signatures for PKP
+						Step 4: Authenticate PKP Session via Passkey
 					</h2>
 					<p class="mb-4 text-sm text-slate-500">
-						Use your passkey (authenticated via the Gnosis verification Lit Action) to obtain
-						temporary session keys to use the PKP (<code class="rounded bg-stone-200 p-0.5 text-xs"
-							>{mintedPkpTokenId}</code
-						>).
+						Authenticate with your hardware passkey to create a session for using your PKP (<code
+							class="rounded bg-stone-200 p-0.5 text-xs">{mintedPkpTokenId || 'N/A'}</code
+						>). This session allows you to perform operations like signing and Lit Action execution.
+						The Lit Action used for this authentication verifies your passkey against the Gnosis
+						Chain.
 					</p>
 
 					<div class="space-y-4">
@@ -1063,21 +1163,27 @@ go();`;
 							<h3 class="mb-2 font-medium text-slate-600">
 								Authenticate with Passkey (Gnosis On-Chain Verification)
 							</h3>
-							{#if storedPasskey?.rawId && storedPasskey?.pubkeyCoordinates && storedPasskey?.signerContractAddress}
+							{#if storedPasskey?.rawId && storedPasskey?.pubkeyCoordinates && storedPasskey?.signerContractAddress && mintedPkpPublicKey}
 								<p class="mb-3 text-xs text-slate-500">
-									Uses a Lit Action to verify your passkey signature directly against your deployed
-									EIP-1271 Gnosis Chain contract (Step 1).
+									This will prompt for your passkey. The Lit Action verifies this against your
+									deployed EIP-1271 Gnosis Chain contract (Step 1).
 								</p>
 								<button
 									on:click={handleGetSessionSigsGnosisPasskey}
 									class="w-full justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
 									disabled={isLoadingSessionSigsGnosisPasskey ||
-										(!!sessionSigs && sessionAuthMethod !== 'gnosis-passkey') ||
+										isLoadingPkpSessionResume ||
 										!mintedPkpPublicKey}
 								>
-									{#if isLoadingSessionSigsGnosisPasskey}<span class="spinner mr-2"
-										></span>Generating Sigs...{:else if sessionSigs && sessionAuthMethod === 'gnosis-passkey'}✅
-										Sigs Obtained{:else}Get Session Sigs (Gnosis Passkey){/if}
+									{#if isLoadingSessionSigsGnosisPasskey}
+										<span class="spinner mr-2"></span>Authenticating...
+									{:else if isLoadingPkpSessionResume}
+										<span class="spinner mr-2"></span>Checking device session...
+									{:else if sessionSigs && (sessionAuthMethod === 'gnosis-passkey' || sessionAuthMethod === 'resumed-from-cache')}
+										✅ Authenticated (Session Active)
+									{:else}
+										Authenticate PKP with Passkey
+									{/if}
 								</button>
 							{:else}
 								<p
@@ -1085,6 +1191,8 @@ go();`;
 								>
 									{#if !storedPasskey?.rawId || !storedPasskey?.pubkeyCoordinates}
 										Create a passkey (Step 0) first.
+									{:else if !mintedPkpPublicKey}
+										Mint a PKP (Step 2) first.
 									{:else if !storedPasskey?.signerContractAddress}
 										Deploy EIP-1271 Signer (Step 1) first.
 									{/if}
@@ -1093,11 +1201,17 @@ go();`;
 						</div>
 					</div>
 
-					{#if sessionSigs}
+					{#if sessionSigs && (sessionAuthMethod === 'gnosis-passkey' || sessionAuthMethod === 'resumed-from-cache')}
 						<div class="mt-6 rounded-lg border border-stone-200 bg-stone-100 p-4">
 							<h3 class="mb-2 font-semibold text-slate-700">
-								Active Session Signatures (Authenticated via: {sessionAuthMethod?.toUpperCase()})
+								Active PKP Session (Authenticated via: {sessionAuthMethod === 'resumed-from-cache'
+									? 'DEVICE CACHE'
+									: sessionAuthMethod?.toUpperCase()})
 							</h3>
+							<p class="mb-2 text-xs text-slate-500">
+								Session Signatures below are active for this browser session. Operations in the next
+								steps will use these.
+							</p>
 							<pre
 								class="overflow-x-auto rounded-md bg-white p-3 text-xs whitespace-pre-wrap shadow-sm">{JSON.stringify(
 									sessionSigs,
@@ -1113,12 +1227,14 @@ go();`;
 				{#if sessionSigs && $litClientStore?.ready}
 					<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
 						<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
-							Step 5: PKP Operations (Requires Session Sigs)
+							Step 5: PKP Operations (Requires Authenticated Session)
 						</h2>
 						<p class="mb-4 text-xs text-slate-500">
 							Current session authenticated via:
 							<span class="font-medium text-slate-700"
-								>{sessionAuthMethod?.toUpperCase() ?? 'N/A'}</span
+								>{sessionAuthMethod === 'resumed-from-cache'
+									? 'DEVICE CACHE'
+									: (sessionAuthMethod?.toUpperCase() ?? 'N/A')}</span
 							>
 						</p>
 
@@ -1182,7 +1298,7 @@ go();`;
 							<button
 								on:click={handleExecuteLitAction}
 								class="w-full justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
-								disabled={isExecutingAction}
+								disabled={isExecutingAction || !sessionSigs}
 							>
 								{#if isExecutingAction}<span class="spinner mr-2"></span>Executing Action...{:else}Execute
 									Lit Action{/if}
@@ -1220,9 +1336,9 @@ go();`;
 						<p
 							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-sm text-orange-700"
 						>
-							{#if !sessionSigs}Please generate session signatures (Step 4) first.{/if}
-							{#if sessionSigs && !$litClientStore?.ready}Lit client is not ready. Please ensure
-								it's connected (check header).{/if}
+							{#if !$litClientStore?.ready}Lit client is not ready. Please ensure it's connected
+								(check Status Bar).{:else if !sessionSigs}Please authenticate PKP session (Step 4)
+								first.{/if}
 						</p>
 					</div>
 				{/if}
@@ -1235,6 +1351,7 @@ go();`;
 					</h2>
 					<p class="mb-4 text-sm text-slate-500">
 						Set your profile name. This will be encrypted using Lit Protocol and stored locally.
+						Requires an authenticated PKP session.
 					</p>
 					<div class="space-y-4">
 						<div>
@@ -1269,8 +1386,8 @@ go();`;
 						</button>
 						{#if !sessionSigs || !mintedPkpEthAddress || !$litClientStore?.ready}
 							<p class="mt-2 text-xs text-orange-600">
-								Note: Requires Lit Connection (Ready), Session Sigs (Step 4), and minted PKP (Step
-								2).
+								Note: Requires Lit Connection (Ready), Authenticated PKP Session (Step 4), and
+								minted PKP (Step 2).
 							</p>
 						{/if}
 					</div>

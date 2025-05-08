@@ -3,24 +3,14 @@
 	import StatusUI from '$lib/components/StatusUI.svelte';
 	import type { LayoutData } from './$types';
 	import { browser } from '$app/environment';
-
-	// --- Context Setup ---
-	// Import necessary Hominio facade elements
 	import { o } from '$lib/KERNEL/hominio-svelte';
 	import { setContext } from 'svelte';
-
-	// Expose Hominio facade to child components via context
-	setContext('o', o);
-	// REMOVED: getMe context setup, as it's part of 'o'
-	// --- End Context Setup ---
-
-	// --- Page Metadata Store ---
 	import { pageMetadataStore } from '$lib/stores/layoutStore';
-	// --- End Store Import ---
+
+	setContext('o', o);
 
 	export let data: LayoutData;
 
-	// Reactive check for session on the client
 	$: {
 		if (browser && !data.session) {
 			console.log('[Layout /me] No session detected on client, redirecting to /');
@@ -31,22 +21,40 @@
 
 <div class="flex h-screen flex-col bg-[#f8f4ed]">
 	<!-- Header -->
-	<header
-		class="flex items-center justify-between border-b border-gray-300 bg-[#f8f4ed] px-4 py-2 shadow-sm"
-	>
-		<div class="flex-1">
-			<!-- Display title and description from the store -->
-			<h1 class="text-lg font-bold text-[#0a2a4e]">{$pageMetadataStore.title}</h1>
-			{#if $pageMetadataStore.description}
-				<p class="text-sm text-gray-600">{$pageMetadataStore.description}</p>
-			{/if}
+	<header class="border-b border-gray-300 bg-[#f8f4ed] px-4 py-2 shadow-sm">
+		<div class="flex items-center justify-between">
+			<div class="flex-1">
+				<!-- Display title and description from the store -->
+				<h1 class="text-lg font-bold text-[#0a2a4e]">{$pageMetadataStore.title}</h1>
+				{#if $pageMetadataStore.description}
+					<p class="text-sm text-gray-600">{$pageMetadataStore.description}</p>
+				{/if}
+			</div>
+			<div class="flex-shrink-0">
+				{#if data.session}
+					<!-- Only show StatusUI if logged in -->
+					<StatusUI />
+				{/if}
+			</div>
 		</div>
-		<div class="flex-grow">
-			{#if data.session}
-				<!-- Only show SyncStatusUI if logged in -->
-				<StatusUI />
-			{/if}
-		</div>
+		<!-- Navigation for /me section -->
+		{#if data.session}
+			<nav class="mt-2 flex space-x-4 border-t border-gray-200 pt-2">
+				<a href="/me" class="text-sm font-medium text-slate-700 hover:text-slate-900">Me</a>
+				<a href="/me/todos" class="text-sm font-medium text-slate-700 hover:text-slate-900">Todos</a
+				>
+				<a href="/me/hql" class="text-sm font-medium text-slate-700 hover:text-slate-900">HQL</a>
+				<a href="/me/sahel" class="text-sm font-medium text-slate-700 hover:text-slate-900">Sahel</a
+				>
+				<a href="/me/wallet" class="text-sm font-medium text-slate-700 hover:text-slate-900"
+					>Wallet</a
+				>
+				<a href="/me/settings" class="text-sm font-medium text-slate-700 hover:text-slate-900"
+					>Settings</a
+				>
+				<!-- Add other /me links here if needed -->
+			</nav>
+		{/if}
 	</header>
 
 	<!-- Main Content Area -->
