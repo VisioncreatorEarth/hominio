@@ -4,6 +4,13 @@
 	import { writable, get } from 'svelte/store';
 	import type { LitNodeClient } from '@lit-protocol/lit-node-client';
 	import { initializeLitClient } from '$lib/wallet/lit-connect';
+	import {
+		guardianEoaClientStore,
+		guardianEoaAddressStore,
+		guardianEoaChainIdStore,
+		guardianEoaErrorStore,
+		initializeGuardianEoaClient
+	} from '$lib/wallet/guardian-eoa';
 	import { startCall, endCall } from '$lib/ultravox/callFunctions';
 	import CallInterface from '$lib/components/CallInterface.svelte';
 	import { o } from '$lib/KERNEL/hominio-svelte';
@@ -29,10 +36,17 @@
 	(o as any).lit = litClientStore;
 	// --- End Lit Client Setup ---
 
+	// --- EOA Guardian Wallet Setup ---
+	(o as any).guardianEoaClientStore = guardianEoaClientStore;
+	(o as any).guardianEoaAddressStore = guardianEoaAddressStore;
+	(o as any).guardianEoaChainIdStore = guardianEoaChainIdStore;
+	(o as any).guardianEoaErrorStore = guardianEoaErrorStore;
+	// --- End EOA Guardian Wallet Setup ---
+
 	// Provide the session store to child components via context
 	setContext('sessionStore', sessionStore);
 
-	// Provide the entire 'o' object (now including .lit store) via context using key 'o'
+	// Provide the entire 'o' object (now including .lit and .guardianEoa stores) via context
 	setContext('o', o);
 
 	const DEFAULT_VIBE = 'home';
@@ -179,10 +193,28 @@
 			const client = await initializeLitClient();
 			litClientStore.set(client);
 			console.log('[Layout] Lit Client initialized and set in store.');
-		} catch (err: any) {
+		} catch (err: unknown) {
 			console.error('[Layout] Failed to initialize Lit Client:', err);
 			litClientStore.set(null); // Ensure store is null on error
-			// Optionally, set an error message in a global notification store or state here
+			if (err instanceof Error) {
+				// Example: o.notifyGlobalError(`Lit Client Error: ${err.message}`);
+			} else {
+				// Example: o.notifyGlobalError('An unknown error occurred initializing Lit Client.');
+			}
+		}
+
+		// Initialize EOA Guardian Wallet Client
+		try {
+			console.log('[Layout] Initializing EOA Guardian Wallet Client...');
+			initializeGuardianEoaClient(); // This function sets up the client and listeners
+			console.log('[Layout] EOA Guardian Wallet Client initialization process started.');
+		} catch (err: unknown) {
+			console.error('[Layout] Failed to initialize EOA Guardian Wallet Client:', err);
+			if (err instanceof Error) {
+				// Example: o.notifyGlobalError(`EOA Wallet Init Error: ${err.message}`);
+			} else {
+				// Example: o.notifyGlobalError('An unknown error occurred initializing EOA Wallet.');
+			}
 		}
 	});
 

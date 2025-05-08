@@ -7,8 +7,6 @@
 		clearStoredPasskeyData,
 		deployPasskeySignerContract,
 		verifySignatureWithProxy,
-		getWalletClient,
-		getWalletAccount,
 		type StoredPasskeyData
 	} from '$lib/wallet/passkeySigner';
 	import {
@@ -24,39 +22,45 @@
 	import type { SessionSigs, ExecuteJsResponse } from '@lit-protocol/types';
 	import type { Hex, Address, WalletClient } from 'viem';
 	import { keccak256, hexToBytes } from 'viem';
+	import type { Writable } from 'svelte/store';
+	import { o as baseHominioFacade } from '$lib/KERNEL/hominio-svelte';
 
-	// --- Get Hominio Facade (including Lit Client Store) from Context ---
-	// Type assertion includes the dynamically added 'lit' store
-	const o = getContext<
-		typeof import('$lib/KERNEL/hominio-svelte').o & {
-			lit: import('svelte/store').Writable<LitNodeClient | null>;
-		}
-	>('o');
-	const litClientStore = o.lit; // Get the store
-	// --- End Context Setup ---
+	type BaseHominioFacadeType = typeof baseHominioFacade;
 
-	// --- UI State for Tabbed Navigation ---
+	interface HominioFacadeWithAllWallets extends BaseHominioFacadeType {
+		lit: Writable<LitNodeClient | null>;
+		guardianEoaClientStore: Writable<WalletClient | null>;
+		guardianEoaAddressStore: Writable<Address | null>;
+		guardianEoaChainIdStore: Writable<number | null>;
+		guardianEoaErrorStore: Writable<string | null>;
+	}
+	const o = getContext<HominioFacadeWithAllWallets>('o');
+
+	const litClientStore = o.lit;
+	const {
+		guardianEoaClientStore,
+		guardianEoaAddressStore,
+		guardianEoaChainIdStore,
+		guardianEoaErrorStore
+	} = o;
+
 	let currentStepIndex = 0;
 	const steps = [
-		'Connections', // 0 - Simplified
-		'Passkey', // 1
-		'Deploy Signer', // 2
-		'Mint PKP', // 3
-		'Auth Methods', // 4
-		'Session Sigs', // 5
-		'PKP Operations', // 6
-		'Profile', // 7
-		'My Capacity Credits' // 8
+		'Passkey',
+		'Deploy Signer',
+		'Mint PKP',
+		'Auth Methods',
+		'Session Sigs',
+		'PKP Operations',
+		'Profile',
+		'My Capacity Credits'
 	];
 
 	function goToStep(index: number) {
 		currentStepIndex = index;
 		resetMainMessages();
 	}
-	// --- END: UI State for Tabbed Navigation ---
 
-	// --- Unified State ---
-	// Passkey & EIP-1271 Signer State
 	let username = '';
 	let storedPasskey: StoredPasskeyData | null = null;
 	let deploymentTxHash = '';
@@ -64,29 +68,19 @@
 	let proxyVerificationResult: { isCorrect: boolean; error?: string } | null = null;
 	let isLoadingProxyVerify = false;
 
-	// Wallet (EOA) Connection State
-	let eoaWalletClient: WalletClient | null = null;
-	let eoaAddress: Address | null = null;
-	let isEoaConnecting = false;
-
-	// --- Minted PKP State ---
 	let mintedPkpTokenId: string | null = null;
 	let mintedPkpPublicKey: Hex | null = null;
 	let mintedPkpEthAddress: Address | null = null;
 	let isMintingPkp = false;
-	// --- END: Minted PKP State ---
 
-	// Session Signatures State (Unified)
 	let sessionSigs: SessionSigs | null = null;
 	let sessionAuthMethod: 'gnosis-passkey' | null = null;
 	let isLoadingSessionSigsGnosisPasskey = false;
 
-	// PKP Interaction State
 	let messageToSign = 'Hello from Lit PKP!';
 	let signatureResult: { signature: Hex; dataSigned: Hex } | null = null;
 	let isSigningMessage = false;
 
-	// Lit Action State
 	let magicNumber = 43;
 	let litActionResult: ExecuteJsResponse | null = null;
 	let isExecutingAction = false;
@@ -105,11 +99,9 @@ const go = async () => {
 };
 go();`;
 
-	// --- State for displaying auth methods ---
 	let permittedAuthMethods: Array<{ authMethodType: bigint; id: Hex; userPubkey: Hex }> = [];
 	let isLoadingPermittedAuthMethods = false;
 
-	// --- State for displaying owned Capacity Credits (NEW) ---
 	type OwnedCapacityCredit = {
 		tokenId: string;
 		requestsPerKilosecond: bigint;
@@ -117,30 +109,24 @@ go();`;
 	};
 	let ownedCapacityCredits: Array<OwnedCapacityCredit> = [];
 	let isLoadingCapacityCredits = false;
-	// --- END: State for displaying owned Capacity Credits ---
 
-	// General UI State
 	let generalIsLoading = false;
 	let mainError = '';
 	let mainSuccess = '';
 
-	// --- Profile State - NEW
 	let profileName = '';
 	const PROFILE_STORAGE_KEY = 'hominio_profile_data_encrypted';
 	let encryptedProfileDataString: string | null = null;
 	let isEncryptingProfile = false;
 	let isDecryptingProfile = false;
-	// --- END: Profile State ---
 
 	onMount(async () => {
 		if (browser) {
-			// Load stored passkey data
 			storedPasskey = getStoredPasskeyData();
 			if (storedPasskey?.signerContractAddress) {
 				deployedSignerAddress = storedPasskey.signerContractAddress as Address;
 			}
 
-			// Load minted PKP data from localStorage
 			const storedPKPDataString = localStorage.getItem('mintedPKPData');
 			if (storedPKPDataString) {
 				try {
@@ -165,7 +151,6 @@ go();`;
 				}
 			}
 
-			// Load Profile Name from localStorage
 			encryptedProfileDataString = localStorage.getItem(PROFILE_STORAGE_KEY);
 			if (encryptedProfileDataString) {
 				console.log('Found encrypted profile data in localStorage.');
@@ -173,14 +158,8 @@ go();`;
 				console.log('No encrypted profile data found in localStorage.');
 			}
 
-			// Auto-connect EOA Wallet (Lit is connected globally in layout)
-			await handleConnectEoaWallet();
-
-			// Auto-fetch auth methods if PKP ID is loaded
-			// Check if Lit client is ready before fetching (relying on global client)
 			const currentLitClient = $litClientStore;
 			if (mintedPkpTokenId && currentLitClient && currentLitClient.ready) {
-				// Note: getPermittedAuthMethodsForPkp doesn't require Lit Client anymore
 				await handleFetchPermittedAuthMethods(mintedPkpTokenId);
 			} else if (mintedPkpTokenId) {
 				console.log(
@@ -196,7 +175,6 @@ go();`;
 		generalIsLoading = false;
 	}
 
-	// --- Passkey & EIP-1271 Functions ---
 	async function handleCreatePasskey() {
 		if (!username.trim()) {
 			mainError = 'Please enter a username.';
@@ -212,12 +190,15 @@ go();`;
 			if (newData) {
 				storedPasskey = newData;
 				mainSuccess = `Passkey created and stored for ${username}. AuthMethodID: ${newData.authMethodId}`;
-				goToStep(2);
+				goToStep(1);
 			} else {
 				mainError = 'Failed to create and store passkey.';
 			}
-		} catch (error: any) {
-			mainError = error.message || 'An unknown error occurred during passkey creation.';
+		} catch (error: unknown) {
+			mainError =
+				error instanceof Error
+					? error.message
+					: 'An unknown error occurred during passkey creation.';
 			console.error(error);
 		} finally {
 			generalIsLoading = false;
@@ -232,6 +213,7 @@ go();`;
 		deploymentTxHash = '';
 		proxyVerificationResult = null;
 		deployedSignerAddress = null;
+
 		mintedPkpTokenId = null;
 		mintedPkpPublicKey = null;
 		mintedPkpEthAddress = null;
@@ -243,28 +225,36 @@ go();`;
 
 		if (browser) {
 			localStorage.removeItem('mintedPKPData');
-			localStorage.removeItem(PROFILE_STORAGE_KEY); // Clear encrypted profile too
+			localStorage.removeItem(PROFILE_STORAGE_KEY);
 			encryptedProfileDataString = null;
 			profileName = '';
 		}
 		mainSuccess = 'Passkey and associated PKP data cleared.';
-		goToStep(1);
+		goToStep(0);
 	}
 
 	async function handleDeployContract() {
+		const currentEoaClient = $guardianEoaClientStore;
+		const currentEoaAddress = $guardianEoaAddressStore;
+
+		if (!currentEoaClient || !currentEoaAddress) {
+			mainError = 'Cannot deploy: EOA Wallet not connected. Please connect via Status Bar.';
+			return;
+		}
+
 		generalIsLoading = true;
 		resetMainMessages();
 		deploymentTxHash = '';
 		proxyVerificationResult = null;
 
 		try {
-			const result = await deployPasskeySignerContract();
+			const result = await deployPasskeySignerContract(currentEoaClient, currentEoaAddress);
 			if (result) {
 				deploymentTxHash = result.txHash;
 				if (result.signerAddress) {
 					deployedSignerAddress = result.signerAddress;
 					mainSuccess = `Signer contract deployment transaction sent: ${result.txHash}. Address: ${result.signerAddress}`;
-					goToStep(3);
+					goToStep(2);
 				} else {
 					mainSuccess = `Deployment transaction sent (${result.txHash}), but couldn't extract address from logs. Check Gnosisscan.`;
 				}
@@ -272,8 +262,9 @@ go();`;
 			} else {
 				mainError = 'Deployment failed. Check console and wallet connection.';
 			}
-		} catch (error: any) {
-			mainError = error.message || 'An unknown error occurred during deployment.';
+		} catch (error: unknown) {
+			mainError =
+				error instanceof Error ? error.message : 'An unknown error occurred during deployment.';
 			console.error(error);
 		} finally {
 			generalIsLoading = false;
@@ -286,7 +277,7 @@ go();`;
 			return;
 		}
 		if (!deployedSignerAddress) {
-			mainError = 'EIP-1271 Signer contract must be deployed first (Step 2).';
+			mainError = 'EIP-1271 Signer contract must be deployed first (Step 1).';
 			return;
 		}
 		isLoadingProxyVerify = true;
@@ -303,56 +294,31 @@ go();`;
 			} else {
 				mainError = `EIP-1271 Proxy Verification Failed: ${proxyVerificationResult.error || 'Contract returned invalid magic value.'}`;
 			}
-		} catch (error: any) {
-			mainError = `Error during EIP-1271 proxy signature verification: ${error.message}`;
+		} catch (error: unknown) {
+			mainError =
+				error instanceof Error
+					? `Error during EIP-1271 proxy signature verification: ${error.message}`
+					: 'Unknown error during EIP-1271 proxy verification.';
 			console.error(error);
 		} finally {
 			isLoadingProxyVerify = false;
 		}
 	}
 
-	// --- EOA Wallet Connection Function ---
-	async function handleConnectEoaWallet() {
-		if (eoaWalletClient && eoaAddress) return;
-		isEoaConnecting = true;
-		resetMainMessages();
-		try {
-			eoaWalletClient = getWalletClient();
-			if (eoaWalletClient) {
-				const account = await getWalletAccount();
-				if (account) {
-					eoaAddress = account;
-					mainSuccess = `EOA Wallet connected: ${eoaAddress}`;
-				} else {
-					mainError =
-						'Could not get EOA account. Is your wallet connected and an account selected?';
-					eoaWalletClient = null;
-				}
-			} else {
-				mainError = 'Could not initialize EOA wallet client.';
-			}
-		} catch (error: any) {
-			mainError = `Error connecting EOA wallet: ${error.message}`;
-			console.error('EOA connection error:', error);
-			eoaWalletClient = null;
-			eoaAddress = null;
-		} finally {
-			isEoaConnecting = false;
-		}
-	}
-
-	// --- Mint PKP Function ---
 	async function handleMintPkp() {
+		const currentEoaClient = $guardianEoaClientStore;
+		const currentEoaAddress = $guardianEoaAddressStore;
+
 		if (!storedPasskey?.authMethodId) {
-			mainError = 'Cannot mint: Passkey not created or authMethodId missing (Step 1).';
+			mainError = 'Cannot mint: Passkey not created or authMethodId missing (Step 0).';
 			return;
 		}
 		if (!storedPasskey?.signerContractAddress) {
-			mainError = 'Cannot mint: EIP-1271 Signer contract must be deployed first (Step 2).';
+			mainError = 'Cannot mint: EIP-1271 Signer contract must be deployed first (Step 1).';
 			return;
 		}
-		if (!eoaWalletClient || !eoaAddress) {
-			mainError = 'Cannot mint: EOA Wallet not connected (Step 0).';
+		if (!currentEoaClient || !currentEoaAddress) {
+			mainError = 'Cannot mint: EOA Wallet not connected. Please connect via Status Bar.';
 			return;
 		}
 
@@ -361,8 +327,8 @@ go();`;
 
 		try {
 			const pkpDetails = await mintPKPWithPasskeyAndAction(
-				eoaWalletClient,
-				eoaAddress,
+				currentEoaClient,
+				currentEoaAddress,
 				storedPasskey.authMethodId as Hex,
 				gnosisPasskeyVerifyActionCode
 			);
@@ -382,22 +348,22 @@ go();`;
 
 			mainSuccess = `PKP Minted Successfully! Token ID: ${mintedPkpTokenId}`;
 
-			// Fetch auth methods AFTER minting
 			if (mintedPkpTokenId) {
 				await handleFetchPermittedAuthMethods(mintedPkpTokenId);
 			}
-			goToStep(4);
-		} catch (error: any) {
-			mainError = `PKP minting error: ${error.message}`;
+			goToStep(3);
+		} catch (error: unknown) {
+			mainError =
+				error instanceof Error
+					? `PKP minting error: ${error.message}`
+					: 'Unknown PKP minting error.';
 			console.error('PKP minting error:', error);
 		} finally {
 			isMintingPkp = false;
 		}
 	}
 
-	// --- Session Signature Generation ---
 	async function handleGetSessionSigsGnosisPasskey() {
-		// Use the global Lit client from the store
 		const currentLitClient = $litClientStore;
 
 		if (!currentLitClient || !currentLitClient.ready) {
@@ -405,17 +371,17 @@ go();`;
 			return;
 		}
 		if (!storedPasskey?.rawId || !storedPasskey.pubkeyCoordinates) {
-			mainError = 'Stored passkey with rawId and coordinates is required (Step 1).';
+			mainError = 'Stored passkey with rawId and coordinates is required (Step 0).';
 			return;
 		}
 		if (!storedPasskey?.signerContractAddress) {
-			mainError = 'EIP-1271 Signer contract must be deployed first (Step 2) to get session sigs.';
+			mainError = 'EIP-1271 Signer contract must be deployed first (Step 1) to get session sigs.';
 			return;
 		}
 
 		const pkpKeyToUse = mintedPkpPublicKey;
 		if (!pkpKeyToUse) {
-			mainError = 'No PKP Public Key available. Mint a PKP first (Step 3).';
+			mainError = 'No PKP Public Key available. Mint a PKP first (Step 2).';
 			return;
 		}
 
@@ -453,7 +419,7 @@ go();`;
 			}
 
 			sessionSigs = await getSessionSigsWithGnosisPasskeyVerification(
-				currentLitClient, // Pass the ready client instance
+				currentLitClient!,
 				pkpKeyToUse,
 				challengeMessage,
 				assertionResponse,
@@ -463,9 +429,12 @@ go();`;
 
 			sessionAuthMethod = 'gnosis-passkey';
 			mainSuccess = 'Successfully obtained session signatures via Passkey (Gnosis)!_';
-			goToStep(6);
-		} catch (err: any) {
-			mainError = err.message || 'Unknown error getting session signatures via Gnosis Passkey.';
+			goToStep(5);
+		} catch (err: unknown) {
+			mainError =
+				err instanceof Error
+					? err.message
+					: 'Unknown error getting session signatures via Gnosis Passkey.';
 			sessionSigs = null;
 			sessionAuthMethod = null;
 			console.error('Error in handleGetSessionSigsGnosisPasskey:', err);
@@ -474,12 +443,11 @@ go();`;
 		}
 	}
 
-	// --- PKP Operations (Sign Message, Execute Action) ---
 	async function handleSignMessageWithPkp() {
 		const currentLitClient = $litClientStore;
 
 		if (!currentLitClient || !currentLitClient.ready || !sessionSigs) {
-			mainError = 'Lit client must be ready and session signatures obtained first (Step 5).';
+			mainError = 'Lit client must be ready and session signatures obtained first (Step 4).';
 			return;
 		}
 		if (!messageToSign.trim()) {
@@ -488,7 +456,7 @@ go();`;
 		}
 		const pkpKeyToUseForSigning = mintedPkpPublicKey;
 		if (!pkpKeyToUseForSigning) {
-			mainError = 'No PKP Public Key available for signing (Step 3).';
+			mainError = 'No PKP Public Key available for signing (Step 2).';
 			return;
 		}
 
@@ -498,14 +466,14 @@ go();`;
 
 		try {
 			signatureResult = await signWithPKP(
-				currentLitClient, // Pass ready client
-				sessionSigs,
+				currentLitClient!,
+				sessionSigs!,
 				pkpKeyToUseForSigning,
 				messageToSign
 			);
 			mainSuccess = 'Message signed successfully with PKP!';
-		} catch (err: any) {
-			mainError = err.message || 'Unknown error signing message with PKP';
+		} catch (err: unknown) {
+			mainError = err instanceof Error ? err.message : 'Unknown error signing message with PKP';
 			signatureResult = null;
 		} finally {
 			isSigningMessage = false;
@@ -516,7 +484,7 @@ go();`;
 		const currentLitClient = $litClientStore;
 
 		if (!currentLitClient || !currentLitClient.ready || !sessionSigs) {
-			mainError = 'Lit client must be ready and session signatures obtained first (Step 5).';
+			mainError = 'Lit client must be ready and session signatures obtained first (Step 4).';
 			return;
 		}
 		isExecutingAction = true;
@@ -525,8 +493,8 @@ go();`;
 
 		try {
 			litActionResult = await executeLitAction(
-				currentLitClient, // Pass ready client
-				sessionSigs,
+				currentLitClient!,
+				sessionSigs!,
 				litActionCodeForExecution,
 				{
 					magicNumber: magicNumber
@@ -534,15 +502,14 @@ go();`;
 			);
 			mainSuccess = 'Lit Action executed successfully!';
 			console.log('Full Lit Action Result:', litActionResult);
-		} catch (err: any) {
-			mainError = err.message || 'Unknown error executing Lit Action';
+		} catch (err: unknown) {
+			mainError = err instanceof Error ? err.message : 'Unknown error executing Lit Action';
 			litActionResult = null;
 		} finally {
 			isExecutingAction = false;
 		}
 	}
 
-	// --- Handler to fetch and display permitted auth methods ---
 	async function handleFetchPermittedAuthMethods(tokenId: string) {
 		if (!tokenId.trim()) {
 			mainError = 'PKP Token ID must be provided to fetch auth methods.';
@@ -559,15 +526,14 @@ go();`;
 			} else {
 				mainSuccess = `No permitted auth methods found for PKP ${tokenId}.`;
 			}
-		} catch (err: any) {
-			mainError = err.message || 'Error fetching permitted auth methods.';
+		} catch (err: unknown) {
+			mainError = err instanceof Error ? err.message : 'Error fetching permitted auth methods.';
 			console.error('Error in handleFetchPermittedAuthMethods:', err);
 		} finally {
 			isLoadingPermittedAuthMethods = false;
 		}
 	}
 
-	// --- Handler to fetch and display owned Capacity Credits (NEW) ---
 	async function handleFetchOwnedCapacityCredits() {
 		if (!mintedPkpEthAddress) {
 			mainError =
@@ -586,25 +552,23 @@ go();`;
 			} else {
 				mainSuccess = `No Capacity Credit NFTs found for your PKP (${mintedPkpEthAddress.slice(0, 6)}...).`;
 			}
-		} catch (err: any) {
-			mainError = err.message || 'Error fetching owned capacity credits.';
+		} catch (err: unknown) {
+			mainError = err instanceof Error ? err.message : 'Error fetching owned capacity credits.';
 			console.error('Error in handleFetchOwnedCapacityCredits:', err);
 		} finally {
 			isLoadingCapacityCredits = false;
 		}
 	}
 
-	// --- Profile Functions - NEW ---
 	async function handleSaveProfile() {
 		const currentLitClient = $litClientStore;
 		if (!profileName.trim()) {
 			mainError = 'Please enter a name for your profile.';
 			return;
 		}
-		// Check for Lit client ready state
 		if (!currentLitClient || !currentLitClient.ready || !sessionSigs || !mintedPkpEthAddress) {
 			mainError =
-				'Cannot save profile: Lit connection (ready), session signatures, and minted PKP details are required.';
+				'Cannot save profile: Lit connection (ready), session signatures (Step 4), and minted PKP details (Step 2) are required.';
 			return;
 		}
 
@@ -648,25 +612,27 @@ go();`;
 			localStorage.setItem(PROFILE_STORAGE_KEY, encryptedProfileDataString);
 			mainSuccess = 'Profile name encrypted and saved successfully!';
 			console.log('Profile encrypted and stored. Data:', dataToStore);
-		} catch (error: any) {
-			mainError = `Error saving profile: ${error.message}`;
+		} catch (error: unknown) {
+			mainError =
+				error instanceof Error
+					? `Error saving profile: ${error.message}`
+					: 'Unknown error saving profile.';
 			console.error('Error saving profile to localStorage:', error);
 		} finally {
 			isEncryptingProfile = false;
 		}
 	}
 
-	// Reactive statement for decryption - NEW
 	$: if (
 		browser &&
-		$litClientStore?.ready && // Check Lit client readiness here
+		$litClientStore?.ready &&
 		sessionSigs &&
 		encryptedProfileDataString &&
 		!profileName &&
 		!isDecryptingProfile
 	) {
 		(async () => {
-			const currentLitClient = $litClientStore; // Client is guaranteed ready here
+			const currentLitClient = $litClientStore;
 			isDecryptingProfile = true;
 			resetMainMessages();
 			console.log('Attempting to decrypt profile name...');
@@ -691,13 +657,16 @@ go();`;
 						dataToEncryptHash: storedEncryptedData.dataToEncryptHash,
 						sessionSigs: sessionSigs!
 					},
-					currentLitClient! // Pass ready client (non-null asserted)
+					currentLitClient! // Pass ready client
 				);
 				profileName = decryptedNameStr;
 				mainSuccess = 'Profile name decrypted and loaded.';
 				console.log('Profile decrypted:', profileName);
-			} catch (err: any) {
-				mainError = `Failed to decrypt profile: ${err.message}. You might need to re-save it or check PKP/Lit connection.`;
+			} catch (err: unknown) {
+				mainError =
+					err instanceof Error
+						? `Failed to decrypt profile: ${err.message}`
+						: 'Failed to decrypt profile: Unknown error.';
 				console.error('Error decrypting profile name:', err);
 				localStorage.removeItem(PROFILE_STORAGE_KEY);
 				encryptedProfileDataString = null;
@@ -706,12 +675,9 @@ go();`;
 			}
 		})();
 	}
-	// --- END: Profile Functions ---
 </script>
 
-<!-- HTML Template - Step 0 simplified -->
 <div class="min-h-screen bg-stone-50 font-sans text-slate-800">
-	<!-- Header Title -->
 	<header class="px-4 py-8 text-center sm:py-10">
 		<h1 class="text-3xl font-bold text-slate-800 sm:text-4xl md:text-5xl">
 			{#if profileName}
@@ -725,7 +691,6 @@ go();`;
 		</p>
 	</header>
 
-	<!-- Sticky Tab Bar -->
 	<div class="sticky top-0 z-50 bg-stone-100/80 shadow-md backdrop-blur-md">
 		<nav
 			class="mx-auto flex max-w-5xl items-center justify-center space-x-1 overflow-x-auto p-2 sm:space-x-1"
@@ -744,10 +709,8 @@ go();`;
 		</nav>
 	</div>
 
-	<!-- Main Content Area -->
 	<main class="px-4 py-8">
 		<div class="mx-auto max-w-3xl">
-			<!-- Global Messages -->
 			{#if mainError}
 				<div
 					class="mb-6 w-full rounded-lg border border-red-300 bg-red-100 p-4 text-red-700 shadow-md"
@@ -766,49 +729,10 @@ go();`;
 				</div>
 			{/if}
 
-			<!-- Step 0: Connections (Simplified) -->
 			{#if currentStepIndex === 0}
 				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
 					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
-						Step 0: Connections
-					</h2>
-					<div class="space-y-4">
-						<div>
-							<h3 class="mb-2 text-lg font-medium text-slate-600">Controller EOA Wallet</h3>
-							{#if isEoaConnecting}
-								<p class="flex items-center text-sm text-yellow-600">
-									<span class="spinner mr-2"></span>Connecting EOA Wallet...
-								</p>
-							{:else if eoaAddress}
-								<div class="rounded-md bg-green-50 p-3 text-sm text-green-700">
-									<p class="font-semibold">✅ EOA Connected:</p>
-									<p class="font-mono text-xs break-all">{eoaAddress}</p>
-								</div>
-							{:else if mainError && mainError.toLowerCase().includes('eoa')}
-								<div class="rounded-md bg-red-50 p-3 text-sm text-red-700">
-									<p class="font-semibold">EOA Connection Failed:</p>
-									<p>{mainError.replace('Error connecting EOA wallet: ', '')}</p>
-								</div>
-							{:else}
-								<p class="text-sm text-stone-500">EOA Wallet not connected.</p>
-								<button
-									on:click={handleConnectEoaWallet}
-									class="mt-2 rounded-lg bg-slate-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-slate-700 focus:ring-2 focus:ring-slate-500 focus:ring-offset-2 disabled:opacity-50"
-									disabled={isEoaConnecting}
-								>
-									Connect EOA Wallet
-								</button>
-							{/if}
-						</div>
-					</div>
-				</div>
-			{/if}
-
-			<!-- Step 1: Passkey Management (Unchanged) -->
-			{#if currentStepIndex === 1}
-				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
-					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
-						Step 1: Passkey Management (User-specific)
+						Step 0: Passkey Management (User-specific)
 					</h2>
 					{#if !storedPasskey}
 						<form on:submit|preventDefault={handleCreatePasskey} class="space-y-4">
@@ -889,16 +813,15 @@ go();`;
 				</div>
 			{/if}
 
-			<!-- Step 2: Deploy Signer (Unchanged) -->
-			{#if currentStepIndex === 2}
+			{#if currentStepIndex === 1}
 				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
 					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
-						Step 2: Deploy & Verify EIP-1271 Signer
+						Step 1: Deploy & Verify EIP-1271 Signer
 					</h2>
 					<p class="mb-4 text-sm text-slate-500">
-						Deploy an EIP-1271 signer proxy contract for the passkey (Step 1). This allows on-chain
+						Deploy an EIP-1271 signer proxy contract for the passkey (Step 0). This allows on-chain
 						verification of signatures and is <strong>required</strong> before minting a PKP (Step
-						3) that uses this passkey for Lit Action authentication.
+						2) that uses this passkey for Lit Action authentication.
 						<strong class="text-orange-600">Requires Gnosis connection & funds.</strong>
 					</p>
 
@@ -906,27 +829,35 @@ go();`;
 						<div
 							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-center text-sm text-orange-700"
 						>
-							Create a Passkey (Step 1) first.
+							Create a Passkey (Step 0) first.
 						</div>
 					{:else if !storedPasskey.signerContractAddress}
-						<button
-							on:click={handleDeployContract}
-							class="w-full justify-center rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 focus:ring-2 focus:ring-slate-500 focus:ring-offset-2 disabled:opacity-50"
-							disabled={generalIsLoading}
-						>
-							{#if generalIsLoading}<span class="spinner mr-2"></span>Deploying...{:else}Deploy
-								EIP-1271 Signer{/if}
-						</button>
-						{#if deploymentTxHash && deploymentTxHash !== '0x'}
-							<p class="mt-3 text-center text-xs text-slate-500">
-								Tx Hash:
-								<a
-									href={`https://gnosisscan.io/tx/${deploymentTxHash}`}
-									target="_blank"
-									rel="noopener noreferrer"
-									class="text-blue-600 hover:underline">{deploymentTxHash}</a
-								>
-							</p>
+						{#if !$guardianEoaAddressStore}
+							<div
+								class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-center text-sm text-orange-700"
+							>
+								Connect EOA Wallet (via Status Bar) first.
+							</div>
+						{:else}
+							<button
+								on:click={handleDeployContract}
+								class="w-full justify-center rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 focus:ring-2 focus:ring-slate-500 focus:ring-offset-2 disabled:opacity-50"
+								disabled={generalIsLoading || !$guardianEoaAddressStore}
+							>
+								{#if generalIsLoading}<span class="spinner mr-2"></span>Deploying...{:else}Deploy
+									EIP-1271 Signer{/if}
+							</button>
+							{#if deploymentTxHash && deploymentTxHash !== '0x'}
+								<p class="mt-3 text-center text-xs text-slate-500">
+									Tx Hash:
+									<a
+										href={`https://gnosisscan.io/tx/${deploymentTxHash}`}
+										target="_blank"
+										rel="noopener noreferrer"
+										class="text-blue-600 hover:underline">{deploymentTxHash}</a
+									>
+								</p>
+							{/if}
 						{/if}
 					{:else}
 						<div
@@ -985,31 +916,29 @@ go();`;
 				</div>
 			{/if}
 
-			<!-- Step 3: Mint PKP (Unchanged) -->
-			{#if currentStepIndex === 3}
+			{#if currentStepIndex === 2}
 				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
 					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
-						Step 3: Mint PKP for Passkey
+						Step 2: Mint PKP for Passkey
 					</h2>
 
 					{#if !storedPasskey}
 						<div
 							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-sm text-orange-700"
 						>
-							Please create and store a passkey first (Step 1) to enable PKP minting.
+							Please create and store a passkey first (Step 0) to enable PKP minting.
 						</div>
 					{:else if !storedPasskey.signerContractAddress}
 						<div
 							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-sm text-orange-700"
 						>
-							Please deploy the EIP-1271 Signer (Step 2) first to enable PKP minting.
+							Please deploy the EIP-1271 Signer (Step 1) first to enable PKP minting.
 						</div>
-					{:else if !eoaAddress}
+					{:else if !$guardianEoaAddressStore}
 						<div
 							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-sm text-orange-700"
 						>
-							EOA Wallet not connected. Please ensure your wallet is connected to enable PKP
-							minting.
+							EOA Wallet not connected. Please connect via Status Bar to enable PKP minting.
 						</div>
 					{:else if !mintedPkpTokenId}
 						<p class="mb-4 text-sm text-slate-500">
@@ -1021,7 +950,7 @@ go();`;
 							class="flex w-full items-center justify-center rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:opacity-50"
 							disabled={isMintingPkp ||
 								!storedPasskey?.authMethodId ||
-								!eoaAddress ||
+								!$guardianEoaAddressStore ||
 								!storedPasskey.signerContractAddress}
 							on:click={handleMintPkp}
 						>
@@ -1053,17 +982,16 @@ go();`;
 				</div>
 			{/if}
 
-			<!-- Step 4: View Auth Methods -->
-			{#if currentStepIndex === 4}
+			{#if currentStepIndex === 3}
 				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
 					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
-						Step 4: View PKP Auth Methods
+						Step 3: View PKP Auth Methods
 					</h2>
 					{#if !mintedPkpTokenId}
 						<div
 							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-sm text-orange-700"
 						>
-							Mint a PKP (Step 3) first to view its auth methods.
+							Mint a PKP (Step 2) first to view its auth methods.
 						</div>
 					{:else}
 						<p class="mb-4 text-sm text-slate-500">
@@ -1118,92 +1046,74 @@ go();`;
 				</div>
 			{/if}
 
-			<!-- Step 5: Generate Session Signatures for PKP -->
-			{#if currentStepIndex === 5}
-				{#if $litClientStore?.ready && mintedPkpTokenId}
-					<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
-						<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
-							Step 5: Generate Session Signatures for PKP
-						</h2>
-						<p class="mb-4 text-sm text-slate-500">
-							Use your passkey (authenticated via the Gnosis verification Lit Action) to obtain
-							temporary session keys to use the PKP (<code
-								class="rounded bg-stone-200 p-0.5 text-xs">{mintedPkpTokenId}</code
-							>).
-						</p>
+			{#if currentStepIndex === 4}
+				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
+					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
+						Step 4: Generate Session Signatures for PKP
+					</h2>
+					<p class="mb-4 text-sm text-slate-500">
+						Use your passkey (authenticated via the Gnosis verification Lit Action) to obtain
+						temporary session keys to use the PKP (<code class="rounded bg-stone-200 p-0.5 text-xs"
+							>{mintedPkpTokenId}</code
+						>).
+					</p>
 
-						<div class="space-y-4">
-							<!-- Method: Gnosis Verified Passkey -->
-							<div class="rounded-lg border border-stone-200 p-4">
-								<h3 class="mb-2 font-medium text-slate-600">
-									Authenticate with Passkey (Gnosis On-Chain Verification)
-								</h3>
-								{#if storedPasskey?.rawId && storedPasskey?.pubkeyCoordinates && storedPasskey?.signerContractAddress}
-									<p class="mb-3 text-xs text-slate-500">
-										Uses a Lit Action to verify your passkey signature directly against your
-										deployed EIP-1271 Gnosis Chain contract (Step 2).
-									</p>
-									<button
-										on:click={handleGetSessionSigsGnosisPasskey}
-										class="w-full justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
-										disabled={isLoadingSessionSigsGnosisPasskey ||
-											(!!sessionSigs && sessionAuthMethod !== 'gnosis-passkey') ||
-											!mintedPkpPublicKey}
-									>
-										{#if isLoadingSessionSigsGnosisPasskey}<span class="spinner mr-2"
-											></span>Generating Sigs...{:else if sessionSigs && sessionAuthMethod === 'gnosis-passkey'}✅
-											Sigs Obtained{:else}Get Session Sigs (Gnosis Passkey){/if}
-									</button>
-								{:else}
-									<p
-										class="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-600"
-									>
-										{#if !storedPasskey?.rawId || !storedPasskey?.pubkeyCoordinates}
-											Create a passkey (Step 1) first.
-										{:else if !storedPasskey?.signerContractAddress}
-											Deploy EIP-1271 Signer (Step 2) first.
-										{/if}
-									</p>
-								{/if}
-							</div>
+					<div class="space-y-4">
+						<div class="rounded-lg border border-stone-200 p-4">
+							<h3 class="mb-2 font-medium text-slate-600">
+								Authenticate with Passkey (Gnosis On-Chain Verification)
+							</h3>
+							{#if storedPasskey?.rawId && storedPasskey?.pubkeyCoordinates && storedPasskey?.signerContractAddress}
+								<p class="mb-3 text-xs text-slate-500">
+									Uses a Lit Action to verify your passkey signature directly against your deployed
+									EIP-1271 Gnosis Chain contract (Step 1).
+								</p>
+								<button
+									on:click={handleGetSessionSigsGnosisPasskey}
+									class="w-full justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
+									disabled={isLoadingSessionSigsGnosisPasskey ||
+										(!!sessionSigs && sessionAuthMethod !== 'gnosis-passkey') ||
+										!mintedPkpPublicKey}
+								>
+									{#if isLoadingSessionSigsGnosisPasskey}<span class="spinner mr-2"
+										></span>Generating Sigs...{:else if sessionSigs && sessionAuthMethod === 'gnosis-passkey'}✅
+										Sigs Obtained{:else}Get Session Sigs (Gnosis Passkey){/if}
+								</button>
+							{:else}
+								<p
+									class="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-600"
+								>
+									{#if !storedPasskey?.rawId || !storedPasskey?.pubkeyCoordinates}
+										Create a passkey (Step 0) first.
+									{:else if !storedPasskey?.signerContractAddress}
+										Deploy EIP-1271 Signer (Step 1) first.
+									{/if}
+								</p>
+							{/if}
 						</div>
+					</div>
 
-						{#if sessionSigs}
-							<div class="mt-6 rounded-lg border border-stone-200 bg-stone-100 p-4">
-								<h3 class="mb-2 font-semibold text-slate-700">
-									Active Session Signatures (Authenticated via: {sessionAuthMethod?.toUpperCase()})
-								</h3>
-								<pre
-									class="overflow-x-auto rounded-md bg-white p-3 text-xs whitespace-pre-wrap shadow-sm">{JSON.stringify(
-										sessionSigs,
-										null,
-										2
-									)}</pre>
-							</div>
-						{/if}
-					</div>
-				{:else}
-					<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
-						<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
-							Step 5: Generate Session Signatures
-						</h2>
-						<p
-							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-sm text-orange-700"
-						>
-							{#if !sessionSigs}Please generate session signatures (Step 5) first.{/if}
-							{#if sessionSigs && !$litClientStore?.ready}Lit client is not ready. Please ensure
-								it's connected (check header).{/if}
-						</p>
-					</div>
-				{/if}
+					{#if sessionSigs}
+						<div class="mt-6 rounded-lg border border-stone-200 bg-stone-100 p-4">
+							<h3 class="mb-2 font-semibold text-slate-700">
+								Active Session Signatures (Authenticated via: {sessionAuthMethod?.toUpperCase()})
+							</h3>
+							<pre
+								class="overflow-x-auto rounded-md bg-white p-3 text-xs whitespace-pre-wrap shadow-sm">{JSON.stringify(
+									sessionSigs,
+									null,
+									2
+								)}</pre>
+						</div>
+					{/if}
+				</div>
 			{/if}
 
-			<!-- Step 6: PKP Operations -->
-			{#if currentStepIndex === 6}
+			{#if currentStepIndex === 5}
 				{#if sessionSigs && $litClientStore?.ready}
 					<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
 						<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
-							Step 6: PKP Operations (Requires Session Sigs)
+							Step 5: PKP Operations (Requires Session Sigs)
 						</h2>
 						<p class="mb-4 text-xs text-slate-500">
 							Current session authenticated via:
@@ -1212,9 +1122,8 @@ go();`;
 							>
 						</p>
 
-						<!-- Sign Message with PKP -->
 						<div class="mb-6 rounded-lg border border-stone-200 p-4">
-							<h3 class="mb-3 text-lg font-medium text-slate-600">6A. Sign Message with PKP</h3>
+							<h3 class="mb-3 text-lg font-medium text-slate-600">5A. Sign Message with PKP</h3>
 							<div class="mb-4">
 								<label for="messageToSignPkp" class="mb-1 block text-sm font-medium text-slate-600"
 									>Message to Sign</label
@@ -1254,9 +1163,8 @@ go();`;
 							{/if}
 						</div>
 
-						<!-- Execute Lit Action -->
 						<div class="rounded-lg border border-stone-200 p-4">
-							<h3 class="mb-3 text-lg font-medium text-slate-600">6B. Execute Inline Lit Action</h3>
+							<h3 class="mb-3 text-lg font-medium text-slate-600">5B. Execute Inline Lit Action</h3>
 							<p class="mb-3 text-xs text-slate-500">
 								This action checks if a number is >= 42. Code is defined below.
 							</p>
@@ -1307,12 +1215,12 @@ go();`;
 				{:else}
 					<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
 						<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
-							Step 6: PKP Operations
+							Step 5: PKP Operations
 						</h2>
 						<p
 							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-sm text-orange-700"
 						>
-							{#if !sessionSigs}Please generate session signatures (Step 5) first.{/if}
+							{#if !sessionSigs}Please generate session signatures (Step 4) first.{/if}
 							{#if sessionSigs && !$litClientStore?.ready}Lit client is not ready. Please ensure
 								it's connected (check header).{/if}
 						</p>
@@ -1320,11 +1228,10 @@ go();`;
 				{/if}
 			{/if}
 
-			<!-- Step 7: Profile Management -->
-			{#if currentStepIndex === 7}
+			{#if currentStepIndex === 6}
 				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
 					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
-						Step 7: Your Profile
+						Step 6: Your Profile
 					</h2>
 					<p class="mb-4 text-sm text-slate-500">
 						Set your profile name. This will be encrypted using Lit Protocol and stored locally.
@@ -1362,19 +1269,18 @@ go();`;
 						</button>
 						{#if !sessionSigs || !mintedPkpEthAddress || !$litClientStore?.ready}
 							<p class="mt-2 text-xs text-orange-600">
-								Note: Requires Lit Connection (Ready), Session Sigs (Step 5), and minted PKP (Step
-								3).
+								Note: Requires Lit Connection (Ready), Session Sigs (Step 4), and minted PKP (Step
+								2).
 							</p>
 						{/if}
 					</div>
 				</div>
 			{/if}
 
-			<!-- Step 8: My Capacity Credits (Unchanged) -->
-			{#if currentStepIndex === 8}
+			{#if currentStepIndex === 7}
 				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
 					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
-						Step 8: PKP Capacity Credits (for PKP: {mintedPkpEthAddress
+						Step 7: PKP Capacity Credits (for PKP: {mintedPkpEthAddress
 							? mintedPkpEthAddress.slice(0, 6) + '...' + mintedPkpEthAddress.slice(-4)
 							: 'N/A'})
 					</h2>
@@ -1386,7 +1292,7 @@ go();`;
 						<div
 							class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-sm text-orange-700"
 						>
-							Please mint a PKP (Step 3) first to view its capacity credits.
+							Please mint a PKP (Step 2) first to view its capacity credits.
 						</div>
 					{:else}
 						<button
@@ -1439,7 +1345,6 @@ go();`;
 </div>
 
 <style>
-	/* Styles remain unchanged */
 	.spinner {
 		/* ... */
 	}

@@ -205,6 +205,7 @@ export const executeLitAction = async (
  * Registers a passkey as a custom authentication method for a PKP.
  * GRANTS SignAnything scope by default.
  * TARGETS Chronicle Testnet.
+ * ACCEPTS walletClient and eoaAddress as arguments.
  * 
  * @param walletClient The Viem WalletClient connected to the EOA.
  * @param eoaAddress The address of the EOA controller.
@@ -233,7 +234,31 @@ export const registerPasskeyAuthMethod = async (
     try {
         const currentWalletChainId = await walletClient.getChainId();
         if (currentWalletChainId !== currentChain.id) {
-            throw new Error(`Wallet is connected to chain ${currentWalletChainId}, but ${currentChain.name} (Chain ID: ${currentChain.id}) is required.`);
+            console.log(`Requesting wallet switch to Chronicle (${currentChain.id}) via provided client...`);
+            try {
+                await walletClient.switchChain({ id: currentChain.id });
+                const newChainId = await walletClient.getChainId();
+                if (newChainId !== currentChain.id) {
+                    throw new Error(`Wallet switch failed. Please manually switch to Chronicle (ID: ${currentChain.id}).`);
+                }
+                console.log(`Wallet switched to Chronicle.`);
+            } catch (switchError: unknown) {
+                let message = 'Unknown switch error';
+                type ErrorWithCode = { code?: number | string } & Partial<Error>;
+
+                if (switchError instanceof Error) {
+                    message = switchError.message;
+                }
+                let code: number | string | undefined = undefined;
+                if (typeof switchError === 'object' && switchError !== null && 'code' in switchError) {
+                    code = (switchError as ErrorWithCode).code;
+                }
+
+                if (message.includes('rejected') || code === 4001) {
+                    throw new Error('User rejected the network switch request.');
+                }
+                throw new Error(`Failed to switch wallet to Chronicle: ${message}`);
+            }
         }
 
         const authMethod = {
@@ -333,6 +358,7 @@ export const getPermittedAuthMethodsForPkp = async (
 /**
  * Registers a Lit Action as a permitted authentication method for a PKP.
  * Requires the EOA controller's wallet client to sign the transaction.
+ * ACCEPTS walletClient and eoaAddress as arguments.
  *
  * @param walletClient The Viem WalletClient connected to the EOA controller.
  * @param eoaAddress The address of the EOA controller.
@@ -363,9 +389,35 @@ export const addPermittedLitAction = async (
     try {
         const currentChainId = await walletClient.getChainId();
         if (currentChainId !== currentChain.id) {
-            throw new Error(
-                `Wallet is connected to chain ${currentChainId}, but ${currentChain.name} (Chain ID: ${currentChain.id}) is required.`
-            );
+            console.log(`Requesting wallet switch to Chronicle (${currentChain.id}) via provided client...`);
+            try {
+                await walletClient.switchChain({ id: currentChain.id });
+                const newChainId = await walletClient.getChainId();
+                if (newChainId !== currentChain.id) {
+                    throw new Error(
+                        `Wallet switch failed. Please manually switch to Chronicle (ID: ${currentChain.id}).`
+                    );
+                }
+                console.log(`Wallet switched to Chronicle.`);
+            } catch (switchError: unknown) {
+                let message = 'Unknown switch error';
+                type ErrorWithCode = { code?: number | string } & Partial<Error>;
+
+                if (switchError instanceof Error) message = switchError.message;
+                else if (typeof switchError === 'string') message = switchError;
+
+                let code: number | string | undefined = undefined;
+                if (typeof switchError === 'object' && switchError !== null && 'code' in switchError) {
+                    code = (switchError as ErrorWithCode).code;
+                }
+
+                if (message.includes('rejected') || code === 4001) {
+                    throw new Error('User rejected the network switch request.');
+                }
+                throw new Error(
+                    `Failed to switch wallet to Chronicle: ${message}`
+                );
+            }
         }
 
         // 1. Get IPFS CID of the Lit Action code using ipfs-only-hash
@@ -573,6 +625,7 @@ export const getSessionSigsWithGnosisPasskeyVerification = async (
 /**
  * Mints a new PKP and assigns the passkey and verification Lit Action as auth methods.
  * Transfers the PKP NFT to the PKP's own address.
+ * ACCEPTS walletClient and eoaAddress as arguments.
  * 
  * @param walletClient Viem Wallet Client connected to the EOA (for signing the mint tx).
  * @param eoaAddress Address of the EOA paying for gas.
@@ -605,10 +658,10 @@ export const mintPKPWithPasskeyAndAction = async (
         throw new Error('Gnosis Verify Action Code cannot be empty.');
     }
 
-    // --- Ensure EOA Wallet is on Chronicle Chain --- 
+    // --- Ensure EOA Wallet is on Chronicle Chain (using provided client) --- 
     let currentChainId = await walletClient.getChainId();
     if (currentChainId !== currentChain.id) {
-        console.log(`Requesting wallet switch to Chronicle (${currentChain.id})...`);
+        console.log(`Requesting wallet switch to Chronicle (${currentChain.id}) via provided client...`);
         try {
             await walletClient.switchChain({ id: currentChain.id });
             currentChainId = await walletClient.getChainId();
@@ -618,10 +671,18 @@ export const mintPKPWithPasskeyAndAction = async (
             console.log(`Wallet switched to Chronicle.`);
         } catch (switchError: unknown) {
             let message = 'Unknown switch error';
-            if (switchError instanceof Error) {
-                message = switchError.message;
-            } else if (typeof switchError === 'string') {
-                message = switchError;
+            type ErrorWithCode = { code?: number | string } & Partial<Error>;
+
+            if (switchError instanceof Error) message = switchError.message;
+            else if (typeof switchError === 'string') message = switchError;
+
+            let code: number | string | undefined = undefined;
+            if (typeof switchError === 'object' && switchError !== null && 'code' in switchError) {
+                code = (switchError as ErrorWithCode).code;
+            }
+
+            if (message.includes('rejected') || code === 4001) {
+                throw new Error('User rejected the network switch request.');
             }
             throw new Error(`Failed to switch wallet to Chronicle: ${message}`);
         }

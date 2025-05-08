@@ -1,75 +1,127 @@
-**Project Execution Plan**
+# Project Execution Plan: EOA Wallet Refactoring
 
-**1. Current Status Quo Analysis:**
+## 1. Current Status Quo & Problematic Week Points:
 
-*   **Lit Connection Logic Scattered:** Lit Protocol client initialization and connection logic is present in `src/lib/wallet/lit.ts` and directly invoked in `src/routes/me/wallet/+page.svelte`.
-*   **Manual Connection Trigger:** Connection to Lit is primarily handled within the wallet page.
-*   **No Global Lit Client on `o`:** The Lit client isn't consistently available as `o.lit` globally.
-*   **Configuration:** Lit network configuration (`datil-dev`, `datil-test`, `datil`) is managed in `src/lib/wallet/config/index.ts` and used by `connectToLit`. The user wants to use `LIT_NETWORK.Datil` from `@lit-protocol/constants`.
+*   **Scattered Logic:** EOA wallet connection functions (`getWalletClient`, `getWalletAccount`) and connection handling (`handleConnectEoaWallet`) are spread across `src/routes/me/wallet/+page.svelte` and `src/lib/wallet/passkeySigner.ts`.
+*   **Local State Management:** `src/routes/me/wallet/+page.svelte` manages its own EOA client and address state, which isn't globally available or synced.
+*   **Redundant Client Creation:** Utility functions in `src/lib/wallet/lit.ts` and `src/lib/wallet/passkeySigner.ts` might implicitly expect or create their own wallet client instances if not carefully managed.
+*   **UI Inconsistency:** EOA connection status isn't globally visible in a consistent way (e.g., in `StatusUI`).
 
-**2. Wanted Final Product/Architecture/Solution:**
+## 2. Desired Final Product / Architecture:
 
-*   **Centralized Lit Connection Module:** All Lit client initialization logic will reside in a new file, `src/lib/wallet/lit-connect.ts`.
-*   **Global Lit Initialization in Root Layout:** The Lit client will be initialized when the root layout (`src/routes/+layout.svelte`) loads.
-*   **Lit Client on `o` Object:** The Lit client instance will be accessible globally as `o.lit`. The `o` object is provided via Svelte context from the root layout. `o.lit` will likely be a Svelte store to ensure reactivity.
-*   **`StatusUI.svelte` Manages Global Lit Connection Display:**
-    *   `src/lib/components/StatusUI.svelte` will consume `o` from context and use `o.lit` to display connection status and potentially offer reconnection.
-*   **Simplified Wallet UI:** `src/routes/me/wallet/+page.svelte` (Step 0) will be simplified, removing its direct Lit connection logic and relying on the global `$litClientStore` (derived from `o.lit`).
-*   **Refactored `lit.ts`:** Functions in `src/lib/wallet/lit.ts` that require a `LitNodeClient` instance will accept it as an argument.
-*   **SDK Usage:** Use `import * as LitJsSdk from "@lit-protocol/lit-node-client";` and `new LitJsSdk.LitNodeClient(...)` with `LIT_NETWORK.Datil`.
+*   **Centralized EOA Logic:** A new file, `src/lib/wallet/guardian-eoa.ts`, will encapsulate EOA wallet initialization, connection, and state management.
+*   **Global State via Context:**
+    *   Svelte writable stores for `guardianEoaClient: WalletClient | null`, `guardianEoaAddress: Address | null`, `guardianEoaChainId: number | null`, and `guardianEoaError: string | null` will reside in `guardian-eoa.ts`.
+    *   These stores will be added to the `o` Svelte context object (e.g., as `o.guardianEoaClientStore`, etc.) in `src/routes/+layout.svelte`.
+*   **Refactored Components & Utilities:**
+    *   `src/lib/components/StatusUI.svelte` will display the global EOA status and provide a connection button.
+    *   `src/routes/me/wallet/+page.svelte` will use the global EOA state from the context, removing its local EOA logic and potentially the entire "Step 0" section.
+    *   Utility functions in `src/lib/wallet/passkeySigner.ts` and `src/lib/wallet/lit.ts` will be updated to accept the EOA `WalletClient` instance and `Address` as parameters.
+*   **UI Consolidation in `StatusUI.svelte`**: The status for Sync, Lit, and EOA will each be displayed on a single, more compact row.
 
-**3. Execution Plan (Testable Milestones & Subtasks):**
+## 3. Detailed Execution Plan (Testable Milestones):
 
-**Milestone 1: Create Centralized Lit Connection Module & Update `lit.ts`**
+**Milestone 1: Create `guardian-eoa.ts` and Establish Global EOA State**
 
-*   [X] **Task 1.1:** Create `src/lib/wallet/lit-connect.ts`.
-    *   [X] Define a function, e.g., `initializeLitClient`, that:
-        *   [X] Imports `* as LitJsSdk from "@lit-protocol/lit-node-client";`
-        *   [X] Imports `LIT_NETWORK` from `@lit-protocol/constants`.
-        *   [X] Creates a new `LitJsSdk.LitNodeClient` instance with `litNetwork: LIT_NETWORK.Datil` and `debug: false`.
-        *   [X] Calls `await client.connect()`.
-        *   [X] Returns the connected client instance.
-*   [X] **Task 1.2:** Update `src/lib/wallet/lit.ts`.
-    *   [X] Remove the `connectToLit` function.
-    *   [X] Modify functions (`createAuthNeededCallback`, `getSessionSigs`, `signWithPKP`, `executeLitAction`, `getSessionSigsWithGnosisPasskeyVerification`) to accept `litNodeClient: LitNodeClient` as an argument.
+*   [ ] **Create File:**
+    *   Create `src/lib/wallet/guardian-eoa.ts`.
+*   [ ] **Implement Core Logic in `guardian-eoa.ts`:**
+    *   Define writable stores:
+        *   `export const guardianEoaClientStore = writable<WalletClient | null>(null);`
+        *   `export const guardianEoaAddressStore = writable<Address | null>(null);`
+        *   `export const guardianEoaChainIdStore = writable<number | null>(null);`
+        *   `export const guardianEoaErrorStore = writable<string | null>(null);`
+    *   Implement `initializeGuardianEoaClient()`:
+        *   Checks for `window.ethereum`.
+        *   Creates `walletClient` using `createWalletClient({ chain: currentChain, transport: custom(window.ethereum) })` (import `currentChain` from `../config`).
+        *   Sets `guardianEoaClientStore`.
+        *   Sets up listeners for `accountsChanged` and `chainChanged` on `window.ethereum` to update stores (`guardianEoaAddressStore`, `guardianEoaChainIdStore`, and re-fetch account with new chain).
+    *   Implement `connectGuardianEoaAccount()`:
+        *   Ensures client is initialized (calls `initializeGuardianEoaClient` if store is null).
+        *   Calls `client.requestAddresses()` to get accounts.
+        *   Updates `guardianEoaAddressStore` with the first account.
+        *   Calls `client.getChainId()` and updates `guardianEoaChainIdStore`.
+        *   Clears `guardianEoaErrorStore` on success.
+        *   Handles potential errors and updates `guardianEoaErrorStore`.
+    *   Implement `disconnectGuardianEoaAccount()`:
+        *   Resets `guardianEoaAddressStore`, `guardianEoaChainIdStore`, `guardianEoaErrorStore` to `null`.
+    *   Export all stores and functions.
 
-**Milestone 2: Integrate Global Lit Client into Root Layout and `o` Object**
+**Milestone 2: Integrate EOA State into Root Layout (`+layout.svelte`)**
 
-*   [X] **Task 2.1:** Modify `src/routes/+layout.svelte`.
-    *   [X] Import `initializeLitClient` from `src/lib/wallet/lit-connect.ts`.
-    *   [X] Import `writable` from `svelte/store`.
-    *   [X] Before `setContext('o', o)`, create a Svelte store for the Lit client: `const litClientStore = writable<LitJsSdk.LitNodeClient | null>(null);`
-    *   [X] Extend the `o` object: `(o as any).lit = litClientStore;` (Consider updating the type of `o` in `$lib/KERNEL/hominio-svelte.ts` later to formally include `lit`).
-    *   [X] The existing `setContext('o', o)` will now provide `o` with the `lit` store attached.
-    *   [X] In an `onMount` block, call `initializeLitClient` and set the result to `litClientStore.set(client)`.
-    *   [X] Handle connection status (loading/error) for the initialization, potentially updating a local state in the layout or a global notification store.
-*   [ ] **Task 2.2 (Potential):** If `o` in `$lib/KERNEL/hominio-svelte.ts` needs structural changes to formally accommodate `o.lit` as a store or if `o` itself needs to become a store for broader reactivity, address this. For now, dynamic extension in layout is the primary approach.
-*   [X] **Task 2.3:** Verify `$o.lit` store is available and updates in context in a child component (e.g., temporarily in `+page.svelte` by logging `$o.lit?.ready`). (Verified during Milestone 3)
+*   [ ] **Import and Expose via Context:**
+    *   In `src/routes/+layout.svelte`, import EOA stores and `initializeGuardianEoaClient` from `guardian-eoa.ts`.
+    *   Add the EOA stores to the `o` object:
+        ```typescript
+        (o as any).guardianEoaClientStore = guardianEoaClientStore;
+        (o as any).guardianEoaAddressStore = guardianEoaAddressStore;
+        (o as any).guardianEoaChainIdStore = guardianEoaChainIdStore;
+        (o as any).guardianEoaErrorStore = guardianEoaErrorStore;
+        ```
+    *   Ensure `setContext('o', o)` is called *after* these additions.
+*   [ ] **Initialize in `onMount`:**
+    *   In `onMount` within `+layout.svelte`, call `initializeGuardianEoaClient()`.
 
-**Milestone 3: Refactor `StatusUI.svelte` to Use Global `o.lit`**
+**Milestone 3: Refactor `StatusUI.svelte` for EOA Status and Compact Layout**
 
-*   [X] **Task 3.1:** Modify `src/lib/components/StatusUI.svelte`.
-    *   [X] It already gets `o` from context.
-    *   [X] Access the Lit client store via `$litClientStore` (derived from `o.lit`).
-    *   [X] Subscribe to `$litClientStore` (or use its reactive value) to get the client instance and its connection status (e.g., `$litClientStore?.ready`, `$litClientStore?.config.litNetwork`).
-    *   [X] Display the connection status (connected to `LIT_NETWORK.Datil`, disconnected, connecting, error based on `$litClientStore` state).
-    *   [X] Update the "Connect/Reconnect Lit" button logic to call `connect()` on the `$litClientStore` instance if it exists and is not ready, or re-initialize if `$litClientStore` is null.
+*   [ ] **Access Global EOA State:**
+    *   In `src/lib/components/StatusUI.svelte`, get `o` from context.
+    *   Access EOA stores (e.g., `const { guardianEoaAddressStore, guardianEoaChainIdStore, guardianEoaErrorStore } = o;`).
+*   [ ] **Display EOA Status:**
+    *   Reactively display connection status (`$guardianEoaAddressStore`, `$guardianEoaChainIdStore`).
+    *   Show errors from `$guardianEoaErrorStore`.
+*   [ ] **Implement Connect/Disconnect Button:**
+    *   Add button calling `connectGuardianEoaAccount` (from `guardian-eoa.ts`).
+    *   Button text/state changes based on `$guardianEoaAddressStore`.
+*   [ ] **Compact Layout:**
+    *   Restyle `StatusUI.svelte` for each service (Sync, Lit, EOA) to be more compact, ideally on a single row per service.
 
-**Milestone 4: Update `+page.svelte` (Wallet UI) to Use Global `o.lit`**
+**Milestone 4: Refactor `me/wallet/+page.svelte` to Use Global EOA State**
 
-*   [X] **Task 4.1:** Modify `src/routes/me/wallet/+page.svelte`.
-    *   [X] Remove its local `litNodeClient` state variable, `isLitConnecting`, and `litConnected` state.
-    *   [X] Remove `handleConnectLit` function.
-    *   [X] Remove direct Lit connection logic from `onMount`.
-    *   [X] Step 0 ("Initial Connections") should now reflect the status from `$litClientStore` (derived from `o.lit`) (possibly via `StatusUI.svelte` or by directly observing it).
-    *   [X] Access the Lit client instance reactively via `$litClientStore` when needed.
-    *   [X] Pass the `$litClientStore` instance to functions from `src/lib/wallet/lit.ts` that require it. Ensure operations wait for `$litClientStore` to be non-null and ready.
-*   [X] **Task 4.2:** Ensure functions in `src/lib/wallet/lit.ts` correctly use the passed `LitNodeClient` instance. (Handled in Task 1.2)
+*   [ ] **Remove Local EOA Logic:**
+    *   Delete local state: `eoaWalletClient`, `eoaAddress`, `isEoaConnecting`.
+    *   Delete `handleConnectEoaWallet` function.
+*   [ ] **Use Global EOA State from Context:**
+    *   Get `o` from context. Access EOA stores.
+*   [ ] **Update UI (Step 0):**
+    *   The "Controller EOA Wallet" section in Step 0 should now derive its status from `$guardianEoaAddressStore` and `$guardianEoaChainIdStore`.
+    *   The connect button in Step 0 can be removed if `StatusUI.svelte` effectively handles the global EOA connection.
+    *   **Consider removing the "Step 0: Connections" section entirely** if the `StatusUI.svelte` provides sufficient global EOA status and connection management. If removed, subsequent step numbering in the UI might need adjustment.
+*   [ ] **Update EOA-Dependent Functions:**
+    *   Modify functions (e.g., `handleMintPkp`) to use client from `$guardianEoaClientStore` and address from `$guardianEoaAddressStore`.
+    *   Pass these global values to utility functions from `lit.ts`, `passkeySigner.ts`.
 
-**Milestone 5: Testing and Cleanup**
+**Milestone 5: Refactor Utility Files (`passkeySigner.ts`, `lit.ts`)**
 
-*   [ ] **Task 5.1:** Thoroughly test all Lit-dependent functionalities across the app, especially focusing on the wallet page and any other areas that might use `o.lit`.
-*   [ ] **Task 5.2:** Remove any old/unused Lit connection code or context keys.
-*   [ ] **Task 5.3:** Ensure consistent error handling for Lit connection issues, with clear feedback to the user.
-*   [ ] **Task 5.4:** Check console for errors/warnings.
-*   [ ] **Task 5.5:** Update the `EXECUTION_TASK.md` with checked-off tasks. 
+*   [ ] **`src/lib/wallet/passkeySigner.ts`:**
+    *   Remove local `getWalletClient`, `getWalletAccount`, `walletClient`, `walletAccount`.
+    *   Modify `deployPasskeySignerContract` to accept `walletClient: WalletClient` and `eoaAddress: Address`. Chain switching logic remains within this function but uses the passed client.
+*   [ ] **`src/lib/wallet/lit.ts`:**
+    *   Modify transaction-performing functions (e.g., `mintPKPWithPasskeyAndAction`) to accept `walletClient: WalletClient`, `eoaAddress: Address`. Chain switching logic remains within these functions.
+*   [ ] **Update Callers in `me/wallet/+page.svelte`:**
+    *   Ensure `WalletClient` from `$guardianEoaClientStore` and `Address` from `$guardianEoaAddressStore` are passed.
+
+**Milestone 6: Testing and Cleanup**
+
+*   [ ] **Thorough Testing:**
+    *   EOA connect/disconnect via `StatusUI`.
+    *   Status display in `StatusUI` and `me/wallet/+page.svelte`.
+    *   Passkey signer deployment.
+    *   PKP minting.
+    *   Chain switching prompts.
+*   [ ] **Code Cleanup:**
+    *   Remove unused imports/variables.
+    *   Consistent error handling.
+*   [ ] **Update `EXECUTION_TASK.md`:**
+    *   Check off all completed tasks.
+
+## Referenced Files for Changes/Creation:
+
+*   `src/lib/wallet/guardian-eoa.ts` (New)
+*   `src/routes/+layout.svelte` (Modify)
+*   `src/lib/components/StatusUI.svelte` (Modify)
+*   `src/routes/me/wallet/+page.svelte` (Modify)
+*   `src/lib/wallet/passkeySigner.ts` (Modify)
+*   `src/lib/wallet/lit.ts` (Modify)
+*   `src/lib/wallet/config/index.ts` (Reference for default chain)
+*   `src/lib/wallet/config/chains.ts` (Reference for chain details) 

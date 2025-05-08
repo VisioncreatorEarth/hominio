@@ -1,9 +1,10 @@
 // Extend the Window interface for TypeScript first
-declare global {
-    interface Window { ethereum?: import('viem').EIP1193Provider }
-}
+// REMOVED: declare global window interface - Handled by guardian-eoa.ts or layout
+// declare global {
+//     interface Window { ethereum?: import('viem').EIP1193Provider }
+// }
 
-import { createPublicClient, http, createWalletClient, custom, type Address, type Hex, hexToBytes, bytesToHex, hexToBigInt, keccak256, encodeAbiParameters, parseAbiParameters, /* type Hash, */ type PublicClient, toBytes, getAddress } from 'viem';
+import { createPublicClient, http, /* createWalletClient, custom, */ type Address, type Hex, hexToBytes, bytesToHex, hexToBigInt, keccak256, encodeAbiParameters, parseAbiParameters, /* type Hash, */ type PublicClient, type WalletClient, toBytes, getAddress } from 'viem';
 import { gnosis } from 'viem/chains';
 
 // --- Constants ---
@@ -242,34 +243,13 @@ const publicClient: PublicClient = createPublicClient({
     transport: http(RPC_URL)
 });
 
-// Lazy init wallet client when needed for transactions
-let walletClient: ReturnType<typeof createWalletClient> | null = null;
-let walletAccount: Address | null = null;
+// Lazy init wallet client when needed for transactions - REMOVED
+// let walletClient: ReturnType<typeof createWalletClient> | null = null;
+// let walletAccount: Address | null = null;
 
-export function getWalletClient() {
-    if (!walletClient) {
-        if (typeof window !== 'undefined' && window.ethereum) {
-            walletClient = createWalletClient({
-                chain: gnosis,
-                transport: custom(window.ethereum)
-            });
-        } else {
-            throw new Error('Ethereum provider (e.g., MetaMask) not found. Cannot send transactions.');
-        }
-    }
-    return walletClient;
-}
-
-export async function getWalletAccount(): Promise<Address> {
-    if (walletAccount) return walletAccount;
-    const client = getWalletClient();
-    const [account] = await client.requestAddresses();
-    if (!account) {
-        throw new Error('Failed to get wallet account. Is it connected?');
-    }
-    walletAccount = account;
-    return account;
-}
+// REMOVED: getWalletClient and getWalletAccount
+// export function getWalletClient() { ... }
+// export async function getWalletAccount(): Promise<Address> { ... }
 
 // --- Core Passkey Functions (adapted) ---
 
@@ -429,8 +409,8 @@ export function getStoredPasskeyData(): StoredPasskeyData | null {
 export function clearStoredPasskeyData(): void {
     localStorage.removeItem(STORAGE_KEY);
     // Reset wallet client/account if needed
-    walletClient = null;
-    walletAccount = null;
+    // walletClient = null;
+    // walletAccount = null;
 }
 
 // --- Signature Formatting Helpers (inspired by user snippet) ---
@@ -558,30 +538,32 @@ export async function getPasskeySignerContractAddress(): Promise<Address | null>
 /**
  * Deploys the EIP-1271 signer contract via the factory.
  * Requires a connected & funded EOA wallet ON GNOSIS CHAIN.
+ * ACCEPTS walletClient and eoaAddress as arguments.
  */
-export async function deployPasskeySignerContract(): Promise<{ txHash: Hex; signerAddress?: Address } | null> {
+export async function deployPasskeySignerContract(
+    walletClient: WalletClient, // Accept wallet client
+    eoaAddress: Address // Accept EOA address
+): Promise<{ txHash: Hex; signerAddress?: Address } | null> {
     const storedData = getStoredPasskeyData();
     if (!storedData || !storedData.pubkeyCoordinates.x || !storedData.pubkeyCoordinates.y) {
         throw new Error('Passkey data with coordinates not found. Create a passkey first.');
     }
+    if (!walletClient || !eoaAddress) { // Check provided arguments
+        throw new Error('Wallet client and EOA address are required to deploy the signer contract.');
+    }
 
     try {
-        const client = getWalletClient();
-        if (!client) {
-            throw new Error('Wallet client not initialized.');
-        }
-        const account = await getWalletAccount();
-        if (!account) {
-            throw new Error('Could not get wallet account.');
-        }
+        // Use the provided client and account directly
+        // const client = getWalletClient(); // Removed
+        // const account = await getWalletAccount(); // Removed
 
-        // --- NEW: Network Switch Logic --- 
-        let currentChainId = await client.getChainId();
+        // --- Network Switch Logic (using provided client) --- 
+        let currentChainId = await walletClient.getChainId();
         if (currentChainId !== gnosis.id) {
             console.log(`Requesting wallet switch to Gnosis (ID: ${gnosis.id})...`);
             try {
-                await client.switchChain({ id: gnosis.id });
-                currentChainId = await client.getChainId(); // Re-check after switch attempt
+                await walletClient.switchChain({ id: gnosis.id });
+                currentChainId = await walletClient.getChainId(); // Re-check after switch attempt
                 if (currentChainId !== gnosis.id) {
                     throw new Error(`Wallet switch failed. Please manually switch to Gnosis (ID: ${gnosis.id}).`);
                 }
@@ -612,9 +594,9 @@ export async function deployPasskeySignerContract(): Promise<{ txHash: Hex; sign
         console.log(' Public Key Y:', storedData.pubkeyCoordinates.y);
         console.log(' Verifiers (BigInt):', verifiersBigInt);
         console.log(' Factory Address:', FACTORY_ADDRESS);
-        console.log(' Account:', account);
+        console.log(' Account:', eoaAddress); // Use provided eoaAddress
 
-        const txHash = await client.writeContract({
+        const txHash = await walletClient.writeContract({
             address: FACTORY_ADDRESS,
             abi: FactoryABI,
             functionName: 'createSigner',
@@ -623,7 +605,7 @@ export async function deployPasskeySignerContract(): Promise<{ txHash: Hex; sign
                 hexToBigInt(storedData.pubkeyCoordinates.y as Hex),
                 verifiersBigInt // Pass the computed BigInt
             ],
-            account: account,
+            account: eoaAddress, // Use provided eoaAddress
             chain: gnosis // Explicitly specify chain for Viem
         });
 
