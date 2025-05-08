@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import SyncStatusUI from '$lib/components/SyncStatusUI.svelte';
+	import StatusUI from '$lib/components/StatusUI.svelte';
 	import type { LayoutData } from './$types';
 	import { browser } from '$app/environment';
 
@@ -44,7 +44,7 @@
 		<div class="flex-grow">
 			{#if data.session}
 				<!-- Only show SyncStatusUI if logged in -->
-				<SyncStatusUI />
+				<StatusUI />
 			{/if}
 		</div>
 	</header>
