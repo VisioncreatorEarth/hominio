@@ -44,13 +44,15 @@
 				<a href="/me/todos" class="text-sm font-medium text-slate-700 hover:text-slate-900">Todos</a
 				>
 				<a href="/me/hql" class="text-sm font-medium text-slate-700 hover:text-slate-900">HQL</a>
-				<a href="/me/sahel" class="text-sm font-medium text-slate-700 hover:text-slate-900">Sahel</a
-				>
+
 				<a href="/me/wallet" class="text-sm font-medium text-slate-700 hover:text-slate-900"
 					>Wallet</a
 				>
 				<a href="/me/settings" class="text-sm font-medium text-slate-700 hover:text-slate-900"
 					>Settings</a
+				>
+				<a href="/me/guardian" class="text-sm font-medium text-slate-700 hover:text-slate-900"
+					>Guardian</a
 				>
 				<!-- Add other /me links here if needed -->
 			</nav>
