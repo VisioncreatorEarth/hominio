@@ -266,9 +266,9 @@
 	});
 </script>
 
-<div class="grid h-screen grid-cols-1 bg-[#f8f4ed] md:grid-cols-[250px_1fr_400px]">
+<div class="grid h-full grid-cols-1 bg-[#f8f4ed] md:grid-cols-[250px_1fr_400px]">
 	<!-- Left sidebar for Skills -->
-	<aside class="col-span-1 overflow-y-auto border-r border-gray-200 bg-[#f8f4ed] p-4">
+	<aside class="col-span-1 h-full overflow-y-auto border-r border-gray-200 bg-[#f8f4ed] p-4">
 		<!-- Vibe Tools Panel -->
 		<div class="space-y-6">
 			<h2 class="mb-4 text-lg font-semibold text-[#0a2a4e]">
@@ -426,7 +426,7 @@
 	</aside>
 
 	<!-- Main content area - Dynamically loaded vibe component -->
-	<main class="col-span-2 flex flex-col overflow-y-auto border-r border-gray-200 p-6">
+	<main class="col-span-2 flex h-full flex-col overflow-y-auto border-r border-gray-200 p-6">
 		<!-- Vibe Title -->
 		<div class="mb-6 flex-shrink-0">
 			<h1 class="text-2xl font-bold text-[#0a2a4e]">

@@ -24,7 +24,6 @@ const sahelPhaseConfig = roadmapConfig.phases.find((p) => p.name === 'Sahelanthr
 const SAHEL_TOKEN_ADDRESS = sahelPhaseConfig?.protocolTokenAddress as Address | undefined;
 const EXPECTED_CHAIN_ID_SAHEL = gnosis.id;
 const GNOSIS_RPC_URL = sahelPhaseConfig?.rpcUrls?.default?.http?.[0];
-const AMOUNT_TO_SEND_SAHEL = '0.1'; // Fixed amount
 const TOKEN_SYMBOL = sahelPhaseConfig?.shortTokenName || 'SAHEL';
 
 // --- ERC20 ABI subset needed for balance, decimals, and transfer ---
@@ -55,20 +54,21 @@ const erc20Abi = [
     }
 ] as const;
 
-export interface ExecuteSendSahelToGuardianParams {
+export interface ExecuteSendTokenParams {
     litNodeClient: LitNodeClient;
     sessionSigs: SessionSigs;
     pkpPublicKey: Hex;
     pkpEthAddress: Address;
     recipientGuardianEoaAddress: Address;
-    // Optional: pass decimals if already known to avoid an extra RPC call
+    amount: string;
     sahelTokenDecimals?: number;
 }
 
-export interface ExecuteSendSahelToGuardianResult {
+export interface ExecuteSendTokenResult {
     txHash: Hex;
-    amountSent: string; // e.g., "0.1 SAHEL"
+    amountSent: string;
     recipientAddress: Address;
+    tokenSymbol: string;
 }
 
 // --- Helper to get PKP data from localStorage (similar to getPKPBalance) ---
@@ -89,7 +89,7 @@ async function getStoredPKPData(): Promise<{ pkpEthAddress: Address; pkpPublicKe
                 };
             }
         } catch (error) {
-            console.warn('[sendFixedSahelTokenTool] Error parsing mintedPKPData from localStorage:', error);
+            console.warn('[sendTokenTool] Error parsing mintedPKPData from localStorage:', error);
             return null;
         }
     }
@@ -97,30 +97,23 @@ async function getStoredPKPData(): Promise<{ pkpEthAddress: Address; pkpPublicKe
 }
 
 // --- Core sending logic (modified executeSendSahelToGuardian) ---
-interface InternalSendParams {
-    litNodeClient: LitNodeClient;
-    sessionSigs: SessionSigs;
-    pkpPublicKey: Hex;
-    pkpEthAddress: Address;
-    recipientGuardianEoaAddress: Address;
-    sahelTokenDecimals?: number;
-}
-
 async function internalExecuteSendToken(
-    params: InternalSendParams
-): Promise<{ txHash: Hex; amountSent: string; recipientAddress: Address }> {
+    params: ExecuteSendTokenParams
+): Promise<ExecuteSendTokenResult> {
     const {
         litNodeClient,
         sessionSigs,
         pkpPublicKey,
         pkpEthAddress,
         recipientGuardianEoaAddress,
+        amount,
         sahelTokenDecimals: knownDecimals
     } = params;
 
     // Prerequisite checks for configuration (already handled for client/session/pkp by caller)
     if (!SAHEL_TOKEN_ADDRESS) throw new Error('SAHEL Token address not configured.');
     if (!GNOSIS_RPC_URL) throw new Error('Gnosis RPC URL not configured.');
+    if (!amount || parseFloat(amount) <= 0) throw new Error('Invalid or zero amount specified for sending.');
 
     const publicClient = createPublicClient({ chain: gnosis, transport: http(GNOSIS_RPC_URL) });
 
@@ -133,12 +126,12 @@ async function internalExecuteSendToken(
                 functionName: 'decimals'
             }) as number;
         } catch (decError) {
-            console.warn('[sendFixedSahelTokenTool] Could not fetch token decimals, defaulting to 18:', decError);
+            console.warn('[sendTokenTool] Could not fetch token decimals, defaulting to 18:', decError);
             decimalsToUse = 18;
         }
     }
 
-    const amountToSendBigInt = parseUnits(AMOUNT_TO_SEND_SAHEL, decimalsToUse);
+    const amountToSendBigInt = parseUnits(amount, decimalsToUse);
     const nonce = await publicClient.getTransactionCount({ address: pkpEthAddress, blockTag: 'pending' });
     const { maxFeePerGas, maxPriorityFeePerGas } = await publicClient.estimateFeesPerGas();
     if (!maxFeePerGas || !maxPriorityFeePerGas) throw new Error('Could not estimate EIP-1559 gas fees.');
@@ -165,20 +158,28 @@ async function internalExecuteSendToken(
     const signedRawTx = serializeTransaction(transaction, signature);
     const txHash = await publicClient.sendRawTransaction({ serializedTransaction: signedRawTx });
 
-    return { txHash, amountSent: `${AMOUNT_TO_SEND_SAHEL} ${TOKEN_SYMBOL}`, recipientAddress: recipientGuardianEoaAddress };
+    return { txHash, amountSent: `${amount}`, recipientAddress: recipientGuardianEoaAddress, tokenSymbol: TOKEN_SYMBOL };
 }
 
 // --- Main Tool Implementation Function ---
-export async function sendFixedSahelTokenImplementation(parameters: ToolParameters): Promise<string> {
-    console.log('[sendFixedSahelTokenTool] Called with parameters:', parameters);
+export async function sendTokenImplementation(parameters: ToolParameters): Promise<string> {
+    console.log('[sendTokenTool] Called with parameters:', parameters);
     let finalPkpEthAddress: Address | null = null;
     let finalPkpPublicKey: Hex | null = null;
     let finalRecipientAddress: Address | null = null;
+    let amountToSend: string | null = null;
 
     try {
         let parsedParams: Record<string, unknown> = {};
         if (typeof parameters === 'object' && parameters !== null) parsedParams = parameters;
         else if (typeof parameters === 'string') try { parsedParams = JSON.parse(parameters); } catch { /* ignore parse error */ }
+
+        // 0. Get Amount from parameters
+        if (parsedParams.amount && typeof parsedParams.amount === 'string' && parseFloat(parsedParams.amount) > 0) {
+            amountToSend = parsedParams.amount;
+        } else {
+            throw new Error('Amount to send is required and must be a positive number string.');
+        }
 
         // 1. Get PKP Details (from params or localStorage)
         const storedPkp = await getStoredPKPData();
@@ -216,7 +217,7 @@ export async function sendFixedSahelTokenImplementation(parameters: ToolParamete
                     { resource: new LitActionResource('*'), ability: 'lit-action-execution' as const }
                 ],
                 authNeededCallback: async (params: AuthCallbackParams) => {
-                    console.error('[sendFixedSahelTokenTool] AuthNeededCallback triggered. Tool cannot handle interactive auth.', params);
+                    console.error('[sendTokenTool] AuthNeededCallback triggered. Tool cannot handle interactive auth.', params);
                     throw new Error('Authentication required to proceed, but tool cannot handle interactive authentication. Ensure a resumable session exists.');
                 }
             });
@@ -235,16 +236,18 @@ export async function sendFixedSahelTokenImplementation(parameters: ToolParamete
             sessionSigs,
             pkpPublicKey: finalPkpPublicKey,
             pkpEthAddress: finalPkpEthAddress,
-            recipientGuardianEoaAddress: finalRecipientAddress
+            recipientGuardianEoaAddress: finalRecipientAddress,
+            amount: amountToSend
         });
 
-        const successMessage = `Successfully sent ${result.amountSent} from ${finalPkpEthAddress} to ${result.recipientAddress}. TxHash: ${result.txHash}`;
-        logToolActivity('sendFixedSahelToken', successMessage);
+        const successMessage = `Successfully sent ${result.amountSent} ${result.tokenSymbol} from ${finalPkpEthAddress} to ${result.recipientAddress}. TxHash: ${result.txHash}`;
+        logToolActivity('sendToken', successMessage);
         return JSON.stringify({
             success: true,
             message: successMessage,
             txHash: result.txHash,
             amountSent: result.amountSent,
+            tokenSymbol: result.tokenSymbol,
             senderPkpAddress: finalPkpEthAddress,
             recipientAddress: result.recipientAddress,
             tokenAddress: SAHEL_TOKEN_ADDRESS,
@@ -252,17 +255,16 @@ export async function sendFixedSahelTokenImplementation(parameters: ToolParamete
         });
 
     } catch (error: unknown) {
-        console.error('[sendFixedSahelTokenTool] Error:', error);
+        console.error('[sendTokenTool] Error:', error);
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        logToolActivity('sendFixedSahelToken', `Error: ${errorMessage}`, false);
+        logToolActivity('sendToken', `Error: ${errorMessage}`, false);
         return JSON.stringify({
             success: false,
             message: `Error sending token: ${errorMessage}`,
             senderPkpAddress: finalPkpEthAddress,
-            recipientAddress: finalRecipientAddress
+            recipientAddress: finalRecipientAddress,
+            amountAttempted: amountToSend,
+            tokenSymbol: TOKEN_SYMBOL
         });
     }
 }
-
-// The original executeSendSahelToGuardian is now effectively internalExecuteSendToken
-// Types are defined above and will be exported by index.ts from this file. 

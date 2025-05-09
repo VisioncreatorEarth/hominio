@@ -1,8 +1,7 @@
 <script lang="ts">
 	import '../app.css';
-	import { onMount, onDestroy, setContext, type ComponentType } from 'svelte';
-	import { writable, get } from 'svelte/store';
-	import type { LitNodeClient } from '@lit-protocol/lit-node-client';
+	import { onMount, onDestroy, setContext } from 'svelte';
+	import { get } from 'svelte/store';
 	import { initializeLitClient } from '$lib/wallet/lit-connect';
 	import { initializeGuardianEoaClient } from '$lib/wallet/guardian-eoa';
 	import { startCall, endCall } from '$lib/ultravox/callFunctions';
@@ -21,22 +20,6 @@
 
 	// Get the session store using o.authClient
 	const sessionStore = o.authClient.useSession();
-
-	// --- Lit Client Setup ---
-	// Create a Svelte store for the Lit client instance
-	// const litClientStore = writable<LitNodeClient | null>(null); // Removed, now part of o
-
-	// Extend the 'o' object to include the lit client store
-	// This makes $o.lit available reactively to components that get 'o' from context.
-	// (o as any).lit = litClientStore; // Removed, o.lit.client is now pre-defined
-	// --- End Lit Client Setup ---
-
-	// --- EOA Guardian Wallet Setup ---
-	// (o as any).guardianEoaClientStore = guardianEoaClientStore; // Removed
-	// (o as any).guardianEoaAddressStore = guardianEoaAddressStore; // Removed
-	// (o as any).guardianEoaChainIdStore = guardianEoaChainIdStore; // Removed
-	// (o as any).guardianEoaErrorStore = guardianEoaErrorStore; // Removed
-	// --- End EOA Guardian Wallet Setup ---
 
 	// Provide the session store to child components via context
 	setContext('sessionStore', sessionStore);
@@ -233,11 +216,11 @@
 
 	// --- Props ---
 	// Receive data from +layout.server.ts (contains initial session)
-	let { children, data } = $props<{ children: Snippet; data: LayoutData }>();
+	let { children } = $props<{ children: Snippet; data: LayoutData }>();
 </script>
 
 <svelte:head>
-	<title>Hominio - AI Twin Platform</title>
+	<title>Hominio</title>
 	<meta
 		name="description"
 		content="Create, manage, and monetize your AI twin with Hominio. Explore vibes, data pots, and a revolutionary marketplace."

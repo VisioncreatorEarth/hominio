@@ -30,7 +30,7 @@
 	});
 </script>
 
-<div class="mx-auto max-w-5xl bg-[#f8f4ed] p-4 sm:p-6">
+<div class="mx-auto h-full max-w-5xl bg-[#f8f4ed] p-4 sm:p-6">
 	<!-- Welcome heading -->
 	<div class="mb-8 text-center">
 		<h1 class="mb-2 text-4xl font-bold text-[#0a2a4e]">Welcome to Hominio</h1>
