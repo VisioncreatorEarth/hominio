@@ -2,7 +2,7 @@
 	import { onMount, getContext } from 'svelte';
 	import type { Writable } from 'svelte/store';
 	import { initializeGuardianEoaClient, connectGuardianEoaAccount } from '$lib/wallet/guardian-eoa';
-	import { roadmapConfig } from '../../../roadmap/config';
+	import { roadmapConfig } from '$lib/roadmap/config';
 	import {
 		formatUnits,
 		type Address,
@@ -65,8 +65,8 @@
 	// --- ABI Imports ---
 	// The erc20Abi is already defined
 	// We will use the CFAv1Forwarder ABI for creating flows, and ISuperToken for SAHELx balance
-	import { abi as CFAv1ForwarderAbi } from '../../../roadmap/abis/CFAv1Forwarder.abi';
-	import { abi as ISuperTokenAbi } from '../../../roadmap/abis/ISuperToken.abi';
+	import { abi as CFAv1ForwarderAbi } from '$lib/roadmap/abis/CFAv1Forwarder.abi';
+	import { abi as ISuperTokenAbi } from '$lib/roadmap/abis/ISuperToken.abi';
 
 	// --- ERC20 ABI for balanceOf & decimals ---
 	const erc20Abi = [
