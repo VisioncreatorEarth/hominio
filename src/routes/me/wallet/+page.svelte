@@ -28,7 +28,7 @@
 	import { o as baseHominioFacade } from '$lib/KERNEL/hominio-svelte';
 	import { pageMetadataStore } from '$lib/stores/layoutStore';
 	import type { PageData } from './$types';
-	import { roadmapConfig } from '../../../roadmap/config';
+	import { roadmapConfig } from '$lib/roadmap/config';
 
 	// Use $props() for runes mode
 	let { data } = $props<{ data: PageData }>();

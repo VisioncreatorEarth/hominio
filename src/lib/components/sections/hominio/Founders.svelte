@@ -3,8 +3,8 @@
 
 	// Define founder data (can be expanded later)
 	const founders = [
-		{ name: "Sami", image: "/images/sami.jpg", description: "Short description about Sami goes here.", style: "" },
-		{ name: "Chielo", image: "/images/chielo.JPG", description: "Short description about Chielo goes here.", style: "object-position: center 50%;" }
+		{ name: "Samuel Andert", image: "/images/sami.jpg", description: "Short description about Sami goes here.", style: "" },
+		{ name: "Chieloka Jairus", image: "/images/chielo.JPG", description: "Short description about Chielo goes here.", style: "object-position: center 50%;" }
 	];
 	// Example simple SVG icons (inline for brevity, normally you might use an icon library or separate components)
 	const icons = {
