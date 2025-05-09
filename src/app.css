@@ -1,3 +1,40 @@
 @import 'tailwindcss';
-@plugin '@tailwindcss/forms';
-@plugin '@tailwindcss/typography';
+
+@theme {
+  --color-prussian-blue: #0C2D48;
+  --color-timberwolf-1: #D9CDC2;
+  --color-timberwolf-2: #E6E1DB;
+  --color-linen: #FFF6EC;
+  --color-buff: #DBAD75;
+  --color-persian-orange: #D08968;
+  --color-rosy-brown: #B88C84;
+  --color-moss-green: #8A9A5B;
+
+  --font-playfair-display: "Playfair Display", serif;
+  --font-ibm-plex-sans: "IBM Plex Sans", sans-serif;
+}
+
+/* Global font imports will be moved to +layout.svelte via <link> tags */
+
+/* You might want to ensure a smooth scroll behavior globally if not handled by individual sections */
+:global(html) {
+  scroll-behavior: smooth;
+}
+
+/* Any other truly global base styles can go here */
+:global(body) {
+  /* font-family, background-color, and color will be set via utility classes on a layout wrapper or svelte:body */
+  /* Adjust line-height, etc., as needed globally if not overridden by Tailwind's defaults or specific utilities */
+  line-height: 1.6; /* A common base line-height */
+}
+
+/* Remove default margins from common elements if not handled by Tailwind's preflight or resets you prefer */
+:global(h1, h2, h3, h4, h5, h6, p, figure, blockquote, dl, dd) {
+  margin: 0;
+}
+
+/* Ensure main typically doesn't have overflow issues unless intended */
+:global(main) {
+  overflow-x: hidden; /* Prevent horizontal scroll on main content if not desired */
+}
+

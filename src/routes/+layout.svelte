@@ -241,13 +241,18 @@
 	let { children, data } = $props<{ children: Snippet; data: LayoutData }>();
 </script>
 
-<div class="relative min-h-screen w-full overflow-hidden bg-cover bg-center text-white">
-	<div
-		class="absolute inset-0 bg-gradient-to-b from-blue-950/70 to-indigo-950/70 backdrop-blur-[2px]"
-	></div>
+<svelte:head>
+	<title>Hominio - AI Twin Platform</title> 
+	<meta name="description" content="Create, manage, and monetize your AI twin with Hominio. Explore vibes, data pots, and a revolutionary marketplace." />
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+	<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;1,100;1,200;1,300;1,400;1,500;1,600;1,700&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap" rel="stylesheet">
+</svelte:head>
 
-	<div class="absolute top-20 right-20 h-64 w-64 rounded-full bg-orange-500/10 blur-3xl"></div>
-	<div class="absolute bottom-40 left-20 h-80 w-80 rounded-full bg-blue-500/10 blur-3xl"></div>
+<div class="relative min-h-screen w-full overflow-hidden font-ibm-plex-sans bg-linen text-prussian-blue">
+	
+	<!-- <div class="absolute top-20 right-20 h-64 w-64 rounded-full bg-orange-500/10 blur-3xl"></div>
+	<div class="absolute bottom-40 left-20 h-80 w-80 rounded-full bg-blue-500/10 blur-3xl"></div> -->
 
 	<div class="relative z-10 flex h-screen flex-col">
 		<main class="flex-1 overflow-auto">

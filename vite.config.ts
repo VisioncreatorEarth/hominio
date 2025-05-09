@@ -3,14 +3,12 @@ import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 import wasm from "vite-plugin-wasm";
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
-// import topLevelAwait from "vite-plugin-top-level-await"; // Temporarily removed
 
 export default defineConfig({
 	plugins: [
 		tailwindcss(),
 		sveltekit(),
 		wasm(),
-		// topLevelAwait(), // Temporarily removed
 		nodePolyfills({
 			include: ['buffer', 'process', 'util']
 		}),
