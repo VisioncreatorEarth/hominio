@@ -1,16 +1,10 @@
 <script lang="ts">
 	import '../app.css';
-	import { onMount, onDestroy, setContext } from 'svelte';
+	import { onMount, onDestroy, setContext, type ComponentType } from 'svelte';
 	import { writable, get } from 'svelte/store';
 	import type { LitNodeClient } from '@lit-protocol/lit-node-client';
 	import { initializeLitClient } from '$lib/wallet/lit-connect';
-	import {
-		guardianEoaClientStore,
-		guardianEoaAddressStore,
-		guardianEoaChainIdStore,
-		guardianEoaErrorStore,
-		initializeGuardianEoaClient
-	} from '$lib/wallet/guardian-eoa';
+	import { initializeGuardianEoaClient } from '$lib/wallet/guardian-eoa';
 	import { startCall, endCall } from '$lib/ultravox/callFunctions';
 	import CallInterface from '$lib/components/CallInterface.svelte';
 	import { o } from '$lib/KERNEL/hominio-svelte';
@@ -18,9 +12,8 @@
 	import { DEFAULT_CALL_CONFIG } from '$lib/ultravox/callConfig';
 	import { initDocs } from '$lib/docs';
 	import type { LayoutData } from './$types';
-	import { type Snippet, type ComponentType } from 'svelte';
+	import { type Snippet } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { page } from '$app/stores';
 	import Modal from '$lib/components/Modal.svelte';
 	import { openModal } from '$lib/KERNEL/modalStore';
 	import Prenu from '$lib/components/Prenu.svelte';
@@ -31,18 +24,18 @@
 
 	// --- Lit Client Setup ---
 	// Create a Svelte store for the Lit client instance
-	const litClientStore = writable<LitNodeClient | null>(null);
+	// const litClientStore = writable<LitNodeClient | null>(null); // Removed, now part of o
 
 	// Extend the 'o' object to include the lit client store
 	// This makes $o.lit available reactively to components that get 'o' from context.
-	(o as any).lit = litClientStore;
+	// (o as any).lit = litClientStore; // Removed, o.lit.client is now pre-defined
 	// --- End Lit Client Setup ---
 
 	// --- EOA Guardian Wallet Setup ---
-	(o as any).guardianEoaClientStore = guardianEoaClientStore;
-	(o as any).guardianEoaAddressStore = guardianEoaAddressStore;
-	(o as any).guardianEoaChainIdStore = guardianEoaChainIdStore;
-	(o as any).guardianEoaErrorStore = guardianEoaErrorStore;
+	// (o as any).guardianEoaClientStore = guardianEoaClientStore; // Removed
+	// (o as any).guardianEoaAddressStore = guardianEoaAddressStore; // Removed
+	// (o as any).guardianEoaChainIdStore = guardianEoaChainIdStore; // Removed
+	// (o as any).guardianEoaErrorStore = guardianEoaErrorStore; // Removed
 	// --- End EOA Guardian Wallet Setup ---
 
 	// Provide the session store to child components via context
@@ -193,11 +186,11 @@
 		try {
 			console.log('[Layout] Initializing Lit Client...');
 			const client = await initializeLitClient();
-			litClientStore.set(client);
+			o.lit.client.set(client);
 			console.log('[Layout] Lit Client initialized and set in store.');
 		} catch (err: unknown) {
 			console.error('[Layout] Failed to initialize Lit Client:', err);
-			litClientStore.set(null); // Ensure store is null on error
+			o.lit.client.set(null); // Ensure store is null on error
 			if (err instanceof Error) {
 				// Example: o.notifyGlobalError(`Lit Client Error: ${err.message}`);
 			} else {
@@ -227,7 +220,7 @@
 
 		// Disconnect Lit Client
 		// Use get(litClientStore) to get the current value non-reactively for cleanup
-		const currentLitClient = get(litClientStore);
+		const currentLitClient = get(o.lit.client);
 		if (currentLitClient && currentLitClient.ready) {
 			try {
 				await currentLitClient.disconnect();

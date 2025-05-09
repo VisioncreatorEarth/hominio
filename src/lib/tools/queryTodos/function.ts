@@ -310,5 +310,3 @@ export async function queryTodosImplementation(parameters: ToolParameters): Prom
         return JSON.stringify({ success: false, message: `Error querying todos: ${errorMessage}`, todos: [] });
     }
 }
-
-// REMOVED legacy getTodosImplementation function 

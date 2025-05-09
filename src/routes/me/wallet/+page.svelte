@@ -25,10 +25,10 @@
 	} from 'viem';
 	import { gnosis } from 'viem/chains';
 	import type { Writable } from 'svelte/store';
-	import { o as baseHominioFacade } from '$lib/KERNEL/hominio-svelte';
 	import { pageMetadataStore } from '$lib/stores/layoutStore';
 	import type { PageData } from './$types';
 	import { roadmapConfig } from '$lib/roadmap/config';
+	import type { HominioFacade } from '$lib/KERNEL/hominio-svelte';
 
 	// Use $props() for runes mode
 	let { data } = $props<{ data: PageData }>();
@@ -40,24 +40,17 @@
 		}
 	});
 
-	type BaseHominioFacadeType = typeof baseHominioFacade;
+	// Access the Hominio facade from context, now using the HominioFacade type
+	const o = getContext<HominioFacade>('o');
 
-	interface HominioFacadeWithAllWallets extends BaseHominioFacadeType {
-		lit: Writable<LitNodeClient | null>;
-		guardianEoaClientStore: Writable<WalletClient | null>;
-		guardianEoaAddressStore: Writable<Address | null>;
-		guardianEoaChainIdStore: Writable<number | null>;
-		guardianEoaErrorStore: Writable<string | null>;
-	}
-	const o = getContext<HominioFacadeWithAllWallets>('o');
-
-	const litClientStore = o.lit;
+	// Destructure stores from the facade
+	const litClientStore = o.lit.client;
 	const {
-		guardianEoaClientStore,
-		guardianEoaAddressStore,
-		guardianEoaChainIdStore,
-		guardianEoaErrorStore
-	} = o;
+		client: guardianEoaClientStore,
+		address: guardianEoaAddressStore,
+		chainId: guardianEoaChainIdStore,
+		error: guardianEoaErrorStore
+	} = o.guardian;
 
 	let storedPasskey = $state<StoredPasskeyData | null>(null);
 	let mintedPkpTokenId = $state<string | null>(null);

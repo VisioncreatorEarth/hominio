@@ -1,8 +1,9 @@
-import { writable, get } from 'svelte/store';
+import { get } from 'svelte/store';
 import { browser } from '$app/environment';
 import { createWalletClient, custom } from 'viem';
-import type { WalletClient, Address, EIP1193Provider } from 'viem';
+import type { Address, EIP1193Provider } from 'viem';
 import { currentChain } from './config'; // For default chain
+import { o } from '$lib/KERNEL/hominio-svelte'; // Import the centralized facade
 
 // Declare window.ethereum for TypeScript, using Viem's EIP1193Provider
 declare global {
@@ -12,10 +13,11 @@ declare global {
 }
 
 // --- Svelte Stores for EOA Guardian Wallet State ---
-export const guardianEoaClientStore = writable<WalletClient | null>(null);
-export const guardianEoaAddressStore = writable<Address | null>(null);
-export const guardianEoaChainIdStore = writable<number | null>(null);
-export const guardianEoaErrorStore = writable<string | null>(null);
+// Removed local store definitions. We will use o.guardian stores directly.
+// export const guardianEoaClientStore = writable<WalletClient | null>(null);
+// export const guardianEoaAddressStore = writable<Address | null>(null);
+// export const guardianEoaChainIdStore = writable<number | null>(null);
+// export const guardianEoaErrorStore = writable<string | null>(null);
 
 /**
  * Initializes the EOA Guardian Wallet client and sets up event listeners.
@@ -25,47 +27,44 @@ export function initializeGuardianEoaClient(): void {
     if (!browser || !window.ethereum) {
         const errorMsg = 'Ethereum provider (e.g., MetaMask) not found. EOA Wallet cannot be initialized.';
         console.warn(`[GuardianEOA] ${errorMsg}`);
+        // o.guardian.error.set(errorMsg); // Optionally set central error store if provider missing early
         return;
     }
 
-    if (get(guardianEoaClientStore)) {
+    if (get(o.guardian.client)) { // Check central store
         console.log('[GuardianEOA] Client already initialized.');
         return;
     }
 
     try {
-        // window.ethereum is now typed as EIP1193Provider | undefined
-        // The `custom` transport expects an EIP1193Provider.
-        // The check `!window.ethereum` above ensures it's defined here.
         const client = createWalletClient({
             chain: currentChain, // Default chain from config
             transport: custom(window.ethereum!)
         });
-        guardianEoaClientStore.set(client);
+        o.guardian.client.set(client); // Update central store
         console.log('[GuardianEOA] Wallet client initialized with default chain:', currentChain.name);
 
         // --- Event Listeners ---
-        // We can safely call .on as EIP1193Provider defines it.
         window.ethereum.on('accountsChanged', async (accounts: string[]) => {
             console.log('[GuardianEOA] accountsChanged event:', accounts);
             if (accounts.length === 0) {
-                guardianEoaAddressStore.set(null);
-                guardianEoaChainIdStore.set(null);
-                guardianEoaErrorStore.set('Wallet disconnected or locked.');
+                o.guardian.address.set(null); // Update central store
+                o.guardian.chainId.set(null);  // Update central store
+                o.guardian.error.set('Wallet disconnected or locked.'); // Update central store
             } else {
                 const newAddress = accounts[0] as Address;
-                guardianEoaAddressStore.set(newAddress);
-                guardianEoaErrorStore.set(null);
+                o.guardian.address.set(newAddress); // Update central store
+                o.guardian.error.set(null);        // Update central store
                 try {
-                    const currentClient = get(guardianEoaClientStore);
+                    const currentClient = get(o.guardian.client); // Get from central store
                     if (currentClient) {
                         const chainId = await currentClient.getChainId();
-                        guardianEoaChainIdStore.set(chainId);
+                        o.guardian.chainId.set(chainId); // Update central store
                     }
                 } catch (err) {
                     console.error('[GuardianEOA] Error fetching chainId after accountsChanged:', err);
-                    guardianEoaChainIdStore.set(null);
-                    guardianEoaErrorStore.set('Failed to get chain ID after account switch.');
+                    o.guardian.chainId.set(null); // Update central store
+                    o.guardian.error.set('Failed to get chain ID after account switch.'); // Update central store
                 }
             }
         });
@@ -73,40 +72,34 @@ export function initializeGuardianEoaClient(): void {
         window.ethereum.on('chainChanged', (newChainIdHex: string) => {
             console.log('[GuardianEOA] chainChanged event:', newChainIdHex);
             const newChainId = parseInt(newChainIdHex, 16);
-            guardianEoaChainIdStore.set(newChainId);
-            guardianEoaErrorStore.set(null);
+            o.guardian.chainId.set(newChainId); // Update central store
+            o.guardian.error.set(null);       // Update central store
         });
 
         // --- Auto-connect attempt --- 
-        // Wrap in async IIFE to use await
         (async () => {
             try {
                 const accounts = await client.getAddresses();
                 if (accounts && accounts.length > 0) {
                     const autoConnectedAddress = accounts[0];
-                    guardianEoaAddressStore.set(autoConnectedAddress);
+                    o.guardian.address.set(autoConnectedAddress); // Update central store
                     const chainId = await client.getChainId();
-                    guardianEoaChainIdStore.set(chainId);
-                    guardianEoaErrorStore.set(null); // Clear any potential init error
+                    o.guardian.chainId.set(chainId);           // Update central store
+                    o.guardian.error.set(null);                // Update central store
                     console.log('[GuardianEOA] Auto-connected existing EOA:', autoConnectedAddress, 'on chain ID:', chainId);
                 } else {
                     console.log('[GuardianEOA] No previously connected accounts found for auto-connect.');
                 }
             } catch (autoConnectError) {
-                // Don't set main error store here, as manual connection is still possible.
                 console.warn('[GuardianEOA] Error during auto-connect attempt:', autoConnectError);
             }
-        })(); // Immediately invoke the async function
-        // --- End Auto-connect attempt ---
+        })();
 
     } catch (error: unknown) {
         console.error('[GuardianEOA] Error initializing wallet client:', error);
-        if (error instanceof Error) {
-            guardianEoaErrorStore.set(`Initialization failed: ${error.message}`);
-        } else {
-            guardianEoaErrorStore.set('Initialization failed: Unknown error');
-        }
-        guardianEoaClientStore.set(null); // Ensure client is null on error
+        const errorMsg = error instanceof Error ? `Initialization failed: ${error.message}` : 'Initialization failed: Unknown error';
+        o.guardian.error.set(errorMsg); // Update central store
+        o.guardian.client.set(null);    // Update central store
     }
 }
 
@@ -118,54 +111,53 @@ export function initializeGuardianEoaClient(): void {
 export async function connectGuardianEoaAccount(): Promise<void> {
     if (!browser) return;
 
-    if (!get(guardianEoaClientStore) && window.ethereum) {
-        initializeGuardianEoaClient();
+    if (!get(o.guardian.client) && window.ethereum) { // Check central store
+        initializeGuardianEoaClient(); // This will now use central stores
     }
 
-    const client = get(guardianEoaClientStore);
+    const client = get(o.guardian.client); // Get from central store
     if (!client) {
-        const errorMsg = 'EOA Wallet client not initialized. Cannot connect.';
-        console.error(`[GuardianEOA] ${errorMsg}`);
-        guardianEoaErrorStore.set(errorMsg);
+        let errorMsg = 'EOA Wallet client not initialized. Cannot connect.';
         if (!window.ethereum) {
-            guardianEoaErrorStore.set('Ethereum provider (e.g., MetaMask) not found.');
+            errorMsg = 'Ethereum provider (e.g., MetaMask) not found.';
         } else {
-            initializeGuardianEoaClient();
-            if (!get(guardianEoaClientStore)) {
-                guardianEoaErrorStore.set('Client initialization failed. Check console.');
+            // Re-attempt initialization if somehow failed or provider appeared late
+            if (!get(o.guardian.client)) { // Double check after init attempt in this flow
+                errorMsg = 'Client initialization failed. Check console.';
             } else {
-                guardianEoaErrorStore.set('Client initialized, please try connecting again.');
+                errorMsg = 'Client initialized, please try connecting again.';
             }
         }
+        console.error(`[GuardianEOA] ${errorMsg}`);
+        o.guardian.error.set(errorMsg); // Update central store
         return;
     }
 
     try {
-        guardianEoaErrorStore.set(null);
-        // requestAddresses is available on the client, which was created from EIP1193Provider
+        o.guardian.error.set(null); // Update central store
         const [addressRequested] = await client.requestAddresses();
 
         if (addressRequested) {
-            guardianEoaAddressStore.set(addressRequested);
+            o.guardian.address.set(addressRequested); // Update central store
             const chainId = await client.getChainId();
-            guardianEoaChainIdStore.set(chainId);
+            o.guardian.chainId.set(chainId);       // Update central store
             console.log('[GuardianEOA] Account connected:', addressRequested, 'on chain ID:', chainId);
         } else {
-            guardianEoaAddressStore.set(null);
-            guardianEoaChainIdStore.set(null);
-            guardianEoaErrorStore.set('Connection denied or no account selected.');
+            o.guardian.address.set(null); // Update central store
+            o.guardian.chainId.set(null);  // Update central store
+            o.guardian.error.set('Connection denied or no account selected.'); // Update central store
         }
     } catch (error: unknown) {
         console.error('[GuardianEOA] Error connecting account:', error);
-        guardianEoaAddressStore.set(null);
-        guardianEoaChainIdStore.set(null);
+        o.guardian.address.set(null); // Update central store
+        o.guardian.chainId.set(null);  // Update central store
+        let errorMsg = 'Connection failed: Unknown error';
         if (typeof error === 'object' && error !== null && 'code' in error && (error as { code: unknown }).code === 4001) {
-            guardianEoaErrorStore.set('Connection request rejected by user.');
+            errorMsg = 'Connection request rejected by user.';
         } else if (error instanceof Error) {
-            guardianEoaErrorStore.set(`Connection failed: ${error.message}`);
-        } else {
-            guardianEoaErrorStore.set('Connection failed: Unknown error');
+            errorMsg = `Connection failed: ${error.message}`;
         }
+        o.guardian.error.set(errorMsg); // Update central store
     }
 }
 
@@ -176,9 +168,9 @@ export async function connectGuardianEoaAccount(): Promise<void> {
  */
 export function disconnectGuardianEoaAccount(): void {
     if (!browser) return;
-    guardianEoaAddressStore.set(null);
-    guardianEoaChainIdStore.set(null);
-    guardianEoaErrorStore.set(null);
+    o.guardian.address.set(null); // Update central store
+    o.guardian.chainId.set(null);  // Update central store
+    o.guardian.error.set(null);   // Update central store
     console.log('[GuardianEOA] Account disconnected (application state cleared).');
 }
 

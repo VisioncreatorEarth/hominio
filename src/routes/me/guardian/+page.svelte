@@ -17,6 +17,7 @@
 
 	import { pageMetadataStore } from '$lib/stores/layoutStore';
 	import type { PageData } from './$types';
+	import type { HominioFacade } from '$lib/KERNEL/hominio-svelte'; // Import the new central facade type
 
 	// Use $props() for runes mode
 	let { data } = $props<{ data: PageData }>();
@@ -103,16 +104,16 @@
 	let pageErrorMessage = $state<string | null>(null);
 	let formattedBalanceValue = $state<string | null>(null); // New state variable
 
-	// Get 'o' from context
-	const o = getContext<HominioFacadeWithGuardian>('o');
+	// Get 'o' from context using the new HominioFacade type
+	const o = getContext<HominioFacade>('o');
 
-	// Destructure the specific store instances from 'o'
+	// Destructure the specific store instances from 'o.guardian'
 	const {
-		guardianEoaAddressStore,
-		guardianEoaChainIdStore,
-		guardianEoaErrorStore,
-		guardianEoaClientStore
-	} = o;
+		address: guardianEoaAddressStore,
+		chainId: guardianEoaChainIdStore,
+		error: guardianEoaErrorStore,
+		client: guardianEoaClientStore
+	} = o.guardian;
 
 	// --- State for Sending Sahel (ERC20) ---
 	let targetAddressSend = $state<Address | ''>('');
@@ -299,6 +300,13 @@
 				isLoading = false;
 			}
 		}
+
+		// Ensure all reactive dependencies of this $effect are accessed correctly
+		// e.g., $guardianEoaAddressStore, $guardianEoaChainIdStore, $guardianEoaClientStore
+		// should trigger this effect if they change.
+		const _addr = $guardianEoaAddressStore;
+		const _chain = $guardianEoaChainIdStore;
+		const _client = $guardianEoaClientStore;
 
 		fetchBalanceAndDecimals();
 

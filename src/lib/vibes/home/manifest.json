@@ -5,7 +5,9 @@
     "temperature": 0.7,
     "languageHint": "en",
     "view": "HomeView",
-    "vibeTools": [],
+    "vibeTools": [
+        "getPKPBalance"
+    ],
     "defaultAgent": "Hominio",
     "agents": [
         {

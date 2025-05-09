@@ -11,7 +11,8 @@
 	import type { WalletClient, Address } from 'viem';
 
 	// Import the actual 'o' object to use typeof on it for extending its type
-	import { o as baseHominioFacade } from '$lib/KERNEL/hominio-svelte';
+	// import { o as baseHominioFacade } from '$lib/KERNEL/hominio-svelte'; // No longer needed for local type extension
+	import type { HominioFacade } from '$lib/KERNEL/hominio-svelte'; // Import the new central facade type
 
 	// EOA Guardian Imports
 	import {
@@ -20,21 +21,26 @@
 	} from '$lib/wallet/guardian-eoa';
 
 	// Create a type alias for the base Hominio facade
-	type BaseHominioFacadeType = typeof baseHominioFacade;
+	// type BaseHominioFacadeType = typeof baseHominioFacade; // Removed
 
 	// --- Get Hominio Facade from Context (includes Lit and new EOA stores) ---
-	interface HominioFacadeWithWallets extends BaseHominioFacadeType {
-		lit: Writable<LitNodeClient | null>;
-		guardianEoaClientStore: Writable<WalletClient | null>;
-		guardianEoaAddressStore: Writable<Address | null>;
-		guardianEoaChainIdStore: Writable<number | null>;
-		guardianEoaErrorStore: Writable<string | null>;
-	}
-	const o = getContext<HominioFacadeWithWallets>('o');
+	// interface HominioFacadeWithWallets extends BaseHominioFacadeType { // Removed old interface
+	// 	lit: Writable<LitNodeClient | null>;
+	// 	guardianEoaClientStore: Writable<WalletClient | null>;
+	// 	guardianEoaAddressStore: Writable<Address | null>;
+	// 	guardianEoaChainIdStore: Writable<number | null>;
+	// 	guardianEoaErrorStore: Writable<string | null>;
+	// }
+	const o = getContext<HominioFacade>('o'); // Use the new HominioFacade type
 
-	// Destructure stores for easier access
-	const litClientStore = o.lit;
-	const { guardianEoaAddressStore, guardianEoaChainIdStore, guardianEoaErrorStore } = o;
+	// Destructure stores for easier access, matching the new structure in HominioFacade
+	const litClientStore = o.lit.client; // o.lit is now an object with a 'client' store
+	const {
+		address: guardianEoaAddressStore, // o.guardian is an object with an 'address' store
+		chainId: guardianEoaChainIdStore, // o.guardian is an object with a 'chainId' store
+		error: guardianEoaErrorStore // o.guardian is an object with an 'error' store
+		// client: guardianEoaClientStore // Not used directly in this component, but available as o.guardian.client
+	} = o.guardian;
 
 	// --- Sync Status ---
 	const syncStatus = hominioSync.status;

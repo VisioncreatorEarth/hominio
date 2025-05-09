@@ -1,4 +1,4 @@
-import { writable, readable, get, type Readable } from 'svelte/store';
+import { writable, readable, get, type Readable, type Writable } from 'svelte/store';
 import { browser } from '$app/environment';
 import { subscribeToDbChanges } from './hominio-db';
 import { executeQuery as coreExecuteQuery } from './hominio-query/index';
@@ -11,6 +11,8 @@ import type {
     MutationResult,
     CapabilityUser
 } from './hominio-types';
+import type { LitNodeClient } from '@lit-protocol/lit-node-client';
+import type { Address, WalletClient } from 'viem';
 
 // --- Internal State ---
 
@@ -42,6 +44,14 @@ const currentUser = readable<CapabilityUser | null>(null, (set) => {
     };
 });
 
+// --- Lit Protocol Stores ---
+const litClientStore = writable<LitNodeClient | null>(null);
+
+// --- Guardian EOA Wallet Stores ---
+const guardianEoaClientStore = writable<WalletClient | null>(null);
+const guardianEoaAddressStore = writable<Address | null>(null);
+const guardianEoaChainIdStore = writable<number | null>(null);
+const guardianEoaErrorStore = writable<string | null>(null);
 
 // --- Subscribe internal Svelte notifier to generic DB changes ---
 if (browser) {
@@ -58,7 +68,6 @@ if (browser) {
         console.error("[hominio-svelte] Error subscribing internal notifier to DB changes:", e);
     }
 }
-
 
 // --- Exported Facade Functions (Keep implementations) ---
 
@@ -263,8 +272,35 @@ export const o = {
     subscribe: processReactiveQueryFacade,
     mutate: executeMutationFacade,
     me: coreGetMe,
-    authClient: coreAuthClient
+    authClient: coreAuthClient,
+    lit: {
+        client: litClientStore
+    },
+    guardian: {
+        client: guardianEoaClientStore,
+        address: guardianEoaAddressStore,
+        chainId: guardianEoaChainIdStore,
+        error: guardianEoaErrorStore
+    }
 };
+
+// --- Centralized Type Definition for the Facade ---
+export interface HominioFacade {
+    query: typeof executeQueryFacade;
+    subscribe: typeof processReactiveQueryFacade;
+    mutate: typeof executeMutationFacade;
+    me: typeof coreGetMe;
+    authClient: typeof coreAuthClient;
+    lit: {
+        client: Writable<LitNodeClient | null>;
+    };
+    guardian: {
+        client: Writable<WalletClient | null>;
+        address: Writable<Address | null>;
+        chainId: Writable<number | null>;
+        error: Writable<string | null>;
+    };
+}
 
 // --- Export renamed types needed externally ---
 // These need to be exported *after* the `o` object

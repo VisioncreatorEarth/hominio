@@ -426,7 +426,7 @@
 	</aside>
 
 	<!-- Main content area - Dynamically loaded vibe component -->
-	<main class="col-span-1 flex flex-col overflow-y-auto border-r border-gray-200 p-6">
+	<main class="col-span-2 flex flex-col overflow-y-auto border-r border-gray-200 p-6">
 		<!-- Vibe Title -->
 		<div class="mb-6 flex-shrink-0">
 			<h1 class="text-2xl font-bold text-[#0a2a4e]">
@@ -468,16 +468,12 @@
 			{/if}
 		</div>
 	</main>
-
-	<!-- Right sidebar for schema information -->
+	<!-- 
 	<aside class="col-span-1 space-y-6 overflow-y-auto bg-[#f5f1e8] p-6">
-		<!-- Schema Display Area -->
 		<div>
 			<h2 class="mb-4 text-lg font-semibold text-[#0a2a4e]">Data Schema</h2>
 
-			<!-- Schema List (Placeholder) -->
 			<div class="space-y-2">
-				<!-- TODO: Replace with dynamic schema data based on the current vibe/component -->
 				<div
 					class="group flex cursor-pointer items-center justify-between rounded-lg border border-[#d6c7b1] bg-[#f8f4ed] p-3 transition-all hover:border-[#0a2a4e] hover:bg-[#e0d8cb]"
 				>
@@ -529,20 +525,5 @@
 			</div>
 		</div>
 
-		<!-- Potentially add Raw Data view later like in hql/+page.svelte -->
-		<!--
-		<details class="rounded border border-gray-300 bg-white">
-			<summary class="cursor-pointer list-none p-3 font-medium text-gray-700 hover:bg-gray-50">Raw Data</summary>
-			<div class="border-t border-gray-300 p-3">
-				<pre class="overflow-x-auto rounded bg-gray-50 p-3 font-mono text-xs whitespace-pre-wrap text-gray-700">
-					{JSON.stringify(activeManifest, null, 2)}
-				</pre>
-			</div>
-		</details>
-		-->
-	</aside>
+	</aside> -->
 </div>
-
-<style lang="postcss">
-	/* Remove custom button hover style */
-</style>

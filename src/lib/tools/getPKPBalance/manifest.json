@@ -1,0 +1,32 @@
+{
+    "name": "getPKPBalance",
+    "skill": "Get PKP SAHEL Balance",
+    "icon": "M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2-1.343-2-3-2zm0 7c-2.761 0-5 1.79-5 4h10c0-2.21-2.239-4-5-4zm6.707-7.293c.39-.39.39-1.023 0-1.414s-1.023-.39-1.414 0l-1.293 1.293c-.276-.196-.577-.352-.896-.465C14.73 5.26 14.105 4 13.332 4H10.67c-.773 0-1.398 1.26-1.777 2.135-.319.113-.62.269-.896.465L6.707 5.293c-.39-.39-1.023-.39-1.414 0s-.39 1.023 0 1.414L6.586 8H6c-1.105 0-2 .895-2 2v6c0 1.105.895 2 2 2h12c1.105 0 2-.895 2-2V10c0-1.105-.895-2-2-2h-.586l1.293-1.293zM10 10h4v1h-4v-1z",
+    "color": "green",
+    "temporaryTool": {
+        "modelToolName": "getPKPBalance",
+        "description": "Retrieves the SAHEL token balance for the user's Programmatic Key Pair (PKP) address on the Gnosis chain. If no PKP address is provided, it attempts to use the one associated with the current user session.",
+        "dynamicParameters": [
+            {
+                "name": "pkpEthAddress",
+                "location": "PARAMETER_LOCATION_BODY",
+                "schema": {
+                    "type": "string",
+                    "description": "Optional. The PKP Ethereum address to check the balance for. If omitted, attempts to use the user's current PKP."
+                },
+                "required": false
+            },
+            {
+                "name": "chainId",
+                "location": "PARAMETER_LOCATION_BODY",
+                "schema": {
+                    "type": "integer",
+                    "description": "Optional. The chain ID to check the balance on. Defaults to Gnosis mainnet (100)."
+                },
+                "required": false
+            }
+        ],
+        "client": {}
+    },
+    "implementationType": "client"
+}

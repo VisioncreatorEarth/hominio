@@ -17,7 +17,9 @@
             "description": "counter manager",
             "temperature": 0.7,
             "systemPrompt": "You are Lily, managing a simple counter. Explain to users with enthusiasm that they can use the buttons to increment or decrement the counter value. Be cheerful and energetic in your responses.",
-            "tools": []
+            "tools": [
+                "getPKPBalance"
+            ]
         }
     ]
 }
