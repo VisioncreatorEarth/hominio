@@ -89,6 +89,8 @@
 	let mainError = $state('');
 	let mainSuccess = $state('');
 
+	let hasAttemptedInitialSessionResumption = $state(false);
+
 	// let unsubscribeLitClient: () => void = () => {}; // Will be handled by $effect return
 
 	const settingsSections = [
@@ -142,6 +144,21 @@
 	// });
 
 	$effect(() => {
+		// Reset the attempt flag if the PKP key context changes.
+		// This ensures that if a new key is loaded or the current key is cleared,
+		// a new resumption attempt can be made for the new key (if any).
+		const currentKey = mintedPkpPublicKey; // Ensure reactivity to mintedPkpPublicKey
+		if (browser) {
+			console.log(
+				'Effect: mintedPkpPublicKey changed to',
+				currentKey,
+				'. Resetting hasAttemptedInitialSessionResumption.'
+			);
+			hasAttemptedInitialSessionResumption = false;
+		}
+	});
+
+	$effect(() => {
 		const client = $litClientStore; // Read the store value reactively
 		if (client && client.ready && browser) {
 			console.log('Lit client is ready (effect). Checking for PKP session resumption...');
@@ -150,8 +167,10 @@
 				!sessionSigs &&
 				!isLoadingPkpSessionResume &&
 				!generalIsLoading &&
-				!isLoadingSessionSigsGnosisPasskey
+				!isLoadingSessionSigsGnosisPasskey &&
+				!hasAttemptedInitialSessionResumption
 			) {
+				hasAttemptedInitialSessionResumption = true;
 				tryResumePkpSession(client, mintedPkpPublicKey);
 			}
 			if (mintedPkpTokenId && permittedAuthMethods.length === 0 && !isLoadingPermittedAuthMethods) {

@@ -17,7 +17,7 @@ Also write down and or requetst further documentiation refrences from the user, 
 
 Maker sure that you strucute the exceution plan as testable milestones, whre the user can test and give feedback along the way if it works. also add to each subtask of every milestone markdown checkmarks. 
 
-Write all of this into our /DOCUMENTATION folder (at repository root) into a new PLAN_{short product / feature / bug title with max 3 words}.md file. 
+Write all of this into our /ACTION_PLANS folder (at repository root) into a new PLAN_{short product / feature / bug title with max 3 words}.md file. 
 
 During execution always come back to this document and udpate along the way your progress, by checkmarking each task. 
 
