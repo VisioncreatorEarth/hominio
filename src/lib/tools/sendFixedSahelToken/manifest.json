@@ -1,0 +1,13 @@
+{
+    "name": "sendFixedSahelToken",
+    "skill": "Send Fixed SAHEL Token",
+    "icon": "M17 5H7l-1.85 4.63A3.99 3.99 0 002 13.5V17h2v-1.5c0-.83.67-1.5 1.5-1.5S7 14.67 7 15.5V17h10v-1.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5V17h2v-3.5a3.99 3.99 0 00-3.15-3.87L17 5zm-5 7c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM7.76 7h8.48l.8 2H6.96l.8-2z",
+    "color": "emerald",
+    "temporaryTool": {
+        "modelToolName": "sendFixedSahelToken",
+        "description": "Sends a fixed amount (0.1) of SAHEL token from the user's current Programmatic Key Pair (PKP) address (derived from session/storage) to their primary Guardian EOA address (derived from session/storage). Requires an active, resumable user session with Lit Protocol and sufficient gas (xDAI) on the PKP address.",
+        "dynamicParameters": [],
+        "client": {}
+    },
+    "implementationType": "client"
+}
