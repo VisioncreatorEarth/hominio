@@ -2,27 +2,26 @@
 	import { onMount, getContext, onDestroy } from 'svelte';
 	import { browser } from '$app/environment';
 	import { getStoredPasskeyData, type StoredPasskeyData } from '$lib/wallet/passkeySigner';
-	import {
-		signWithPKP,
-		executeLitAction,
-		getSessionSigsWithGnosisPasskeyVerification,
-		signTransactionWithPKP
-	} from '$lib/wallet/lit';
+	// import {
+	// 	signWithPKP, // Handled by modal
+	// 	executeLitAction, // Handled by modal
+	// 	getSessionSigsWithGnosisPasskeyVerification, // Handled by modal
+	// 	signTransactionWithPKP // Handled by modal
+	// } from '$lib/wallet/lit';
 	import type { LitNodeClient } from '@lit-protocol/lit-node-client';
-	import type { SessionSigs, ExecuteJsResponse, AuthCallbackParams } from '@lit-protocol/types';
-	import { LitPKPResource, LitActionResource } from '@lit-protocol/auth-helpers';
-	import type { Hex, Address } from 'viem';
+	// import type { SessionSigs, ExecuteJsResponse, AuthCallbackParams } from '@lit-protocol/types'; // SessionSigs handled by modal
+	import type { ExecuteJsResponse } from '@lit-protocol/types'; // Keep for action result type
+	// import { LitPKPResource, LitActionResource } from '@lit-protocol/auth-helpers'; // Resources handled by modal
+	import type { Hex, Address, TransactionSerializableEIP1559, Signature } from 'viem';
 	import {
-		keccak256,
-		hexToBytes,
+		// keccak256, // May not be needed if modal handles challenges
+		// hexToBytes, // May not be needed
 		formatUnits,
 		createPublicClient,
 		http,
 		parseUnits,
 		encodeFunctionData,
-		serializeTransaction,
-		type TransactionSerializableEIP1559,
-		type Signature
+		serializeTransaction
 	} from 'viem';
 	import { gnosis } from 'viem/chains';
 	import { pageMetadataStore } from '$lib/stores/layoutStore';
@@ -30,6 +29,7 @@
 	import { roadmapConfig } from '$lib/roadmap/config';
 	import type { HominioFacade } from '$lib/KERNEL/hominio-svelte';
 	import { requestPKPSignature } from '$lib/KERNEL/modalStore';
+	import type { PKPSigningRequestData } from '$lib/wallet/modalTypes'; // Import this type
 
 	// Use $props() for runes mode
 	let { data } = $props<{ data: PageData }>();
@@ -57,10 +57,10 @@
 	let mintedPkpTokenId = $state<string | null>(null);
 	let mintedPkpPublicKey = $state<Hex | null>(null);
 	let mintedPkpEthAddress = $state<Address | null>(null);
-	let sessionSigs = $state<SessionSigs | null>(null);
-	let sessionAuthMethod = $state<'gnosis-passkey' | 'resumed-from-cache' | null>(null);
-	let isLoadingSessionSigsGnosisPasskey = $state(false);
-	let isLoadingPkpSessionResume = $state(false);
+	// let sessionSigs = $state<SessionSigs | null>(null); // REMOVED - Handled by modal
+	// let sessionAuthMethod = $state<'gnosis-passkey' | 'resumed-from-cache' | null>(null); // REMOVED
+	// let isLoadingSessionSigsGnosisPasskey = $state(false); // REMOVED
+	// let isLoadingPkpSessionResume = $state(false); // REMOVED
 	let messageToSign = $state('Hello from Hominio PKP Wallet!');
 	let signatureResult = $state<{ signature: Hex; dataSigned: Hex } | null>(null);
 	let isSigningMessage = $state(false);
@@ -81,7 +81,7 @@ const go = async () => {
   }
 };
 go();`);
-	let generalIsLoading = $state(false);
+	// let generalIsLoading = $state(false); // Re-evaluate if needed, modal has its own loading
 	let mainError = $state('');
 	let mainSuccess = $state('');
 	let profileName = $state('');
@@ -89,7 +89,7 @@ go();`);
 	let encryptedProfileDataString = $state<string | null>(null);
 	let isEncryptingProfile = $state(false);
 	let isDecryptingProfile = $state(false);
-	let selectedWalletSection = $state<'sign' | 'action' | 'profile'>('sign');
+	let selectedWalletSection = $state<'sign' | 'action' | 'profile' | 'transfer'>('sign'); // Added transfer
 	let unsubscribeLitClient: () => void = () => {};
 
 	// --- Sahel Token Balance State & Config ---
@@ -170,156 +170,42 @@ go();`);
 
 			encryptedProfileDataString = localStorage.getItem(PROFILE_STORAGE_KEY);
 
-			unsubscribeLitClient = litClientStore.subscribe(async (client) => {
-				if (client && client.ready && browser) {
-					if (
-						mintedPkpPublicKey &&
-						!sessionSigs &&
-						!isLoadingPkpSessionResume &&
-						!isLoadingSessionSigsGnosisPasskey
-					) {
-						await tryResumePkpSession(client, mintedPkpPublicKey);
-					}
-				}
-			});
+			// Removed session resumption logic from here
+			// unsubscribeLitClient = litClientStore.subscribe(async (client) => {
+			// 	if (client && client.ready && browser) {
+			// 		// PKP Session is now handled by the modal when an operation is requested.
+			// 	}
+			// });
 		}
 	});
 
 	onDestroy(() => {
-		if (unsubscribeLitClient) {
-			unsubscribeLitClient();
-		}
+		// if (unsubscribeLitClient) { // No longer needed for this specific purpose
+		// 	unsubscribeLitClient();
+		// }
 	});
 
-	async function tryResumePkpSession(currentLitClient: LitNodeClient, pkpKeyToResume: Hex) {
-		if (sessionSigs) return;
-
-		isLoadingPkpSessionResume = true;
-		resetMainMessages();
-		const initialMessage = 'Attempting to resume PKP session...';
-		mainSuccess = initialMessage;
-
-		try {
-			const resumedSessionSigs = await currentLitClient.getSessionSigs({
-				pkpPublicKey: pkpKeyToResume,
-				chain: 'ethereum',
-				resourceAbilityRequests: [
-					{ resource: new LitPKPResource('*'), ability: 'pkp-signing' as const },
-					{ resource: new LitActionResource('*'), ability: 'lit-action-execution' as const }
-				],
-				authNeededCallback: async (params: AuthCallbackParams) => {
-					throw new Error('Authentication required; cached session not viable.');
-				}
-			});
-
-			sessionSigs = resumedSessionSigs;
-			sessionAuthMethod = 'resumed-from-cache';
-			mainSuccess = 'PKP session resumed successfully!';
-		} catch (error: any) {
-			if (error.message && error.message.includes('Authentication required')) {
-				mainSuccess = 'No active PKP session found. Please login.';
-			} else {
-				if (!mainSuccess.includes('No active PKP session found')) {
-					mainSuccess = '';
-					mainError = `Could not resume session: ${error.message || 'Unknown error'}`;
-				}
-			}
-			sessionSigs = null;
-			sessionAuthMethod = null;
-		} finally {
-			isLoadingPkpSessionResume = false;
-			if (mainSuccess === initialMessage && !sessionSigs) {
-				mainSuccess = 'Ready to login.';
-			}
-		}
-	}
+	// REMOVED tryResumePkpSession
+	// REMOVED handleLoginWithPasskey
 
 	function resetMainMessages() {
 		mainError = '';
 		mainSuccess = '';
 	}
 
-	async function handleLoginWithPasskey() {
-		const currentLitClient = $litClientStore;
-
+	async function handleSignMessageWithPkp() {
+		const currentLitClient = $litClientStore; // Still needed to pass to modal if modal doesn't get from context itself
 		if (!currentLitClient || !currentLitClient.ready) {
 			mainError = 'Lit client not available or not ready.';
-			return;
-		}
-		if (!storedPasskey?.rawId || !storedPasskey.pubkeyCoordinates) {
-			mainError = 'Passkey data not found. Please setup via Settings page.';
-			return;
-		}
-		if (!storedPasskey?.signerContractAddress) {
-			mainError = 'Passkey EIP-1271 signer address missing. Please check Settings page.';
-			return;
-		}
-		if (!mintedPkpPublicKey) {
-			mainError = 'PKP Public Key not found. Please check Settings page.';
-			return;
-		}
-
-		isLoadingSessionSigsGnosisPasskey = true;
-		resetMainMessages();
-		sessionSigs = null;
-		sessionAuthMethod = null;
-
-		try {
-			const challengeMessage = 'Login to Hominio PKP Wallet with Passkey';
-			const messageHashAsChallenge = keccak256(new TextEncoder().encode(challengeMessage));
-
-			const assertion = (await navigator.credentials.get({
-				publicKey: {
-					challenge: hexToBytes(messageHashAsChallenge),
-					allowCredentials: [{ type: 'public-key', id: hexToBytes(storedPasskey.rawId as Hex) }],
-					userVerification: 'required'
-				}
-			})) as PublicKeyCredential | null;
-
-			if (
-				!assertion ||
-				!assertion.response ||
-				!(assertion.response instanceof AuthenticatorAssertionResponse) ||
-				!assertion.response.authenticatorData ||
-				!assertion.response.signature
-			) {
-				throw new Error('Failed to get valid signature assertion from passkey.');
-			}
-			const assertionResponse = assertion.response;
-
-			sessionSigs = await getSessionSigsWithGnosisPasskeyVerification(
-				currentLitClient!,
-				mintedPkpPublicKey,
-				challengeMessage,
-				assertionResponse,
-				storedPasskey,
-				'ethereum'
-			);
-
-			sessionAuthMethod = 'gnosis-passkey';
-			mainSuccess = 'Login successful! Session active.';
-		} catch (err: unknown) {
-			mainError = err instanceof Error ? `Login Failed: ${err.message}` : 'Unknown login error.';
-			sessionSigs = null;
-			sessionAuthMethod = null;
-			console.error('Error in handleLoginWithPasskey:', err);
-		} finally {
-			isLoadingSessionSigsGnosisPasskey = false;
-		}
-	}
-
-	async function handleSignMessageWithPkp() {
-		const currentLitClient = $litClientStore;
-		if (!currentLitClient || !currentLitClient.ready || !sessionSigs) {
-			mainError = 'Lit client/session not ready.';
 			return;
 		}
 		if (!messageToSign.trim()) {
 			mainError = 'Enter a message to sign.';
 			return;
 		}
-		if (!mintedPkpPublicKey) {
-			mainError = 'PKP Public Key missing.';
+		if (!mintedPkpPublicKey || !mintedPkpEthAddress) {
+			// PKP details still needed for requestData
+			mainError = 'PKP Public Key or ETH Address missing. Check Settings.';
 			return;
 		}
 
@@ -327,19 +213,31 @@ go();`);
 		resetMainMessages();
 		signatureResult = null;
 
+		const request: PKPSigningRequestData = {
+			pkpPublicKey: mintedPkpPublicKey!,
+			pkpEthAddress: mintedPkpEthAddress!,
+			type: 'message',
+			message: messageToSign
+			// litNodeClient and sessionSigs are handled by the modal
+		};
+
 		try {
-			const signature = (await requestPKPSignature({
-				type: 'message',
-				message: messageToSign,
-				pkpPublicKey: mintedPkpPublicKey!,
-				pkpEthAddress: mintedPkpEthAddress!,
-				sessionSigs,
-				litNodeClient: currentLitClient
-			})) as { signature: Hex; dataSigned: Hex };
-			signatureResult = signature;
-			mainSuccess = 'Message signed successfully!';
+			// requestPKPSignature now returns a promise that resolves with the result or rejects
+			const result = (await requestPKPSignature(request)) as { signature: Hex; dataSigned: Hex };
+			signatureResult = result;
+			mainSuccess = 'Message signed successfully via modal!';
 		} catch (err: unknown) {
-			mainError = err instanceof Error ? err.message : 'Error signing message.';
+			mainError =
+				err instanceof Error
+					? `Modal signing error: ${err.message}`
+					: 'Unknown error during modal signing.';
+			if (
+				mainError.toLowerCase().includes('cancelled') ||
+				mainError.toLowerCase().includes('user rejected')
+			) {
+				mainSuccess = 'Signing operation cancelled by user.';
+				mainError = ''; // Clear error if it was just a cancellation
+			}
 			signatureResult = null;
 		} finally {
 			isSigningMessage = false;
@@ -348,8 +246,12 @@ go();`);
 
 	async function handleExecuteLitAction() {
 		const currentLitClient = $litClientStore;
-		if (!currentLitClient || !currentLitClient.ready || !sessionSigs) {
-			mainError = 'Lit client/session not ready.';
+		if (!currentLitClient || !currentLitClient.ready) {
+			mainError = 'Lit client not available or not ready.';
+			return;
+		}
+		if (!mintedPkpPublicKey || !mintedPkpEthAddress) {
+			mainError = 'PKP Public Key or ETH Address missing for Lit Action. Check Settings.';
 			return;
 		}
 
@@ -357,17 +259,31 @@ go();`);
 		resetMainMessages();
 		litActionResult = null;
 
+		const request: PKPSigningRequestData = {
+			pkpPublicKey: mintedPkpPublicKey!,
+			pkpEthAddress: mintedPkpEthAddress!,
+			type: 'executeAction',
+			actionCode: litActionCodeForExecution,
+			actionJsParams: { magicNumber: magicNumber }
+		};
+
 		try {
-			litActionResult = await executeLitAction(
-				currentLitClient!,
-				sessionSigs!,
-				litActionCodeForExecution,
-				{ magicNumber: magicNumber }
-			);
-			mainSuccess = 'Lit Action executed!';
-			console.log('Lit Action Result:', litActionResult);
+			const result = (await requestPKPSignature(request)) as ExecuteJsResponse;
+			litActionResult = result;
+			mainSuccess = 'Lit Action executed successfully via modal!';
+			console.log('Lit Action Result from Modal:', litActionResult);
 		} catch (err: unknown) {
-			mainError = err instanceof Error ? err.message : 'Error executing Lit Action.';
+			mainError =
+				err instanceof Error
+					? `Modal Lit Action error: ${err.message}`
+					: 'Unknown error during modal Lit Action.';
+			if (
+				mainError.toLowerCase().includes('cancelled') ||
+				mainError.toLowerCase().includes('user rejected')
+			) {
+				mainSuccess = 'Lit Action execution cancelled by user.';
+				mainError = '';
+			}
 			litActionResult = null;
 		} finally {
 			isExecutingAction = false;
@@ -380,45 +296,67 @@ go();`);
 			mainError = 'Enter a profile name.';
 			return;
 		}
-		if (!currentLitClient || !currentLitClient.ready || !sessionSigs || !mintedPkpEthAddress) {
-			mainError = 'Lit client/session/PKP details needed to save profile.';
+		if (
+			!currentLitClient ||
+			!currentLitClient.ready ||
+			!mintedPkpPublicKey ||
+			!mintedPkpEthAddress
+		) {
+			mainError = 'Lit client/PKP details needed to save profile.';
 			return;
 		}
 
 		resetMainMessages();
 		isEncryptingProfile = true;
 
+		// Define ACCs based on PKP's ETH address
+		const accessControlConditions = [
+			{
+				contractAddress: '', // No specific contract, just PKP ownership
+				standardContractType: '',
+				chain: 'ethereum', // Or the chain your PKP is associated with for ACCs
+				method: '',
+				parameters: [':userAddress'],
+				returnValueTest: { comparator: '=', value: mintedPkpEthAddress! }
+			}
+		];
+
+		const request: PKPSigningRequestData = {
+			pkpPublicKey: mintedPkpPublicKey!,
+			pkpEthAddress: mintedPkpEthAddress!,
+			type: 'encrypt',
+			dataToEncrypt: profileName.trim(),
+			accessControlConditions: accessControlConditions,
+			chain: 'ethereum' // Specify chain for ACCs if necessary
+		};
+
 		try {
-			const accessControlConditions = [
-				{
-					contractAddress: '',
-					standardContractType: '',
-					chain: 'ethereum',
-					method: '',
-					parameters: [':userAddress'],
-					returnValueTest: { comparator: '=', value: mintedPkpEthAddress }
-				}
-			];
-			const { encryptString } = await import('@lit-protocol/encryption');
-			const { ciphertext, dataToEncryptHash } = await encryptString(
-				{ accessControlConditions, dataToEncrypt: profileName.trim() },
-				currentLitClient
-			);
+			const encryptionResult = (await requestPKPSignature(request)) as {
+				ciphertext: string;
+				dataToEncryptHash: string;
+			};
 			const dataToStore = {
-				ciphertext,
-				dataToEncryptHash,
-				accessControlConditions,
-				chain: 'ethereum'
+				ciphertext: encryptionResult.ciphertext,
+				dataToEncryptHash: encryptionResult.dataToEncryptHash,
+				accessControlConditions, // Storing ACCs used for encryption
+				chain: 'ethereum' // Storing chain used for ACCs
 			};
 			encryptedProfileDataString = JSON.stringify(dataToStore);
 			localStorage.setItem(PROFILE_STORAGE_KEY, encryptedProfileDataString);
-			mainSuccess = 'Profile encrypted and saved!';
+			mainSuccess = 'Profile encrypted and saved via modal!';
 		} catch (error: unknown) {
 			mainError =
 				error instanceof Error
-					? `Error saving profile: ${error.message}`
-					: 'Unknown error saving profile.';
-			console.error('Error saving profile:', error);
+					? `Modal encryption error: ${error.message}`
+					: 'Unknown error saving profile via modal.';
+			if (
+				mainError.toLowerCase().includes('cancelled') ||
+				mainError.toLowerCase().includes('user rejected')
+			) {
+				mainSuccess = 'Profile encryption cancelled by user.';
+				mainError = '';
+			}
+			console.error('Error saving profile via modal:', error);
 		} finally {
 			isEncryptingProfile = false;
 		}
@@ -426,40 +364,61 @@ go();`);
 
 	// --- Reactive Profile Decryption ---
 	async function attemptProfileDecryption() {
-		// Ensure conditions are met before attempting decryption
 		if (
 			!browser ||
 			!$litClientStore?.ready ||
-			!sessionSigs ||
-			!encryptedProfileDataString ||
-			profileName ||
+			!encryptedProfileDataString || // SessionSigs removed from this check
+			profileName || // If already decrypted, skip
 			isDecryptingProfile ||
-			isEncryptingProfile
+			isEncryptingProfile ||
+			!mintedPkpPublicKey || // Need PKP details for the request
+			!mintedPkpEthAddress
 		) {
 			return;
 		}
 
 		const currentLitClient = $litClientStore;
 		isDecryptingProfile = true;
-		resetMainMessages(); // Clear messages before attempting
+		resetMainMessages();
+
 		try {
 			const storedEncryptedData = JSON.parse(encryptedProfileDataString!);
-			const { decryptToString } = await import('@lit-protocol/encryption');
-			const decryptOptions = {
-				accessControlConditions: storedEncryptedData.accessControlConditions,
-				chain: storedEncryptedData.chain,
+			if (
+				!storedEncryptedData.accessControlConditions ||
+				!storedEncryptedData.ciphertext ||
+				!storedEncryptedData.dataToEncryptHash
+			) {
+				throw new Error('Stored encrypted data is missing required fields for decryption.');
+			}
+
+			const request: PKPSigningRequestData = {
+				pkpPublicKey: mintedPkpPublicKey!,
+				pkpEthAddress: mintedPkpEthAddress!,
+				type: 'decrypt',
 				ciphertext: storedEncryptedData.ciphertext,
 				dataToEncryptHash: storedEncryptedData.dataToEncryptHash,
-				sessionSigs: sessionSigs!
+				accessControlConditions: storedEncryptedData.accessControlConditions,
+				chain: storedEncryptedData.chain || 'ethereum'
 			};
-			const decryptedNameStr = await decryptToString(decryptOptions, currentLitClient!);
+
+			const decryptedNameStr = (await requestPKPSignature(request)) as string; // Assuming decrypt returns string
 			profileName = decryptedNameStr;
-			mainSuccess = 'Profile name decrypted and loaded.'; // Provide clearer success message
+			mainSuccess = 'Profile name decrypted and loaded via modal.';
 		} catch (err: unknown) {
-			const message = err instanceof Error ? err.message : 'Unknown error.';
-			mainError = `Failed to automatically decrypt profile: ${message}`;
-			console.error('Error decrypting profile name reactively:', err);
-			// Consider if clearing encryptedProfileDataString from localStorage is desired on failure
+			const message =
+				err instanceof Error
+					? `Modal decryption error: ${err.message}`
+					: 'Unknown modal decryption error.';
+			if (
+				message.toLowerCase().includes('cancelled') ||
+				message.toLowerCase().includes('user rejected')
+			) {
+				mainSuccess = 'Profile decryption cancelled by user.';
+				mainError = '';
+			} else {
+				mainError = `Failed to automatically decrypt profile via modal: ${message}`;
+			}
+			console.error('Error decrypting profile name reactively via modal:', err);
 		} finally {
 			isDecryptingProfile = false;
 		}
@@ -470,7 +429,7 @@ go();`);
 		attemptProfileDecryption();
 	});
 
-	// --- Fetch PKP Sahel Token Balance Logic ---
+	// --- Fetch PKP Sahel Token Balance Logic (Remains largely the same) ---
 	async function fetchPkpSahelTokenBalance() {
 		if (!mintedPkpEthAddress) {
 			pkpSahelBalanceError = 'PKP ETH address not available to fetch balance.';
@@ -496,7 +455,6 @@ go();`);
 				transport: http(GNOSIS_RPC_URL)
 			});
 
-			// Fetch decimals
 			try {
 				const decimalsResult = await publicClient.readContract({
 					address: SAHEL_TOKEN_ADDRESS,
@@ -509,10 +467,9 @@ go();`);
 					'[WalletPage] Could not fetch Sahel token decimals, defaulting to 18:',
 					decError
 				);
-				pkpSahelTokenDecimals = 18; // Default if decimals call fails
+				pkpSahelTokenDecimals = 18;
 			}
 
-			// Fetch balance
 			const balanceResult = await publicClient.readContract({
 				address: SAHEL_TOKEN_ADDRESS,
 				abi: erc20Abi,
@@ -540,10 +497,8 @@ go();`);
 		if (mintedPkpEthAddress && SAHEL_TOKEN_ADDRESS && GNOSIS_RPC_URL) {
 			fetchPkpSahelTokenBalance();
 		} else {
-			// Clear balance if PKP address is lost or config is missing
 			pkpSahelTokenBalance = null;
 			formattedPkpSahelBalance = null;
-			// Optionally set an error or informational message if config is missing and pkp address is present
 			if (mintedPkpEthAddress && (!SAHEL_TOKEN_ADDRESS || !GNOSIS_RPC_URL)) {
 				pkpSahelBalanceError = 'Sahel token configuration missing. Cannot display balance.';
 			}
@@ -556,14 +511,16 @@ go();`);
 		isSendingSahel = true;
 		sendSahelTxHash = null;
 		sendSahelError = null;
-		console.log('[WalletPage] Initiating Send Sahel Token process...');
+		resetMainMessages();
+		console.log('[WalletPage] Initiating Send Sahel Token process via modal...');
+
+		const currentLitClient = $litClientStore; // For modal, if it needs it explicitly
 
 		// 1. Prerequisite Checks
-		if (!$litClientStore?.ready) {
+		if (!currentLitClient?.ready) {
 			sendSahelError = 'Lit client not ready.';
-		} else if (!sessionSigs) {
-			sendSahelError = 'User session not active. Please login.';
 		} else if (!mintedPkpPublicKey || !mintedPkpEthAddress) {
+			// Session check removed
 			sendSahelError = 'PKP details not available.';
 		} else if (!$guardianEoaAddressStore) {
 			sendSahelError = 'Guardian EOA address not available.';
@@ -572,13 +529,12 @@ go();`);
 		} else if (!GNOSIS_RPC_URL) {
 			sendSahelError = 'Gnosis RPC URL not configured.';
 		} else if (pkpSahelTokenDecimals === null || pkpSahelTokenDecimals === undefined) {
-			// Fetch decimals if not already available from the balance check section
-			// This is a fallback, ideally they are fetched by the balance display logic
 			sendSahelError = 'SAHEL token decimals not available. Cannot determine amount.';
 		}
 
 		if (sendSahelError) {
 			isSendingSahel = false;
+			mainError = sendSahelError; // Use mainError for UI consistency
 			console.error('[WalletPage] Send Sahel prerequisite error:', sendSahelError);
 			return;
 		}
@@ -603,7 +559,7 @@ go();`);
 			}
 
 			const encodedTransferData = encodeFunctionData({
-				abi: erc20Abi, // Assumes erc20Abi is defined in the component scope
+				abi: erc20Abi,
 				functionName: 'transfer',
 				args: [recipientAddress, amountToSend]
 			});
@@ -616,7 +572,7 @@ go();`);
 			});
 
 			// 5. Construct Unsigned Transaction Object (EIP-1559)
-			const transaction: TransactionSerializableEIP1559 = {
+			const unsignedTx: TransactionSerializableEIP1559 = {
 				to: SAHEL_TOKEN_ADDRESS!,
 				value: 0n,
 				data: encodedTransferData,
@@ -624,31 +580,42 @@ go();`);
 				gas: estimatedGas,
 				maxFeePerGas: maxFeePerGas,
 				maxPriorityFeePerGas: maxPriorityFeePerGas,
-				chainId: EXPECTED_CHAIN_ID_SAHEL, // Assumes EXPECTED_CHAIN_ID_SAHEL is defined
+				chainId: EXPECTED_CHAIN_ID_SAHEL,
 				type: 'eip1559'
 			};
 
 			// 6. Sign Transaction via Central Modal
-			const signature = (await requestPKPSignature({
-				type: 'transaction',
-				transaction,
+			const request: PKPSigningRequestData = {
 				pkpPublicKey: mintedPkpPublicKey!,
 				pkpEthAddress: mintedPkpEthAddress!,
-				sessionSigs: sessionSigs!,
-				litNodeClient: $litClientStore!
-			})) as Signature;
+				type: 'transaction',
+				transaction: unsignedTx,
+				tokenDecimals: pkpSahelTokenDecimals // For display in modal
+			};
+
+			const signature = (await requestPKPSignature(request)) as Signature;
 
 			// 7. Serialize Signed Transaction
-			const signedRawTx = serializeTransaction(transaction, signature);
+			const signedRawTx = serializeTransaction(unsignedTx, signature);
 			console.log('[WalletPage] Broadcasting signed transaction:', signedRawTx);
 
 			// 8. Broadcast Transaction
 			const txHash = await publicClient.sendRawTransaction({ serializedTransaction: signedRawTx });
 			sendSahelTxHash = txHash;
+			mainSuccess = 'Sahel Token transfer initiated via modal!';
 			console.log('[WalletPage] Transaction broadcasted. Hash:', txHash);
 		} catch (err: any) {
-			sendSahelError = err.message || 'An unknown error occurred during sending.';
-			console.error('[WalletPage] Send Sahel Token error:', err);
+			const message = err.message || 'An unknown error occurred during sending.';
+			if (
+				message.toLowerCase().includes('cancelled') ||
+				message.toLowerCase().includes('user rejected')
+			) {
+				mainSuccess = 'Token transfer cancelled by user.';
+				mainError = '';
+			} else {
+				mainError = `Modal send error: ${message}`;
+			}
+			console.error('[WalletPage] Send Sahel Token error via modal:', err);
 		} finally {
 			isSendingSahel = false;
 		}
@@ -718,8 +685,8 @@ go();`);
 						on:click={handleSendSahelToken}
 						disabled={isSendingSahel ||
 							!$litClientStore?.ready ||
-							!sessionSigs ||
-							!mintedPkpPublicKey}
+							!mintedPkpPublicKey ||
+							!mintedPkpEthAddress}
 						class="w-full justify-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
 					>
 						{#if isSendingSahel}
@@ -753,7 +720,8 @@ go();`);
 							</div>
 						</div>
 					{/if}
-					{#if sendSahelError}
+					{#if sendSahelError && mainError.includes('Modal send error')}
+						<!-- Only show if related to this operation -->
 						<div
 							class="mt-4 space-y-2 rounded-lg border border-red-300 bg-red-100 p-3 text-xs text-red-700"
 						>
@@ -773,7 +741,7 @@ go();`);
 					{mainError}
 				</div>
 			{/if}
-			{#if mainSuccess && !(isLoadingPkpSessionResume && mainSuccess.includes('Attempting'))}
+			{#if mainSuccess}
 				<div
 					class="mb-6 w-full rounded-lg border border-green-300 bg-green-100 p-4 text-green-700 shadow-md"
 				>
@@ -782,65 +750,15 @@ go();`);
 				</div>
 			{/if}
 
-			{#if !sessionSigs}
-				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
-					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
-						Login Required
-					</h2>
-					{#if isLoadingPkpSessionResume}
-						<p class="mb-4 animate-pulse text-sm text-slate-500">Attempting to resume session...</p>
-					{:else}
-						<p class="mb-4 text-sm text-slate-500">
-							Please login with your passkey to access wallet functions. Ensure you have completed
-							the setup on the Settings page.
-						</p>
-						<div class="space-y-4">
-							<div class="rounded-lg border border-stone-200 p-4">
-								<h3 class="mb-2 font-medium text-slate-600">Login with Passkey</h3>
-								{#if storedPasskey?.rawId && storedPasskey?.pubkeyCoordinates && storedPasskey?.signerContractAddress && mintedPkpPublicKey}
-									<p class="mb-3 text-xs text-slate-500">
-										This will prompt for your passkey. Requires setup via Settings.
-									</p>
-									<button
-										on:click={handleLoginWithPasskey}
-										class="w-full justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
-										disabled={isLoadingSessionSigsGnosisPasskey ||
-											isLoadingPkpSessionResume ||
-											!mintedPkpPublicKey}
-									>
-										{#if isLoadingSessionSigsGnosisPasskey}
-											<span class="spinner mr-2"></span>Logging in...
-										{:else if isLoadingPkpSessionResume}
-											<span class="spinner mr-2"></span>Checking session...
-										{:else}
-											Login with Passkey
-										{/if}
-									</button>
-								{:else}
-									<p
-										class="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-600"
-									>
-										Cannot login: Missing Passkey, PKP details, or deployed Signer address. Please
-										check the Settings page.
-									</p>
-								{/if}
-							</div>
-						</div>
-					{/if}
-				</div>
-			{:else}
+			<!-- Wallet Operations Section (Keep this structure) -->
+			{#if mintedPkpPublicKey && mintedPkpEthAddress}
+				<!-- Only show if PKP is available -->
 				<div class="rounded-xl bg-white p-6 shadow-lg md:p-8">
 					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
-						{profileName}'s Wallet
+						{profileName ? `${profileName}'s Wallet` : 'PKP Wallet'}
 					</h2>
-					<p class="mb-4 text-xs text-slate-500">
-						Session authenticated via:
-						<span class="font-medium text-slate-700">
-							{sessionAuthMethod === 'resumed-from-cache'
-								? 'DEVICE CACHE'
-								: (sessionAuthMethod?.toUpperCase() ?? 'N/A')}
-						</span>
-					</p>
+					<!-- REMOVED Session Auth Method display -->
+					<!-- <p class="mb-4 text-xs text-slate-500">...</p> -->
 
 					<div class="flex flex-col md:flex-row md:space-x-6">
 						<aside class="mb-6 w-full shrink-0 md:mb-0 md:w-48">
@@ -874,6 +792,15 @@ go();`);
 								>
 									Manage Profile
 								</button>
+								<!-- <button
+									on:click={() => (selectedWalletSection = 'transfer')}
+									class="w-full rounded-md px-3 py-2 text-left text-sm font-medium whitespace-nowrap transition-colors duration-150 {selectedWalletSection ===
+									'transfer'
+										? 'bg-emerald-100 text-emerald-700'
+										: 'text-slate-600 hover:bg-stone-100 hover:text-slate-900'}"
+								>
+									Transfer Tokens
+								</button> -->
 							</nav>
 						</aside>
 
@@ -895,7 +822,7 @@ go();`);
 									<button
 										on:click={handleSignMessageWithPkp}
 										class="w-full justify-center rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-sky-700 disabled:opacity-50"
-										disabled={isSigningMessage || !sessionSigs || !mintedPkpPublicKey}
+										disabled={isSigningMessage || !$litClientStore?.ready || !mintedPkpPublicKey}
 									>
 										{#if isSigningMessage}<span class="spinner mr-2"></span>Signing...{:else}Sign
 											Message with PKP{/if}
@@ -940,7 +867,7 @@ go();`);
 									<button
 										on:click={handleExecuteLitAction}
 										class="w-full justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
-										disabled={isExecutingAction || !sessionSigs}
+										disabled={isExecutingAction || !$litClientStore?.ready || !mintedPkpPublicKey}
 									>
 										{#if isExecutingAction}<span class="spinner mr-2"></span>Executing Action...{:else}Execute
 											Lit Action{/if}
@@ -996,25 +923,37 @@ go();`);
 											class="w-full justify-center rounded-lg bg-slate-700 px-6 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 focus:ring-2 focus:ring-slate-500 focus:ring-offset-2 disabled:opacity-50 sm:w-auto"
 											disabled={isEncryptingProfile ||
 												isDecryptingProfile ||
-												!sessionSigs ||
-												!mintedPkpEthAddress ||
-												!$litClientStore?.ready}
+												!$litClientStore?.ready ||
+												!mintedPkpPublicKey ||
+												!mintedPkpEthAddress}
 										>
 											{#if isEncryptingProfile}<span class="spinner mr-2"></span>Encrypting &
 												Saving...{:else if isDecryptingProfile}<span class="spinner mr-2"
 												></span>Decrypting...{:else}Save Encrypted Profile{/if}
 										</button>
-										{#if !sessionSigs || !mintedPkpEthAddress || !$litClientStore?.ready}<p
-												class="mt-2 text-xs text-orange-600"
-											>
-												Note: Requires Lit Connection (Ready), Authenticated PKP Session, and minted
-												PKP.
+										{#if !$litClientStore?.ready || !mintedPkpPublicKey || !mintedPkpEthAddress}
+											<p class="mt-2 text-xs text-orange-600">
+												Note: Requires Lit Client Ready & PKP details.
 											</p>{/if}
 									</div>
 								</div>
 							{/if}
 						</div>
 					</div>
+				</div>
+			{:else}
+				<div class="rounded-xl bg-white p-6 text-center shadow-lg md:p-8">
+					<h2 class="mb-4 text-xl font-semibold text-slate-600">PKP Wallet Not Initialized</h2>
+					<p class="text-sm text-slate-500">
+						Please ensure you have minted a PKP and it's loaded. <br />
+						You can manage PKP minting and other settings on the <strong>Settings</strong> page.
+					</p>
+					<a
+						href="/me/settings"
+						class="mt-6 inline-block rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 focus:ring-4 focus:ring-blue-300 focus:outline-none"
+					>
+						Go to Settings
+					</a>
 				</div>
 			{/if}
 		</div>

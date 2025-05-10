@@ -1,6 +1,14 @@
 import { writable, type Writable } from 'svelte/store';
 import type { ComponentType } from 'svelte';
 import SignerModal from '../components/SignerModal.svelte';
+import type { PKPSigningRequestData } from '$lib/wallet/modalTypes';
+
+// Define the props type for SignerModal explicitly for clarity here
+interface SignerModalProps {
+    requestData: PKPSigningRequestData | null;
+    onSign: ((result: PKPSigningResult) => void) | null;
+    onCancel: (() => void) | null;
+}
 
 interface ModalState {
     isOpen: boolean;
@@ -32,19 +40,6 @@ export function closeModal() {
 }
 
 // Define types for PKP signing request and result
-export type PKPSigningRequest = {
-    type: 'transaction' | 'message';
-    pkpEthAddress: string; // Address
-    pkpPublicKey: string; // Hex
-    sessionSigs: any;
-    litNodeClient: any;
-    // For transaction signing
-    transaction?: any;
-    // For message signing
-    message?: string;
-    // Optionally allow extra fields for future extensibility
-    [key: string]: any;
-};
 export type PKPSigningResult = unknown;
 
 let activePKPSignPromise: Promise<PKPSigningResult> | null = null;
@@ -53,12 +48,12 @@ function cleanup() {
     activePKPSignPromise = null;
 }
 
-export function requestPKPSignature(requestData: PKPSigningRequest): Promise<PKPSigningResult> {
+export function requestPKPSignature(requestData: PKPSigningRequestData): Promise<PKPSigningResult> {
     if (activePKPSignPromise) {
         return Promise.reject(new Error('A PKP signing request is already active.'));
     }
     activePKPSignPromise = new Promise((resolve, reject) => {
-        openModal(SignerModal, {
+        const modalProps: SignerModalProps = {
             requestData,
             onSign: (result: PKPSigningResult) => {
                 closeModal();
@@ -69,13 +64,9 @@ export function requestPKPSignature(requestData: PKPSigningRequest): Promise<PKP
                 closeModal();
                 reject(new Error('PKP signing cancelled by user.'));
                 cleanup();
-            },
-            onClose: () => {
-                closeModal();
-                reject(new Error('PKP signing cancelled by modal close.'));
-                cleanup();
             }
-        });
+        };
+        openModal(SignerModal, modalProps);
     });
     return activePKPSignPromise;
 } 

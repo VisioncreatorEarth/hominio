@@ -1,29 +1,70 @@
 <script lang="ts">
-	import { createEventDispatcher } from 'svelte';
-	import { onMount } from 'svelte';
+	import { createEventDispatcher, onMount, getContext } from 'svelte';
+	import { get } from 'svelte/store';
 	import { signTransactionWithPKP, signWithPKP } from '$lib/wallet/lit';
 	import { decodeFunctionData, formatUnits, keccak256, hexToBytes } from 'viem';
 	import { roadmapConfig } from '$lib/roadmap/config';
-	import { createPublicClient, http } from 'viem';
-	import { gnosis } from 'viem/chains';
-	import { shortAddress, resolveTokenMeta, getKnownTokenMeta } from '$lib/wallet/addressTokenUtils';
+	import { shortAddress, resolveTokenMeta } from '$lib/wallet/addressTokenUtils';
+	import type { PKPSigningRequestData } from '$lib/wallet/modalTypes';
+	import type { HominioFacade } from '$lib/KERNEL/hominio-svelte';
+	import type { LitNodeClient } from '@lit-protocol/lit-node-client';
+	import type { AuthSig, SessionSigs, AuthCallbackParams } from '@lit-protocol/types';
+	import {
+		getStoredPasskeyData,
+		type StoredPasskeyData,
+		type AuthenticatorAssertionResponse
+	} from '$lib/wallet/passkeySigner';
+	import { LitPKPResource, LitActionResource } from '@lit-protocol/auth-helpers';
+	import { browser } from '$app/environment';
+	import { getSessionSigsWithGnosisPasskeyVerification, executeLitAction } from '$lib/wallet/lit';
+	import type { Hex } from 'viem';
+	import { encryptString, decryptToString } from '@lit-protocol/encryption';
 
 	// Props: requestData (object), onSign (function), onCancel (function)
-	export let requestData: any = null;
-	export let onSign: ((result: any) => void) | null = null;
-	export let onCancel: (() => void) | null = null;
+	let { requestData, onSign, onCancel } = $props<{
+		requestData: PKPSigningRequestData | null;
+		onSign: ((result: any) => void) | null;
+		onCancel: (() => void) | null;
+	}>();
 
-	if (!requestData?.pkpEthAddress) {
-		throw new Error('PKP signing modal: pkpEthAddress is required in requestData.');
+	if (!requestData?.pkpEthAddress || !requestData?.pkpPublicKey) {
+		throw new Error(
+			'PKP signing modal: pkpEthAddress and pkpPublicKey are required in requestData.'
+		);
 	}
 
 	const dispatch = createEventDispatcher();
 
-	let isSigning = false;
-	let error: string | null = null;
-	let activeTab: 'summary' | 'details' = 'summary';
-	let signResult: { success: boolean; message: string } | null = null;
+	// Internal State for session and passkey management
+	let internalSessionSigs: SessionSigs | null = $state(null);
+	let isSessionLoading: boolean = $state(false);
+	let passkeyLoginUIVisible: boolean = $state(false);
+	let storedPasskey: StoredPasskeyData | null = $state(null);
+	let internalLitNodeClient: LitNodeClient | null = $state(null);
+
+	// Existing state
+	let isSigning = $state(false);
+	let currentErrorInternal: string | null = $state(null);
+	let activeTab: 'summary' | 'details' = $state('summary');
+	let signResult: { success: boolean; message: string } | null = $state(null);
 	let signTimeout: ReturnType<typeof setTimeout> | null = null;
+
+	// Get LitNodeClient from Svelte context
+	const o = getContext<HominioFacade>('o');
+	const litNodeClientStore = o.lit.client;
+
+	$effect(() => {
+		internalLitNodeClient = get(litNodeClientStore);
+		console.log('[SignerModal] LitNodeClient updated:', internalLitNodeClient?.ready);
+	});
+
+	onMount(() => {
+		storedPasskey = getStoredPasskeyData();
+		console.log('[SignerModal] Stored Passkey Data onMount:', storedPasskey);
+		return () => {
+			if (signTimeout) clearTimeout(signTimeout);
+		};
+	});
 
 	// Tab navigation style variables
 	const tabBase =
@@ -31,11 +72,40 @@
 	const tabActive = 'border-emerald-500 text-emerald-700 bg-emerald-50';
 	const tabInactive = 'border-transparent text-slate-500 hover:text-emerald-700';
 
-	$: displayData = (() => {
+	const displayData = $derived(() => {
 		if (!requestData || typeof requestData !== 'object') return requestData;
-		const { litNodeClient, sessionSigs, ...rest } = requestData;
-		return rest;
-	})();
+		const {
+			pkpPublicKey,
+			pkpEthAddress,
+			type,
+			transaction,
+			message,
+			actionCode,
+			actionJsParams,
+			dataToEncrypt,
+			accessControlConditions,
+			ciphertext,
+			dataToEncryptHash,
+			chain,
+			tokenDecimals
+		} = requestData;
+		return {
+			pkpPublicKey,
+			pkpEthAddress,
+			type,
+			transaction: type === 'transaction' ? transaction : undefined,
+			message: type === 'message' ? message : undefined,
+			actionCode: type === 'executeAction' ? actionCode : undefined,
+			actionJsParams: type === 'executeAction' ? actionJsParams : undefined,
+			dataToEncrypt: type === 'encrypt' ? dataToEncrypt : undefined,
+			accessControlConditions:
+				type === 'encrypt' || type === 'decrypt' ? accessControlConditions : undefined,
+			ciphertext: type === 'decrypt' ? ciphertext : undefined,
+			dataToEncryptHash: type === 'decrypt' ? dataToEncryptHash : undefined,
+			chain: type === 'decrypt' ? chain : undefined,
+			tokenDecimals: transaction ? tokenDecimals : undefined
+		};
+	});
 
 	// Minimal ERC-20 ABI for transfer decoding
 	const erc20Abi = [
@@ -51,7 +121,7 @@
 		}
 	];
 
-	$: decodedErc20Transfer = (() => {
+	const decodedErc20Transfer = $derived(() => {
 		if (!requestData || requestData.type !== 'transaction' || !requestData.transaction?.data)
 			return null;
 		try {
@@ -61,8 +131,7 @@
 			});
 			if (decoded.functionName === 'transfer') {
 				const [to, amount] = decoded.args as [string, bigint];
-				// Try to get decimals from requestData if present, else default to 18
-				const decimals = requestData.transaction.tokenDecimals ?? 18;
+				const decimals = requestData.tokenDecimals ?? 18;
 				return {
 					functionName: decoded.functionName,
 					to,
@@ -74,7 +143,7 @@
 			// Ignore decoding errors
 		}
 		return null;
-	})();
+	});
 
 	const erc20NameSymbolAbi = [
 		{
@@ -93,83 +162,276 @@
 		}
 	];
 
-	let tokenName: string | null = null;
-	let tokenSymbol: string | null = null;
-	let isLoadingTokenMeta = false;
+	let tokenName = $state<string | null>(null);
+	let tokenSymbol = $state<string | null>(null);
+	let isLoadingTokenMeta = $state(false);
 
-	$: if (decodedErc20Transfer && requestData.transaction?.to) {
-		isLoadingTokenMeta = true;
-		resolveTokenMeta(requestData.transaction.to).then((meta) => {
-			tokenName = meta.name;
-			tokenSymbol = meta.symbol;
-			isLoadingTokenMeta = false;
-		});
-	}
+	$effect(() => {
+		const currentDecodedTransferValue = decodedErc20Transfer();
+		const currentRequestData = requestData;
+
+		if (currentRequestData && currentDecodedTransferValue && currentRequestData.transaction?.to) {
+			isLoadingTokenMeta = true;
+			resolveTokenMeta(currentRequestData.transaction.to)
+				.then((meta) => {
+					tokenName = meta.name;
+					tokenSymbol = meta.symbol;
+					isLoadingTokenMeta = false;
+				})
+				.catch((err) => {
+					console.error('Error fetching token meta:', err);
+					isLoadingTokenMeta = false;
+				});
+		} else {
+			// Reset if not applicable
+			tokenName = null;
+			tokenSymbol = null;
+		}
+	});
 
 	function showSuccess(message: string) {
 		signResult = { success: true, message };
 		if (signTimeout) clearTimeout(signTimeout);
 		signTimeout = setTimeout(() => {
 			signResult = null;
-			if (onCancel) onCancel(); // Close modal after success
+			if (onCancel) onCancel();
 		}, 2500);
 	}
 	function showError(message: string) {
+		currentErrorInternal = message;
 		signResult = { success: false, message };
 		if (signTimeout) clearTimeout(signTimeout);
 	}
 
-	async function handleSign() {
-		isSigning = true;
-		error = null;
+	// Task 1.3: Define internalPasskeyAuthCallback (shell initially, then more complete)
+	async function internalPasskeyAuthCallback(params: AuthCallbackParams): Promise<AuthSig> {
+		console.log('[SignerModal] internalPasskeyAuthCallback triggered', params);
+		if (!browser || !storedPasskey || !requestData?.pkpPublicKey || !internalLitNodeClient) {
+			throw new Error(
+				'Passkey auth callback: Missing browser, stored passkey, PKP public key, or Lit client.'
+			);
+		}
+
+		passkeyLoginUIVisible = true;
+		isSessionLoading = true; // Indicate passkey interaction is a form of session loading
+		currentErrorInternal = null;
+
 		try {
-			if (!requestData || !requestData.type) {
-				showError('Invalid or missing signing request data.');
-				throw new Error('Invalid or missing signing request data.');
-			}
-			if (requestData.type === 'transaction') {
-				const { litNodeClient, sessionSigs, pkpPublicKey, transaction } = requestData;
-				if (!litNodeClient || !sessionSigs || !pkpPublicKey || !transaction) {
-					showError('Missing required signing parameters.');
-					throw new Error('Missing required signing parameters.');
-				}
-				const signature = await signTransactionWithPKP(
-					litNodeClient,
-					sessionSigs,
-					pkpPublicKey,
-					transaction
-				);
-				if (onSign) {
-					onSign(signature);
-					dispatch('signed', { result: signature });
-					showSuccess('Transaction signed and submitted!');
-				}
-			} else if (requestData.type === 'message') {
-				const { litNodeClient, sessionSigs, pkpPublicKey, message } = requestData;
-				if (!litNodeClient || !sessionSigs || !pkpPublicKey || !message) {
-					showError('Missing required signing parameters for message.');
-					throw new Error('Missing required signing parameters for message.');
-				}
-				const signatureResult = await signWithPKP(
-					litNodeClient,
-					sessionSigs,
-					pkpPublicKey,
-					message
-				);
-				if (onSign) {
-					onSign(signatureResult);
-					dispatch('signed', { result: signatureResult });
+			console.error(
+				'internalPasskeyAuthCallback: This path might be incorrect for Gnosis EIP-1271 passkeys. Expecting direct call to getSessionSigsWithGnosisPasskeyVerification.'
+			);
+			throw new Error(
+				'Passkey authentication via generic authNeededCallback not fully implemented for this EIP-1271 setup. Use dedicated Gnosis passkey session function.'
+			);
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			currentErrorInternal = `Passkey Auth Error: ${msg}`;
+			showError(currentErrorInternal);
+			throw err; // Rethrow to fail the getSessionSigs call
+		} finally {
+			passkeyLoginUIVisible = false; // Hide prompt once done or failed
+			isSessionLoading = false;
+		}
+	}
+
+	// Task 1.4 (and 2.x stubs)
+	async function executeRequestedOperation(sessionSigs: SessionSigs) {
+		if (!requestData || !internalLitNodeClient) {
+			showError('Missing request data or Lit client for operation execution.');
+			return;
+		}
+		isSigning = true; // Mark that the specific operation is now processing
+		currentErrorInternal = null;
+
+		try {
+			let result: any;
+			switch (requestData.type) {
+				case 'message':
+					if (!requestData.message) throw new Error('Message not provided for signing.');
+					result = await signWithPKP(
+						internalLitNodeClient,
+						sessionSigs,
+						requestData.pkpPublicKey,
+						requestData.message
+					);
 					showSuccess('Message signed successfully!');
-				}
-			} else {
-				showError('Unsupported signing request type.');
-				throw new Error('Unsupported signing request type.');
+					break;
+				case 'transaction':
+					if (!requestData.transaction) throw new Error('Transaction not provided for signing.');
+					result = await signTransactionWithPKP(
+						internalLitNodeClient,
+						sessionSigs,
+						requestData.pkpPublicKey,
+						requestData.transaction
+					);
+					showSuccess('Transaction signed successfully!');
+					break;
+				case 'executeAction':
+					if (!requestData.actionCode) throw new Error('Lit Action code not provided.');
+					// The pkpPublicKey is implicitly used by the sessionSigs for executeLitAction
+					result = await executeLitAction(
+						internalLitNodeClient,
+						sessionSigs,
+						requestData.actionCode,
+						requestData.actionJsParams || {} // Ensure jsParams is at least an empty object
+					);
+					showSuccess('Lit Action executed successfully!');
+					break;
+				case 'encrypt':
+					if (!requestData.dataToEncrypt) throw new Error('Data to encrypt not provided.');
+					if (!requestData.accessControlConditions)
+						throw new Error('Access control conditions not provided for encryption.');
+
+					result = await encryptString(
+						{
+							accessControlConditions: requestData.accessControlConditions,
+							dataToEncrypt: requestData.dataToEncrypt
+						},
+						internalLitNodeClient
+					);
+					showSuccess('Data encrypted successfully!');
+					break;
+				case 'decrypt':
+					if (!requestData.ciphertext) throw new Error('Ciphertext not provided for decryption.');
+					if (!requestData.dataToEncryptHash)
+						throw new Error('DataToEncryptHash not provided for decryption.');
+					if (!requestData.accessControlConditions)
+						throw new Error('Access control conditions not provided for decryption.');
+
+					result = await decryptToString(
+						{
+							accessControlConditions: requestData.accessControlConditions,
+							ciphertext: requestData.ciphertext,
+							dataToEncryptHash: requestData.dataToEncryptHash,
+							chain: requestData.chain, // Pass chain if available in requestData
+							// sessionSigs are typically handled by the authenticated litNodeClient or within ACCs if specific auth is needed for them
+							// For PKP-based decryption where PKP meets ACCs, client session should be sufficient.
+							sessionSigs: sessionSigs // Let's include it as per the plan's original intent, and see if linter complains like for encrypt.
+						},
+						internalLitNodeClient
+					);
+					showSuccess('Data decrypted successfully!');
+					break;
+				default:
+					throw new Error('Unsupported operation type.');
 			}
-		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
-			showError(error);
+			if (onSign && result) {
+				onSign(result);
+				dispatch('signed', { result });
+			}
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			showError(`Operation failed: ${msg}`);
+			// Do not call onCancel here, let user decide or timeout handle it.
 		} finally {
 			isSigning = false;
+		}
+	}
+
+	// Task 1.2: Implement Session Acquisition and Operation Orchestration
+	async function handleApproveOperation() {
+		if (!internalLitNodeClient || !internalLitNodeClient.ready || !requestData || !storedPasskey) {
+			showError('Lit client not ready, request data missing, or no stored passkey available.');
+			return;
+		}
+
+		isSessionLoading = true;
+		passkeyLoginUIVisible = false;
+		currentErrorInternal = null;
+		signResult = null;
+
+		try {
+			let currentSessionSigs = internalSessionSigs;
+
+			if (!currentSessionSigs) {
+				console.log(
+					'[SignerModal] No active sessionSigs. Attempting to get new sessionSigs for PKP:',
+					requestData.pkpPublicKey
+				);
+
+				passkeyLoginUIVisible = true;
+
+				const sessionChallengeMessage = `Login to Hominio Signer Modal for PKP: ${requestData.pkpPublicKey} at ${new Date().toISOString()}`;
+				const messageHashAsChallenge = keccak256(new TextEncoder().encode(sessionChallengeMessage));
+
+				const rawIdBytes = hexToBytes(storedPasskey.rawId as Hex);
+
+				// Define resourceAbilityRequests based on operation type
+				let pkpResource = new LitPKPResource('*');
+				let resourceAbilityRequests;
+				switch (requestData.type) {
+					case 'message':
+					case 'transaction':
+					case 'encrypt':
+					case 'decrypt':
+						resourceAbilityRequests = [
+							{
+								resource: pkpResource,
+								ability: 'pkp-signing' as const // Ensure this is a const for type safety
+							}
+						];
+						break;
+					case 'executeAction':
+						// For now, allow executing any action. In future, might be specific action IPFS hash.
+						// And pkp-signing for the pkp that will execute the action.
+						resourceAbilityRequests = [
+							{
+								resource: pkpResource,
+								ability: 'pkp-signing' as const
+							},
+							{
+								resource: new LitActionResource('*'), // Any action
+								ability: 'lit-action-execution' as const // Corrected from lit-action-execute
+							}
+						];
+						break;
+					default:
+						throw new Error('Unsupported operation type for resource capabilities.');
+				}
+
+				const assertion = (await navigator.credentials.get({
+					publicKey: {
+						challenge: hexToBytes(messageHashAsChallenge),
+						allowCredentials: [{ type: 'public-key', id: rawIdBytes }],
+						userVerification: 'required'
+					}
+				})) as PublicKeyCredential | null;
+
+				if (
+					!assertion ||
+					!assertion.response ||
+					!(assertion.response instanceof AuthenticatorAssertionResponse)
+				) {
+					throw new Error('Failed to get valid signature assertion from passkey.');
+				}
+
+				currentSessionSigs = await getSessionSigsWithGnosisPasskeyVerification(
+					internalLitNodeClient,
+					requestData.pkpPublicKey,
+					sessionChallengeMessage,
+					assertion.response as AuthenticatorAssertionResponse,
+					storedPasskey,
+					'ethereum',
+					resourceAbilityRequests // Pass the resources here
+				);
+				internalSessionSigs = currentSessionSigs;
+				passkeyLoginUIVisible = false;
+				console.log(
+					'[SignerModal] Successfully obtained new sessionSigs with resource capabilities.'
+				);
+			}
+
+			if (!currentSessionSigs) {
+				throw new Error('Failed to obtain PKP session. Cannot proceed.');
+			}
+
+			await executeRequestedOperation(currentSessionSigs);
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			showError(`Session/Approval Error: ${msg}`);
+			passkeyLoginUIVisible = false;
+		} finally {
+			isSessionLoading = false;
 		}
 	}
 
@@ -182,8 +444,8 @@
 <div
 	class="flex flex-col items-center justify-center rounded-2xl border border-stone-200 bg-[#fdf6ee] p-8 shadow-2xl"
 >
-	<h2 class="mb-4 text-2xl font-extrabold tracking-tight text-slate-800">PKP Signature Request</h2>
-	<p class="mb-6 text-base text-slate-600">Please review and approve the data to be signed:</p>
+	<h2 class="mb-4 text-2xl font-extrabold tracking-tight text-slate-800">PKP Action Request</h2>
+	<p class="mb-6 text-base text-slate-600">Please review and approve the details below:</p>
 	<!-- Tab Navigation -->
 	<div class="mb-6 flex w-full max-w-xl border-b border-stone-300">
 		<button
@@ -198,7 +460,7 @@
 		>
 	</div>
 	<!-- Tab Content -->
-	{#if signResult}
+	{#if signResult && !passkeyLoginUIVisible}
 		<div
 			class="mb-6 w-full max-w-xl rounded-xl border-2 {signResult.success
 				? 'border-green-400 bg-green-50'
@@ -226,8 +488,33 @@
 				<span class="text-lg font-semibold text-red-700">{signResult.message}</span>
 			{/if}
 		</div>
+	{:else if passkeyLoginUIVisible}
+		<div
+			class="mb-6 w-full max-w-xl rounded-xl border-2 border-yellow-400 bg-yellow-50 p-8 text-base shadow-lg"
+		>
+			<h3 class="mb-4 text-xl font-bold text-yellow-700">Passkey Authentication Needed</h3>
+			<p class="mb-4 text-yellow-600">Your approval requires authentication with your passkey.</p>
+			<p class="mb-2 text-sm text-yellow-500">
+				PKP: {requestData?.pkpEthAddress ? shortAddress(requestData.pkpEthAddress) : 'N/A'}
+			</p>
+			{#if isSessionLoading}
+				<div class="flex items-center justify-center py-4 text-yellow-700">
+					<span class="spinner mr-3"></span> Authenticating with passkey device...
+				</div>
+			{:else}
+				<p class="py-4 text-center text-sm text-yellow-600">
+					Follow prompts from your browser or security key.
+				</p>
+			{/if}
+			{#if currentErrorInternal && passkeyLoginUIVisible}
+				<div class="mt-4 rounded border border-red-300 bg-red-100 p-2 text-xs text-red-700">
+					Passkey Error: {currentErrorInternal}
+				</div>
+			{/if}
+		</div>
 	{:else if activeTab === 'summary'}
-		{#if decodedErc20Transfer}
+		{@const currentDecodedTransfer = decodedErc20Transfer()}
+		{#if currentDecodedTransfer}
 			<div
 				class="mb-6 flex w-full max-w-xl flex-col gap-4 rounded-2xl border-2 border-green-400 bg-gradient-to-br from-green-50 to-[#fdf6ee] p-8 text-base shadow-lg"
 			>
@@ -248,27 +535,27 @@
 				</div>
 				<div class="grid grid-cols-2 gap-x-6 gap-y-2">
 					<div class="font-semibold text-green-900">Action:</div>
-					<div class="font-mono text-green-800">{decodedErc20Transfer.functionName}</div>
+					<div class="font-mono text-green-800">{currentDecodedTransfer.functionName}</div>
 					<div class="font-semibold text-green-900">Asset:</div>
 					<div>
 						{isLoadingTokenMeta
 							? 'Loading...'
 							: tokenName
 								? `${tokenName} (${tokenSymbol})`
-								: requestData.transaction?.to}
+								: requestData?.transaction?.to}
 					</div>
 					<div class="font-semibold text-green-900">From:</div>
 					<div class="font-mono font-bold text-green-800">
-						{shortAddress(requestData.pkpEthAddress)}
+						{requestData?.pkpEthAddress ? shortAddress(requestData.pkpEthAddress) : 'N/A'}
 					</div>
 					<div class="font-semibold text-green-900">To:</div>
 					<div class="font-mono font-bold text-green-800">
-						{shortAddress(decodedErc20Transfer.to)}
+						{currentDecodedTransfer.to ? shortAddress(currentDecodedTransfer.to) : 'N/A'}
 					</div>
 					<div class="font-semibold text-green-900">Amount:</div>
 					<div>
 						<span class="font-mono text-lg font-bold text-green-900"
-							>{decodedErc20Transfer.amountFormatted}</span
+							>{currentDecodedTransfer.amountFormatted}</span
 						>
 					</div>
 				</div>
@@ -293,8 +580,107 @@
 					class="mb-3 rounded bg-blue-100 p-4 font-mono text-base whitespace-pre-wrap text-blue-800">{requestData.message}</pre>
 				<div class="font-semibold text-blue-900">From:</div>
 				<div class="font-mono font-bold text-blue-800">
-					{shortAddress(requestData.pkpEthAddress)}
+					{requestData?.pkpEthAddress ? shortAddress(requestData.pkpEthAddress) : 'N/A'}
 				</div>
+			</div>
+		{:else if requestData?.type === 'executeAction'}
+			<div
+				class="mb-6 flex w-full max-w-xl flex-col gap-4 rounded-2xl border-2 border-purple-400 bg-gradient-to-br from-purple-50 to-[#fdf6ee] p-8 text-base shadow-lg"
+			>
+				<div class="mb-2 flex items-center gap-3">
+					<svg
+						class="h-9 w-9 text-purple-500"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						viewBox="0 0 24 24"
+						><path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"
+						/></svg
+					>
+					<span class="text-2xl font-extrabold tracking-tight text-purple-700"
+						>Execute Lit Action</span
+					>
+				</div>
+				<div class="font-semibold text-purple-900">Action Origin:</div>
+				<div class="font-mono text-sm text-purple-800">Inline Code Snippet (see details)</div>
+				<div class="font-semibold text-purple-900">Signer PKP:</div>
+				<div class="font-mono font-bold text-purple-800">
+					{requestData?.pkpEthAddress ? shortAddress(requestData.pkpEthAddress) : 'N/A'}
+				</div>
+				<div class="font-semibold text-purple-900">Action JS Params:</div>
+				<pre
+					class="mb-3 rounded bg-purple-100 p-2 font-mono text-xs whitespace-pre-wrap text-purple-800">{JSON.stringify(
+						requestData?.actionJsParams || {},
+						null,
+						2
+					)}</pre>
+			</div>
+		{:else if requestData?.type === 'encrypt'}
+			<div
+				class="mb-6 flex w-full max-w-xl flex-col gap-4 rounded-2xl border-2 border-cyan-400 bg-gradient-to-br from-cyan-50 to-[#fdf6ee] p-8 text-base shadow-lg"
+			>
+				<div class="mb-2 flex items-center gap-3">
+					<svg
+						class="h-9 w-9 text-cyan-500"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						viewBox="0 0 24 24"
+					>
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+						/>
+					</svg>
+					<span class="text-2xl font-extrabold tracking-tight text-cyan-700">Encrypt Data</span>
+				</div>
+				<div class="font-semibold text-cyan-900">Data to Encrypt:</div>
+				<pre
+					class="mb-3 rounded bg-cyan-100 p-2 font-mono text-xs whitespace-pre-wrap text-cyan-800">{requestData?.dataToEncrypt
+						? requestData.dataToEncrypt.length > 100
+							? requestData.dataToEncrypt.substring(0, 97) + '...'
+							: requestData.dataToEncrypt
+						: 'N/A'}</pre>
+				<div class="font-semibold text-cyan-900">Signer PKP:</div>
+				<div class="font-mono font-bold text-cyan-800">
+					{requestData?.pkpEthAddress ? shortAddress(requestData.pkpEthAddress) : 'N/A'}
+				</div>
+				<div class="font-semibold text-cyan-900">Access Conditions:</div>
+				<div class="font-mono text-xs text-cyan-800">See details tab.</div>
+			</div>
+		{:else if requestData?.type === 'decrypt'}
+			<div
+				class="mb-6 flex w-full max-w-xl flex-col gap-4 rounded-2xl border-2 border-orange-400 bg-gradient-to-br from-orange-50 to-[#fdf6ee] p-8 text-base shadow-lg"
+			>
+				<div class="mb-2 flex items-center gap-3">
+					<svg
+						class="h-9 w-9 text-orange-500"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						viewBox="0 0 24 24"
+						><path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.628 5.905M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+						/></svg
+					>
+					<span class="text-2xl font-extrabold tracking-tight text-orange-700">Decrypt Data</span>
+				</div>
+				<div class="font-semibold text-orange-900">Ciphertext Hash:</div>
+				<pre
+					class="mb-3 rounded bg-orange-100 p-2 font-mono text-xs whitespace-pre-wrap text-orange-800">{requestData?.dataToEncryptHash ||
+						'N/A'}</pre>
+				<div class="font-semibold text-orange-900">Signer PKP:</div>
+				<div class="font-mono font-bold text-orange-800">
+					{requestData?.pkpEthAddress ? shortAddress(requestData.pkpEthAddress) : 'N/A'}
+				</div>
+				<div class="font-semibold text-orange-900">Access Conditions:</div>
+				<div class="font-mono text-xs text-orange-800">See details tab.</div>
 			</div>
 		{:else}
 			<div
@@ -306,28 +692,37 @@
 	{:else if activeTab === 'details'}
 		<pre
 			class="mb-6 w-full max-w-xl overflow-x-auto rounded-xl border border-stone-200 bg-white p-6 text-xs whitespace-pre-wrap text-slate-700 shadow-sm">{JSON.stringify(
-				displayData,
+				displayData(),
 				(key, value) => (typeof value === 'bigint' ? value.toString() : value),
 				2
 			)}</pre>
 	{/if}
-	{#if error}
+
+	{#if currentErrorInternal && !passkeyLoginUIVisible && !signResult?.success}
 		<div class="mb-2 rounded border border-red-300 bg-red-100 p-2 text-xs text-red-700">
-			{error}
+			{currentErrorInternal}
 		</div>
 	{/if}
+
 	<div class="mt-4 flex w-full max-w-xl justify-between gap-2">
 		<button
 			class="rounded bg-slate-200 px-4 py-2 text-slate-700 hover:bg-slate-300"
 			on:click={handleCancel}
-			disabled={isSigning}>Cancel</button
+			disabled={isSigning || isSessionLoading}>Cancel</button
 		>
 		<button
 			class="rounded bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
-			on:click={handleSign}
-			disabled={isSigning}
+			on:click={handleApproveOperation}
+			disabled={isSigning ||
+				isSessionLoading ||
+				!internalLitNodeClient?.ready ||
+				!storedPasskey ||
+				passkeyLoginUIVisible}
 		>
-			{#if isSigning}<span class="spinner mr-2"></span>Signing...{:else}Sign{/if}
+			{#if isSessionLoading && !passkeyLoginUIVisible}<span class="spinner mr-2"></span>Checking
+				Session...{:else if isSessionLoading && passkeyLoginUIVisible}<span class="spinner mr-2"
+				></span>Authenticating...{:else if isSigning}<span class="spinner mr-2"
+				></span>Processing...{:else}Approve{/if}
 		</button>
 	</div>
 </div>

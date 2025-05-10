@@ -2,7 +2,7 @@ import { LitNodeClient } from '@lit-protocol/lit-node-client';
 import { createSiweMessageWithRecaps, LitActionResource, LitPKPResource } from '@lit-protocol/auth-helpers';
 import { hashMessage, hexToBytes, keccak256, toBytes, createPublicClient, http, serializeTransaction } from 'viem';
 import type { Address, Hex, WalletClient, PublicClient, Signature } from 'viem';
-import type { SessionSigs, AuthCallbackParams, GetSessionSigsProps, AuthSig, SigResponse, ExecuteJsResponse } from '@lit-protocol/types';
+import type { SessionSigs, AuthCallbackParams, GetSessionSigsProps, AuthSig, SigResponse, ExecuteJsResponse, LitResourceAbilityRequest } from '@lit-protocol/types';
 import {
     AUTH_METHOD_TYPE_PASSKEY,
     formatSignatureForEIP1271,
@@ -546,6 +546,7 @@ go();
  * @param assertionResponse The response from `navigator.credentials.get()` after passkey signing.
  * @param passkeyData Stored passkey data including coordinates and optional signer address.
  * @param chain The chain for which the session sigs are being requested (e.g., 'ethereum').
+ * @param resourceAbilityRequestsFromModal Optional array of resource ability requests from modal
  * @returns A promise that resolves to SessionSigs.
  */
 export const getSessionSigsWithGnosisPasskeyVerification = async (
@@ -554,7 +555,8 @@ export const getSessionSigsWithGnosisPasskeyVerification = async (
     messageToSign: string,
     assertionResponse: AuthenticatorAssertionResponse,
     passkeyData: StoredPasskeyData,
-    chain: string
+    chain: string,
+    resourceAbilityRequestsFromModal?: LitResourceAbilityRequest[]
 ): Promise<SessionSigs> => {
     console.log('Attempting session sigs with Gnosis passkey verification Lit Action...');
 
@@ -595,10 +597,13 @@ export const getSessionSigsWithGnosisPasskeyVerification = async (
         }
 
         // 5. Define resource ability requests for the session
-        const resourceAbilityRequests = [
-            { resource: new LitPKPResource('*'), ability: 'pkp-signing' as const },
-            { resource: new LitActionResource('*'), ability: 'lit-action-execution' as const },
-        ];
+        // Use provided requests if available, otherwise default
+        const finalResourceAbilityRequests = resourceAbilityRequestsFromModal && resourceAbilityRequestsFromModal.length > 0
+            ? resourceAbilityRequestsFromModal
+            : [
+                { resource: new LitPKPResource('*'), ability: 'pkp-signing' as const },
+                { resource: new LitActionResource('*'), ability: 'lit-action-execution' as const },
+            ];
 
         // 6. Get session sigs
         const sessionSigs = await litNodeClient.getLitActionSessionSigs({
@@ -606,7 +611,7 @@ export const getSessionSigsWithGnosisPasskeyVerification = async (
             litActionCode: encodedLitActionCode,
             jsParams,
             chain, // This 'chain' is for the session signatures, not the ethCalls in the action
-            resourceAbilityRequests,
+            resourceAbilityRequests: finalResourceAbilityRequests, // Use the determined requests
             // No authNeededCallback here as the Lit Action IS the auth method
         });
 
