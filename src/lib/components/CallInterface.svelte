@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { currentAgent } from '$lib/ultravox/agents';
+	import { recentToolActivity } from '../../lib/ultravox/stores';
 
 	// Define AgentName type locally
 	type AgentName = string;
@@ -85,7 +86,18 @@
 </script>
 
 {#if isInterfaceVisible}
-	<div class="fixed inset-x-0 bottom-0 z-40 flex justify-center p-4">
+	<div class="fixed inset-x-0 bottom-0 z-40 flex flex-col items-center p-4">
+		<!-- Tool Activity Display -->
+		{#if $recentToolActivity}
+			<div
+				class="mb-2 w-full max-w-md rounded-xl border border-sky-200 bg-sky-50/80 p-3 text-xs text-sky-700 shadow-lg backdrop-blur-md transition-all duration-300 ease-in-out"
+			>
+				<div class="font-semibold">Tool Call: {$recentToolActivity.action}</div>
+				<div>{$recentToolActivity.message}</div>
+			</div>
+		{/if}
+		<!-- End Tool Activity Display -->
+
 		<div
 			class="w-full max-w-md rounded-2xl border border-[#d6c7b1] bg-[#f8f4ed]/80 p-4 shadow-xl backdrop-blur-md"
 		>

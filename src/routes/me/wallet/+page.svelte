@@ -11,7 +11,7 @@
 	import type { LitNodeClient } from '@lit-protocol/lit-node-client';
 	import type { SessionSigs, ExecuteJsResponse, AuthCallbackParams } from '@lit-protocol/types';
 	import { LitPKPResource, LitActionResource } from '@lit-protocol/auth-helpers';
-	import type { Hex, Address, WalletClient } from 'viem';
+	import type { Hex, Address } from 'viem';
 	import {
 		keccak256,
 		hexToBytes,
@@ -21,14 +21,15 @@
 		parseUnits,
 		encodeFunctionData,
 		serializeTransaction,
-		type TransactionSerializableEIP1559
+		type TransactionSerializableEIP1559,
+		type Signature
 	} from 'viem';
 	import { gnosis } from 'viem/chains';
-	import type { Writable } from 'svelte/store';
 	import { pageMetadataStore } from '$lib/stores/layoutStore';
 	import type { PageData } from './$types';
 	import { roadmapConfig } from '$lib/roadmap/config';
 	import type { HominioFacade } from '$lib/KERNEL/hominio-svelte';
+	import { requestPKPSignature } from '$lib/KERNEL/modalStore';
 
 	// Use $props() for runes mode
 	let { data } = $props<{ data: PageData }>();
@@ -327,12 +328,15 @@ go();`);
 		signatureResult = null;
 
 		try {
-			signatureResult = await signWithPKP(
-				currentLitClient!,
-				sessionSigs!,
-				mintedPkpPublicKey,
-				messageToSign
-			);
+			const signature = (await requestPKPSignature({
+				type: 'message',
+				message: messageToSign,
+				pkpPublicKey: mintedPkpPublicKey!,
+				pkpEthAddress: mintedPkpEthAddress!,
+				sessionSigs,
+				litNodeClient: currentLitClient
+			})) as { signature: Hex; dataSigned: Hex };
+			signatureResult = signature;
 			mainSuccess = 'Message signed successfully!';
 		} catch (err: unknown) {
 			mainError = err instanceof Error ? err.message : 'Error signing message.';
@@ -624,15 +628,15 @@ go();`);
 				type: 'eip1559'
 			};
 
-			// 6. Sign Transaction
-			console.log('[WalletPage] Signing transaction with PKP...', transaction);
-			const signature = await signTransactionWithPKP(
-				$litClientStore!,
-				sessionSigs!,
-				mintedPkpPublicKey!,
-				transaction
-			);
-			console.log('[WalletPage] Signature received:', signature);
+			// 6. Sign Transaction via Central Modal
+			const signature = (await requestPKPSignature({
+				type: 'transaction',
+				transaction,
+				pkpPublicKey: mintedPkpPublicKey!,
+				pkpEthAddress: mintedPkpEthAddress!,
+				sessionSigs: sessionSigs!,
+				litNodeClient: $litClientStore!
+			})) as Signature;
 
 			// 7. Serialize Signed Transaction
 			const signedRawTx = serializeTransaction(transaction, signature);

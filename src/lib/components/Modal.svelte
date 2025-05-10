@@ -11,21 +11,31 @@
 	<div
 		transition:fade={{ duration: 150 }}
 		class="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
-		on:click={closeModal}
+		on:click={() => {
+			if ($modalStore.props && typeof $modalStore.props.onCancel === 'function') {
+				$modalStore.props.onCancel();
+			}
+			closeModal();
+		}}
 		role="presentation"
 	></div>
 
 	<!-- Modal Content -->
 	<div
 		transition:fade={{ duration: 200, delay: 50, easing: quintOut }}
-		class="fixed bottom-20 left-1/2 z-50 w-full max-w-md -translate-x-1/2 rounded-lg bg-white p-6 shadow-xl"
+		class="fixed bottom-20 left-1/2 z-50 w-full max-w-6xl -translate-x-1/2 rounded-lg shadow-xl"
 		on:click|stopPropagation
 		role="dialog"
 		aria-modal="true"
 	>
 		<!-- Close Button -->
 		<button
-			on:click={closeModal}
+			on:click={() => {
+				if ($modalStore.props && typeof $modalStore.props.onCancel === 'function') {
+					$modalStore.props.onCancel();
+				}
+				closeModal();
+			}}
 			class="absolute top-2 right-2 rounded-full p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 focus:ring-2 focus:ring-gray-400 focus:outline-none"
 			aria-label="Close modal"
 		>

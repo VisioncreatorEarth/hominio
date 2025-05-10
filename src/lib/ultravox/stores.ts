@@ -45,7 +45,7 @@ export function logToolActivity(
 
     recentToolActivity.set(activity);
 
-    // Clear the notification after 3 seconds
+    // Clear the notification after 5 seconds
     setTimeout(() => {
         // Only clear if this is still the current notification
         recentToolActivity.update(current => {
@@ -54,8 +54,7 @@ export function logToolActivity(
             }
             return current;
         });
-    }, 3000);
+    }, 5000);
 
-    console.log(`Tool activity: ${action} - ${message} (${activityId})`);
     return { success, message };
 } 

@@ -16,8 +16,9 @@ import {
 } from 'viem';
 import { gnosis } from 'viem/chains';
 import { roadmapConfig } from '$lib/roadmap/config';
-import { signTransactionWithPKP } from '$lib/wallet/lit';
 import { o } from '$lib/KERNEL/hominio-svelte'; // For accessing Svelte stores
+import { requestPKPSignature } from '$lib/KERNEL/modalStore';
+import type { Signature } from 'viem';
 
 // --- Configuration from roadmap ---
 const sahelPhaseConfig = roadmapConfig.phases.find((p) => p.name === 'Sahelanthropus');
@@ -110,10 +111,10 @@ async function internalExecuteSendToken(
         sahelTokenDecimals: knownDecimals
     } = params;
 
-    // Prerequisite checks for configuration (already handled for client/session/pkp by caller)
     if (!SAHEL_TOKEN_ADDRESS) throw new Error('SAHEL Token address not configured.');
     if (!GNOSIS_RPC_URL) throw new Error('Gnosis RPC URL not configured.');
     if (!amount || parseFloat(amount) <= 0) throw new Error('Invalid or zero amount specified for sending.');
+    if (!pkpEthAddress) throw new Error('internalExecuteSendToken: pkpEthAddress is required for signing.');
 
     const publicClient = createPublicClient({ chain: gnosis, transport: http(GNOSIS_RPC_URL) });
 
@@ -154,10 +155,21 @@ async function internalExecuteSendToken(
         gas: estimatedGas, maxFeePerGas, maxPriorityFeePerGas, chainId: EXPECTED_CHAIN_ID_SAHEL, type: 'eip1559'
     };
 
-    const signature = await signTransactionWithPKP(litNodeClient, sessionSigs, pkpPublicKey, transaction);
+    // --- Refactored: Use central signer modal ---
+    const signature = await requestPKPSignature({
+        type: 'transaction',
+        transaction,
+        pkpPublicKey,
+        pkpEthAddress,
+        sessionSigs,
+        litNodeClient
+    }) as Signature;
+    // --- End refactor ---
+
     const signedRawTx = serializeTransaction(transaction, signature);
     const txHash = await publicClient.sendRawTransaction({ serializedTransaction: signedRawTx });
 
+    // Return immediately after submission
     return { txHash, amountSent: `${amount}`, recipientAddress: recipientGuardianEoaAddress, tokenSymbol: TOKEN_SYMBOL };
 }
 
@@ -211,7 +223,7 @@ export async function sendTokenImplementation(parameters: ToolParameters): Promi
         try {
             sessionSigs = await litNodeClient.getSessionSigs({
                 pkpPublicKey: finalPkpPublicKey,
-                chain: 'ethereum', // Or the chain PKP was minted on / primarily used with
+                chain: 'ethereum',
                 resourceAbilityRequests: [
                     { resource: new LitPKPResource('*'), ability: 'pkp-signing' as const },
                     { resource: new LitActionResource('*'), ability: 'lit-action-execution' as const }
@@ -230,7 +242,7 @@ export async function sendTokenImplementation(parameters: ToolParameters): Promi
             throw new Error('Could not obtain session signatures for the PKP. Ensure a resumable session exists.');
         }
 
-        // 5. Execute the token send
+        // 5. Execute the token send (return immediately after submission)
         const result = await internalExecuteSendToken({
             litNodeClient,
             sessionSigs,
@@ -240,19 +252,24 @@ export async function sendTokenImplementation(parameters: ToolParameters): Promi
             amount: amountToSend
         });
 
-        const successMessage = `Successfully sent ${result.amountSent} ${result.tokenSymbol} from ${finalPkpEthAddress} to ${result.recipientAddress}. TxHash: ${result.txHash}`;
-        logToolActivity('sendToken', successMessage);
+        const pendingMessage = `Transaction submitted. TxHash: ${result.txHash}`;
+        logToolActivity('sendToken', pendingMessage);
         return JSON.stringify({
             success: true,
-            message: successMessage,
+            message: pendingMessage,
             txHash: result.txHash,
             amountSent: result.amountSent,
             tokenSymbol: result.tokenSymbol,
             senderPkpAddress: finalPkpEthAddress,
             recipientAddress: result.recipientAddress,
             tokenAddress: SAHEL_TOKEN_ADDRESS,
-            chainId: EXPECTED_CHAIN_ID_SAHEL
+            chainId: EXPECTED_CHAIN_ID_SAHEL,
+            status: 'pending'
         });
+
+        // Optionally, you can start a background process here (if running in a backend environment)
+        // to poll for confirmation and push a follow-up message to the conversation stream.
+        // In a browser/client, handle this in the UI after tool call returns.
 
     } catch (error: unknown) {
         console.error('[sendTokenTool] Error:', error);
