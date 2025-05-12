@@ -47,7 +47,9 @@ export function can(
 
         case HominioAbility.READ:
             // Read allowed if owner OR if it's a genesis doc
-            return !!doc && (isOwner || isGenesis);
+            // <<< TEMPORARY DEBUG: Grant global read access to all documents >>>
+            // Original logic: return !!doc && (isOwner || isGenesis);
+            return !!doc; // Allow reading any document as long as it exists
 
         case HominioAbility.WRITE:
             // Write allowed if owner. Offline placeholder check is removed.
