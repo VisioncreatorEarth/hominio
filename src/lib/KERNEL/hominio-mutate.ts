@@ -106,7 +106,6 @@ export async function executeMutation(
                     const newDoc = new LoroDoc();
                     newDoc.setPeerId(1); // Use default numeric ID
 
-                    // Ensure metadata map exists before setting type
                     const metadataMap = newDoc.getMap('metadata');
                     metadataMap.set('type', op.type);
 
