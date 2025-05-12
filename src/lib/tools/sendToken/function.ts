@@ -21,6 +21,9 @@ import { o } from '$lib/KERNEL/hominio-svelte'; // For accessing Svelte stores
 import { requestPKPSignature } from '$lib/KERNEL/modalStore';
 // import type { Signature } from 'viem'; // Signature will be handled by modal
 import type { PKPSigningRequestData } from '$lib/wallet/modalTypes';
+// Import queryPrenusImplementation to resolve names
+import { queryPrenusImplementation } from '$lib/tools/queryPrenus/function';
+import type { AggregatedPrenuResult } from '$lib/tools/queryPrenus/function'; // Import result type
 
 // --- Configuration from roadmap ---
 const sahelPhaseConfig = roadmapConfig.phases.find((p) => p.name === 'Sahelanthropus');
@@ -218,20 +221,52 @@ export async function sendTokenImplementation(parameters: ToolParameters): Promi
             throw new Error('Sender PKP details (EthAddress, PublicKey) not provided and could not be retrieved from session/storage.');
         }
 
-        const guardianAddressFromStore = get(o.guardian.address);
-        finalRecipientAddress = (parsedParams.recipientGuardianEoaAddress && typeof parsedParams.recipientGuardianEoaAddress === 'string' && isAddress(parsedParams.recipientGuardianEoaAddress))
-            ? parsedParams.recipientGuardianEoaAddress as Address
-            : guardianAddressFromStore;
+        // --- Determine Recipient Address --- 
+        const recipientInput = parsedParams.recipientNameOrAddress as string | undefined;
+        if (recipientInput) {
+            if (isAddress(recipientInput)) {
+                // Input is a valid address
+                finalRecipientAddress = recipientInput;
+                console.log(`[sendTokenTool] Using provided recipient address: ${finalRecipientAddress}`);
+            } else {
+                // Input is potentially a name, try to resolve via queryPrenus
+                console.log(`[sendTokenTool] Recipient input "${recipientInput}" is not an address, attempting to resolve as name via queryPrenus...`);
+                const prenuQueryResultString = await queryPrenusImplementation({}); // Call queryPrenus
+                const prenuQueryResult = JSON.parse(prenuQueryResultString) as { success: boolean, prenus: AggregatedPrenuResult[], message?: string };
 
-        if (!finalRecipientAddress) {
-            throw new Error('Recipient Guardian EOA address not provided and could not be retrieved from session/storage.');
+                if (!prenuQueryResult.success || !Array.isArray(prenuQueryResult.prenus)) {
+                    throw new Error(`Failed to query prenus to resolve recipient name: ${prenuQueryResult.message || 'Unknown error'}`);
+                }
+
+                // Find prenu matching the name (case-insensitive comparison)
+                const matchingPrenu = prenuQueryResult.prenus.find(p => p.name?.toLowerCase() === recipientInput.toLowerCase());
+
+                if (matchingPrenu && matchingPrenu.walletAddress && isAddress(matchingPrenu.walletAddress)) {
+                    finalRecipientAddress = matchingPrenu.walletAddress as Address;
+                    console.log(`[sendTokenTool] Resolved name "${recipientInput}" to address: ${finalRecipientAddress}`);
+                } else if (matchingPrenu) {
+                    throw new Error(`Found prenu named "${recipientInput}", but they do not have a valid wallet address linked.`);
+                } else {
+                    throw new Error(`Could not find a prenu named "${recipientInput}" with a linked wallet address.`);
+                }
+            }
+        } else {
+            // No recipient input, default to Guardian EOA
+            const guardianAddressFromStore = get(o.guardian.address);
+            finalRecipientAddress = guardianAddressFromStore;
+            console.log(`[sendTokenTool] No recipient specified, defaulting to Guardian EOA: ${finalRecipientAddress}`);
+            if (!finalRecipientAddress) {
+                throw new Error('Recipient Guardian EOA address not provided and could not be retrieved from session/storage.');
+            }
+        }
+        // -------------------------------------
+
+        if (!finalRecipientAddress) { // Should be unreachable if logic above is correct, but good failsafe
+            throw new Error('Could not determine recipient address.');
         }
 
         // LitNodeClient check can be removed if not used for any pre-flight checks
         // const litNodeClient = get(o.lit.client);
-        // if (!litNodeClient || !litNodeClient.ready) {
-        //     throw new Error('LitNodeClient not available or not ready. Ensure Lit Protocol is connected.');
-        // }
 
         // SessionSigs fetching is removed.
 

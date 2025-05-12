@@ -75,6 +75,22 @@ const staticLeaves: LeafRecord[] = [
     // --- END NEW TAGS ---
 ];
 
+// --- Alice's Wallet related Leaves ---
+const aliceWalletLeaves: LeafRecord[] = [
+    // 1. The Wallet Concept Leaf (identifies the wallet as an entity)
+    {
+        pubkey: '@alice_wallet_concept', // New pubkey for Alice's wallet concept
+        metadata: { type: 'Leaf' },
+        data: { type: 'Concept' }
+    },
+    // 2. The Wallet Address Leaf (stores the actual address string)
+    {
+        pubkey: '@alice_wallet_address', // New pubkey for Alice's wallet address
+        metadata: { type: 'Leaf' },
+        data: { type: 'LoroText', value: '0xAliceWalletAddress123abcDEF' } // Example Address
+    }
+];
+
 // --- Dynamic Prompt Leaves ---
 const promptLeafRecords: LeafRecord[] = []; // Renamed from promptSumtiRecords
 
@@ -127,5 +143,9 @@ try {
 >>> COMMENTED OUT DYNAMIC PROMPT LOADING */
 
 // Combine static and dynamic Leaves
-export const initialLeaves: LeafRecord[] = [...staticLeaves, ...promptLeafRecords]; // promptLeafRecords will be empty now
+export const initialLeaves: LeafRecord[] = [
+    ...staticLeaves,
+    ...aliceWalletLeaves, // Add Alice's wallet leaves
+    ...promptLeafRecords
+];
 // --- End Updated Data ---

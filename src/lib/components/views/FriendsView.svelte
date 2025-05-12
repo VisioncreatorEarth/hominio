@@ -8,31 +8,50 @@
 	type PrenuResult = {
 		prenuPubkey: string;
 		name?: string;
+		walletAddress?: string;
 	};
+
+	const prenuSchemaId = '0xc6025f573842e81ac505d29f4a77ac822a3e4db4f227c319ba6c54f927e1b663';
+	const cnemeSchemaId = '0xe936b2fc03557057b6c021a0c8e17d21312b7446ca11a46bc0d61d3bcd150a96';
+	const ponseSchemaId = '0xff494b92bc1a534343fe5182f3f4c0c7c825a99eee6e909496614fa422ca94ec';
 
 	const prenuQueryObject: LoroHqlQueryExtended = {
 		steps: [
 			{
 				action: 'find',
-				target: {
-					schema: '0xc6025f573842e81ac505d29f4a77ac822a3e4db4f227c319ba6c54f927e1b663'
-				},
-				variables: {
-					prenuPubkey: { source: 'link.x1' }
-				},
+				target: { schema: prenuSchemaId },
+				variables: { prenuPubkey: { source: 'link.x1' } },
 				resultVariable: 'prenuLinks',
 				return: 'array'
 			},
 			{
 				action: 'find',
-				target: {
-					schema: '0xe936b2fc03557057b6c021a0c8e17d21312b7446ca11a46bc0d61d3bcd150a96'
-				},
+				target: { schema: cnemeSchemaId },
 				variables: {
 					prenuForName: { source: 'link.x1' },
 					nameLeaf: { source: 'link.x2' }
 				},
 				resultVariable: 'cnemeLinks',
+				return: 'array'
+			},
+			{
+				action: 'find',
+				target: { schema: ponseSchemaId },
+				variables: {
+					prenuOwner: { source: 'link.x1' },
+					walletConcept: { source: 'link.x2' }
+				},
+				resultVariable: 'ponseWalletLinks',
+				return: 'array'
+			},
+			{
+				action: 'find',
+				target: { schema: cnemeSchemaId },
+				variables: {
+					walletForAddress: { source: 'link.x1' },
+					walletAddressLeaf: { source: 'link.x2' }
+				},
+				resultVariable: 'cnemeWalletAddressLinks',
 				return: 'array'
 			},
 			{
@@ -47,17 +66,47 @@
 				resultVariable: 'prenusWithNameLeaf'
 			},
 			{
+				action: 'join',
+				left: { variable: 'prenusWithNameLeaf', key: 'prenuPubkey' },
+				right: { variable: 'ponseWalletLinks', key: 'prenuOwner' },
+				type: 'left',
+				select: {
+					prenuPubkey: { source: 'left.prenuPubkey' },
+					nameLeafId: { source: 'left.nameLeafId' },
+					walletConceptId: { source: 'right.walletConcept' }
+				},
+				resultVariable: 'prenusWithWalletConcept'
+			},
+			{
+				action: 'join',
+				left: { variable: 'prenusWithWalletConcept', key: 'walletConceptId' },
+				right: { variable: 'cnemeWalletAddressLinks', key: 'walletForAddress' },
+				type: 'left',
+				select: {
+					prenuPubkey: { source: 'left.prenuPubkey' },
+					nameLeafId: { source: 'left.nameLeafId' },
+					walletAddressLeafId: { source: 'right.walletAddressLeaf' }
+				},
+				resultVariable: 'prenusWithWalletAddressLeaf'
+			},
+			{
 				action: 'resolve',
-				fromVariable: 'prenusWithNameLeaf',
+				fromVariable: 'prenusWithWalletAddressLeaf',
 				resolveFields: {
 					name: {
 						type: 'resolveLeafValue',
 						pubkeyVar: 'nameLeafId',
 						fallbackVar: 'prenuPubkey',
 						valueField: 'value'
+					},
+					walletAddress: {
+						type: 'resolveLeafValue',
+						pubkeyVar: 'walletAddressLeafId',
+						fallbackVar: 'walletAddressLeafId',
+						valueField: 'value'
 					}
 				},
-				resultVariable: 'resolvedPrenus'
+				resultVariable: 'resolvedPrenusWithWallet'
 			}
 		]
 	};
@@ -96,7 +145,10 @@
 							<div class="flex-1">
 								<h2 class="text-xl font-semibold text-[#0a2a4e]">{prenu.name ?? 'Unnamed'}</h2>
 								<div class="mt-1 text-sm text-gray-600">
-									<p>ID: {prenu.prenuPubkey.slice(0, 8)}...</p>
+									<p class="truncate">ID: {prenu.prenuPubkey.slice(0, 8)}...</p>
+									{#if prenu.walletAddress}
+										<p class="mt-1 text-xs break-all">Wallet: {prenu.walletAddress}</p>
+									{/if}
 								</div>
 							</div>
 						</div>

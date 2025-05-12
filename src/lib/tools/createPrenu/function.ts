@@ -20,5 +20,5 @@ export function createPrenuImplementation(parameters: ToolParameters) {
 
     // This tool doesn't return a value to the AI, it triggers UI
     // Return a standard success message or indication
-    return JSON.stringify({ success: true, message: 'Prenu creation modal opened.' });
+    return JSON.stringify({ success: true, message: 'Opened set prenu / name modal, waiting for users confirmation' });
 } 

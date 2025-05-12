@@ -24,6 +24,16 @@
 	import type { HominioFacade } from '$lib/KERNEL/hominio-svelte';
 	import { requestPKPSignature } from '$lib/KERNEL/modalStore';
 	import type { PKPSigningRequestData } from '$lib/wallet/modalTypes';
+	import type {
+		LoroHqlQueryExtended,
+		MutateHqlRequest,
+		CreateMutationOperation,
+		QueryResult,
+		IndexLeafType,
+		LeafRecord,
+		CompositeRecord
+	} from '$lib/KERNEL/hominio-types';
+	import { GENESIS_PUBKEY } from '$db/constants';
 
 	// Use $props() for runes mode
 	let { data } = $props<{ data: PageData }>();
@@ -75,6 +85,15 @@
 	let ownedCapacityCredits = $state<Array<OwnedCapacityCredit>>([]);
 	let isLoadingCapacityCredits = $state(false);
 
+	let ponseSchemaId = $state<string | null>(null);
+	let baljiSchemaId = $state<string | null>(null);
+	let cnemeSchemaId = $state<string | null>(null);
+	let currentUserPrenuPubKey = $state<string | null>(null);
+	let isLoadingSchemas = $state(false);
+	let isLoadingUserPrenu = $state(false);
+	let walletConceptError = $state<string | null>(null);
+	let isCreatingWalletConcept = $state(false);
+
 	let generalIsLoading = $state(false);
 	let mainError = $state('');
 	let mainSuccess = $state('');
@@ -87,11 +106,232 @@
 		{ id: 'passkey', title: 'Passkey Management' },
 		{ id: 'signer', title: 'EIP-1271 Signer' },
 		{ id: 'mint_pkp', title: 'Mint PKP' },
+		{ id: 'hominio_wallet', title: 'Link Wallet to Hominio' },
 		{ id: 'auth_methods', title: 'PKP Auth Methods' },
 		{ id: 'session_status', title: 'PKP Session Status' },
 		{ id: 'capacity_credits', title: 'Capacity Credits' }
 	];
 	let selectedSettingsSectionId = $state(settingsSections[0].id);
+
+	// --- Add Helper Type Definitions ---
+	// Added UserIdLeafResult for the two-step query approach
+	type UserIdLeafResult = QueryResult & { _sourceKey: string; variables: { userIdValue: string } };
+	type PonseLinkResult = QueryResult & { variables: { personConceptPubKeyVar: string } };
+	// ---------------------------------
+
+	async function fetchSchemaPubkeys(schemaNames: string[]): Promise<Record<string, string | null>> {
+		isLoadingSchemas = true;
+		walletConceptError = null; // Reset specific error
+		console.log('[Settings] Fetching schema pubkeys:', schemaNames);
+		try {
+			const metaIndexQuery: LoroHqlQueryExtended = {
+				steps: [
+					{
+						action: 'get',
+						from: { pubkey: [GENESIS_PUBKEY], targetDocType: 'Leaf' },
+						fields: { index_map: { field: 'self.data.value' } },
+						resultVariable: 'metaIndex'
+					}
+				]
+			};
+			const metaResult = await o.query(metaIndexQuery);
+			let schemasIndexPubKey: string | null = null;
+			if (
+				metaResult &&
+				metaResult.length > 0 &&
+				metaResult[0].variables &&
+				(metaResult[0].variables as any).index_map &&
+				typeof (metaResult[0].variables as any).index_map === 'object'
+			) {
+				const indexRegistry = (metaResult[0].variables as any).index_map as Partial<
+					Record<IndexLeafType, string>
+				>;
+				schemasIndexPubKey = indexRegistry['schemas'] ?? null;
+			} else {
+				throw new Error('Meta Index query failed or missing index_map.');
+			}
+			if (!schemasIndexPubKey) throw new Error("Could not find 'schemas' index pubkey.");
+
+			const schemasIndexQuery: LoroHqlQueryExtended = {
+				steps: [
+					{
+						action: 'get',
+						from: { pubkey: [schemasIndexPubKey], targetDocType: 'Leaf' },
+						fields: { schema_map: { field: 'self.data.value' } },
+						resultVariable: 'schemasIndexData'
+					}
+				]
+			};
+			const schemasResult = await o.query(schemasIndexQuery);
+			if (
+				schemasResult &&
+				schemasResult.length > 0 &&
+				schemasResult[0].variables &&
+				(schemasResult[0].variables as any).schema_map &&
+				typeof (schemasResult[0].variables as any).schema_map === 'object'
+			) {
+				const schemaMap = (schemasResult[0].variables as any).schema_map as Record<string, string>;
+				const result: Record<string, string | null> = {};
+				let allFound = true;
+				for (const name of schemaNames) {
+					result[name] = schemaMap[name] ?? null;
+					if (!result[name]) allFound = false;
+				}
+				console.log('[Settings] Fetched schemas:', result);
+				if (!allFound) {
+					console.warn('[Settings] Not all requested schemas were found in map.');
+					// Do not throw error here, let caller decide based on specific needs
+				}
+				return result;
+			} else {
+				throw new Error('Schemas index query failed or missing schema_map.');
+			}
+		} catch (err) {
+			console.error('[Settings] fetchSchemaPubkeys Error:', err);
+			walletConceptError = err instanceof Error ? err.message : 'Failed to fetch schemas';
+			const errorResult: Record<string, string | null> = {};
+			schemaNames.forEach((name) => (errorResult[name] = null));
+			return errorResult;
+		} finally {
+			isLoadingSchemas = false;
+		}
+	}
+
+	async function findCurrentUserPrenuConceptPubKey(): Promise<string | null> {
+		if (!ponseSchemaId) {
+			console.error('[Settings] Cannot find user prenu: ponse schema ID not loaded.');
+			walletConceptError = 'Ponse schema ID missing.';
+			return null;
+		}
+		const user = o.me();
+		if (!user) {
+			console.error('[Settings] Cannot find user prenu: user not logged in.');
+			walletConceptError = 'User not logged in.';
+			return null;
+		}
+
+		isLoadingUserPrenu = true;
+		walletConceptError = null; // Reset specific error
+		console.log(`[Settings] Finding prenu concept for user: ${user.id}`);
+
+		try {
+			// Revised Approach: Find ponse links, then filter by user ID from x1 leaf
+			const findPersonQuery: LoroHqlQueryExtended = {
+				steps: [
+					{
+						action: 'find',
+						target: { schema: ponseSchemaId },
+						variables: {
+							userIdLeafPubKeyVar: { source: 'link.x1' },
+							personConceptPubKeyVar: { source: 'link.x2' }
+						},
+						resultVariable: 'ponseLinks',
+						return: 'array'
+					},
+					{
+						action: 'get',
+						from: {
+							variable: 'ponseLinks',
+							sourceKey: 'userIdLeafPubKeyVar',
+							targetDocType: 'Leaf'
+						},
+						fields: { userIdValue: { field: 'self.data.value' } },
+						resultVariable: 'userIdLeafDetails'
+					}
+				]
+			};
+
+			const result = await o.query(findPersonQuery);
+			let personConceptPubKey: string | null = null;
+
+			if (result && Array.isArray(result)) {
+				// Log the raw result structure from HQL
+				console.log(
+					'[Settings] Raw HQL result for findPersonQuery:',
+					JSON.stringify(result, null, 2)
+				);
+
+				// The result here is actually an array of userIdLeafDetails objects,
+				// each enriched with the variables from the corresponding ponseLinks step implicitly.
+				// We need to find the item where the userIdValue matches the current user.
+				const userIdDetails = result as UserIdLeafResult[];
+				userIdDetails.forEach((item, index) => {
+					console.log(
+						`[Settings]  - Potential Item ${index} - User ID Leaf Value: "${item.variables.userIdValue}" (SourceKey: ${item._sourceKey})`
+					);
+				});
+
+				// Find the item where the fetched userIdValue matches the current user's ID
+				const matchingUserIdLeaf = userIdDetails.find(
+					(item) => item.variables.userIdValue === user.id
+				);
+
+				if (matchingUserIdLeaf) {
+					const userIdLeafPubKey = matchingUserIdLeaf._sourceKey;
+					console.log(`[Settings] Found matching User ID Leaf: ${userIdLeafPubKey}`);
+
+					// Now perform the second query to get the ponse link originating from this specific user ID leaf
+					const findLinkAgainQuery: LoroHqlQueryExtended = {
+						steps: [
+							{
+								action: 'find',
+								target: { schema: ponseSchemaId, x1: userIdLeafPubKey }, // Find link where x1 IS the user ID leaf
+								variables: { personConceptPubKeyVar: { source: 'link.x2' } }, // Extract x2
+								resultVariable: 'foundLink',
+								return: 'first'
+							}
+						]
+					};
+
+					console.log(`[Settings] Executing second query to find link from ${userIdLeafPubKey}...`);
+					const linkResult = await o.query(findLinkAgainQuery);
+					console.log('[Settings] Second query result:', JSON.stringify(linkResult, null, 2));
+
+					if (
+						linkResult &&
+						Array.isArray(linkResult) &&
+						linkResult.length > 0 &&
+						linkResult[0]?.variables &&
+						typeof linkResult[0].variables === 'object' &&
+						'personConceptPubKeyVar' in linkResult[0].variables &&
+						typeof (linkResult[0].variables as PonseLinkResult['variables'])
+							.personConceptPubKeyVar === 'string'
+					) {
+						personConceptPubKey = (linkResult[0].variables as PonseLinkResult['variables'])
+							.personConceptPubKeyVar;
+						console.log(
+							`[Settings] Successfully extracted Person Concept PubKey: ${personConceptPubKey}`
+						);
+					} else {
+						console.warn(
+							`[Settings] Second query did not find a valid ponse link from ${userIdLeafPubKey} or failed to extract x2.`
+						);
+						walletConceptError = `Found user ID leaf (${userIdLeafPubKey}), but could not resolve its corresponding person concept via ponse link.`;
+					}
+				} else {
+					console.warn(
+						`[Settings] Found ponse links, but none linked user ID ${user.id} to a person concept.`
+					);
+					walletConceptError = `Could not find a 'prenu' concept linked to user ID ${user.id} via 'ponse'.`;
+				}
+			} else {
+				console.warn('[Settings] HQL query for ponse links returned unexpected result:', result);
+			}
+
+			// Set error message if lookup failed at any point but wasn't set before
+			if (!personConceptPubKey && !walletConceptError) {
+				walletConceptError = `Could not find a 'prenu' concept linked to user ID ${user.id} via 'ponse'.`;
+			}
+
+			return personConceptPubKey; // Will be null if not found
+		} catch (err) {
+			console.error('[Settings] findCurrentUserPrenuConceptPubKey Error:', err);
+			walletConceptError = err instanceof Error ? err.message : 'Failed to find user prenu concept';
+			return null;
+		} finally {
+			isLoadingUserPrenu = false;
+		}
+	}
 
 	onMount(async () => {
 		if (browser) {
@@ -123,7 +363,22 @@
 					localStorage.removeItem('mintedPKPData');
 				}
 			}
-			// Subscription logic moved to $effect below
+
+			const schemasToFetch = ['ponse', 'balji', 'cneme'];
+			const fetchedSchemas = await fetchSchemaPubkeys(schemasToFetch);
+			ponseSchemaId = fetchedSchemas['ponse'];
+			baljiSchemaId = fetchedSchemas['balji'];
+			cnemeSchemaId = fetchedSchemas['cneme'];
+			if (!ponseSchemaId || !baljiSchemaId || !cnemeSchemaId) {
+				console.error(
+					'[Settings] Failed to load essential schemas on mount. Wallet concept creation might fail.'
+				);
+				// Optionally set a general error: mainError = 'Failed to load essential configuration.';
+			} else {
+				console.log('[Settings] Essential schemas loaded on mount.');
+				// Optionally trigger prenu lookup if user logged in?
+				// currentUserPrenuPubKey = await findCurrentUserPrenuConceptPubKey();
+			}
 		}
 	});
 
@@ -487,7 +742,11 @@
 					console.error('CRITICAL: Error saving PKP details to localStorage:', error);
 				}
 			}
-			mainSuccess = `PKP Minted Successfully! Token ID: ${mintedPkpTokenId}`;
+
+			// Reset wallet-specific error/state, as it's now a separate step
+			walletConceptError = null;
+			mainSuccess = `PKP Minted Successfully! Token ID: ${mintedPkpTokenId}`; // Reverted success message
+
 			if (mintedPkpTokenId) {
 				await handleFetchPermittedAuthMethods(mintedPkpTokenId);
 			}
@@ -500,6 +759,108 @@
 			console.error('PKP minting error:', error);
 		} finally {
 			isMintingPkp = false;
+		}
+	}
+
+	// --- NEW: Hominio Wallet Concept Creation ---
+	async function handleCreateHominioWalletConcept() {
+		isCreatingWalletConcept = true;
+		walletConceptError = null;
+		mainSuccess = ''; // Clear main success for this specific action
+
+		try {
+			// 1. Get the current user's prenu concept pubkey (re-fetch or use existing)
+			// It might be better to fetch it fresh here unless we are very sure it's up-to-date
+			console.log('[Hominio Wallet] Finding current user prenu concept...');
+			const userPrenuPubKey = await findCurrentUserPrenuConceptPubKey();
+			currentUserPrenuPubKey = userPrenuPubKey; // Update state
+
+			// 2. Check if we have all necessary data
+			if (!userPrenuPubKey) {
+				// Error likely already set by findCurrentUserPrenuConceptPubKey
+				throw new Error(walletConceptError || "Could not find user's person concept.");
+			}
+			if (!ponseSchemaId || !baljiSchemaId || !cnemeSchemaId) {
+				throw new Error('Required schema IDs (ponse, balji, cneme) are not loaded.');
+			}
+			if (!mintedPkpEthAddress) {
+				// This check should ideally happen before enabling the button
+				throw new Error('Minted PKP ETH address is not available.');
+			}
+
+			console.log(
+				`[Hominio Wallet] Preparing concept for Prenu: ${userPrenuPubKey} and Address: ${mintedPkpEthAddress}`
+			);
+
+			// 3. Construct the HQL Mutation Request (same as before)
+			const walletMutationRequest: MutateHqlRequest = {
+				mutations: [
+					{
+						operation: 'create',
+						type: 'Leaf',
+						placeholder: '$$walletConcept',
+						data: { type: 'Concept' }
+					},
+					{
+						operation: 'create',
+						type: 'Leaf',
+						placeholder: '$$walletAddress',
+						data: { type: 'LoroText', value: mintedPkpEthAddress }
+					},
+					{
+						operation: 'create',
+						type: 'Composite',
+						placeholder: '$$baljiLink',
+						data: { schemaId: baljiSchemaId, places: { x1: '$$walletConcept' } }
+					},
+					{
+						operation: 'create',
+						type: 'Composite',
+						placeholder: '$$ponseLink',
+						data: {
+							schemaId: ponseSchemaId,
+							places: { x1: userPrenuPubKey, x2: '$$walletConcept' }
+						}
+					},
+					{
+						operation: 'create',
+						type: 'Composite',
+						placeholder: '$$cnemeLink',
+						data: {
+							schemaId: cnemeSchemaId,
+							places: { x1: '$$walletConcept', x2: '$$walletAddress' }
+						}
+					}
+				]
+			};
+
+			// 4. Execute the mutation
+			console.log('[Hominio Wallet] Executing mutation...');
+			const mutationResult = await o.mutate(walletMutationRequest);
+
+			if (mutationResult.status === 'success') {
+				console.log(
+					'[Hominio Wallet] Concept created successfully:',
+					mutationResult.generatedPubKeys
+				);
+				mainSuccess = `Hominio wallet concept for ${mintedPkpEthAddress.slice(0, 6)}... linked successfully!`; // Use mainSuccess for this section
+			} else {
+				console.error(
+					'[Hominio Wallet] Failed creation:',
+					mutationResult.message,
+					mutationResult.errorDetails
+				);
+				throw new Error(`Hominio mutation failed: ${mutationResult.message}`);
+			}
+		} catch (walletError) {
+			console.error('[Hominio Wallet] Error during creation:', walletError);
+			walletConceptError =
+				walletError instanceof Error
+					? walletError.message
+					: 'Unknown error creating wallet concept.';
+			// Do not modify mainSuccess here, let the error display
+		} finally {
+			isCreatingWalletConcept = false;
 		}
 	}
 
@@ -812,6 +1173,68 @@
 									>
 								</p>
 							</div>
+						{/if}
+					</div>
+				{/if}
+
+				<!-- NEW Step: Link Wallet to Hominio -->
+				{#if selectedSettingsSectionId === 'hominio_wallet'}
+					<div class="rounded-xl bg-white p-6 shadow-lg md:p-8">
+						<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
+							Link PKP Wallet to Hominio
+						</h2>
+						<p class="mb-4 text-sm text-slate-500">
+							Create the corresponding concepts and links in Hominio to represent your PKP wallet (<code
+								>balji</code
+							>) and link it to your person concept (<code>prenu</code> via <code>ponse</code>).
+							This makes your wallet address discoverable via HQL.
+						</p>
+
+						{#if !mintedPkpEthAddress}
+							<div
+								class="rounded-lg border border-orange-300 bg-orange-100 p-3 text-sm text-orange-700"
+							>
+								Please mint a PKP first (Step 'Mint PKP').
+							</div>
+						{:else if !ponseSchemaId || !baljiSchemaId || !cnemeSchemaId}
+							<div class="rounded-lg border border-red-300 bg-red-100 p-3 text-sm text-red-700">
+								Error: Required Hominio schemas (ponse, balji, cneme) failed to load on page mount.
+								Cannot proceed.
+							</div>
+						{:else}
+							<!-- Button to trigger the creation -->
+							<button
+								class="mb-4 w-full justify-center rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-purple-700 disabled:opacity-50"
+								on:click={handleCreateHominioWalletConcept}
+								disabled={isCreatingWalletConcept || isLoadingUserPrenu || isLoadingSchemas}
+							>
+								{#if isCreatingWalletConcept}
+									<span class="spinner mr-2"></span>Linking Wallet Concept...
+								{:else if isLoadingUserPrenu}
+									<span class="spinner mr-2"></span>Finding User Prenu...
+								{:else}
+									Link Hominio Wallet Concept
+								{/if}
+							</button>
+
+							<!-- Display specific error for this step -->
+							{#if walletConceptError}
+								<div
+									class="mt-4 rounded-lg border border-red-300 bg-red-100 p-3 text-sm text-red-700"
+								>
+									<strong>Error linking wallet:</strong>
+									{walletConceptError}
+									{#if walletConceptError.includes("Could not find a 'prenu' concept")}
+										<p class="mt-2 text-xs">
+											This usually means your Hominio Person Concept hasn't been created yet. You
+											might need to use the 'Create Person' feature elsewhere in the app first.
+											<!-- TODO: Add button to trigger prenu creation modal? -->
+										</p>
+									{/if}
+								</div>
+							{/if}
+
+							<!-- Note: mainSuccess will be updated by the handleCreateHominioWalletConcept function -->
 						{/if}
 					</div>
 				{/if}

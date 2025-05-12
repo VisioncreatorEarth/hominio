@@ -1,59 +1,5 @@
-// Types moved to hominio-types.ts
-
-// Import necessary types from the new central file
-// import type { SchemaId, SchemaPlaceTranslation, SchemaLanguageTranslation, SchemaRecord } from './hominio-types';
 import type { SchemaId, SchemaPlaceTranslation, SchemaLanguageTranslation, SchemaRecord } from '$lib/KERNEL/hominio-types'; // Corrected Path
-// Re-export types that might be used by other modules
 export type { SchemaId, SchemaPlaceTranslation, SchemaLanguageTranslation, SchemaRecord };
-
-// REMOVE REDUNDANT TYPE DEFINITIONS
-// export type SchemaId = string;
-// export interface SchemaPlaceTranslation { ... }
-// export interface SchemaLanguageTranslation { ... }
-// export interface SchemaRecord { ... }
-
-// Represents documentation for a single place (x1-x5) within a specific language
-export interface SchemaPlaceTranslation {
-    title: string;       // Short, user-facing label (e.g., "worker", "Akteur")
-    description: string; // Longer explanation of the place's role.
-}
-
-// Represents all documentation for a schema within a specific language
-export interface SchemaLanguageTranslation {
-    purpose?: string;    // High-level purpose/goal of the schema itself.
-    prompt?: string;     // Contains usage examples and AI guidance.
-    places: {
-        x1?: SchemaPlaceTranslation;
-        x2?: SchemaPlaceTranslation;
-        x3?: SchemaPlaceTranslation;
-        x4?: SchemaPlaceTranslation;
-        x5?: SchemaPlaceTranslation;
-    };
-}
-
-// The main proposed SchemaRecord structure
-export interface SchemaRecord {
-    pubkey: SchemaId;
-    metadata: {          // RENAMED from ckaji
-        type: 'Schema';   // RENAMED from klesi. Represents a Schema template.
-    };
-    data: {              // RENAMED from datni
-        schemaId: SchemaId; // RENAMED from selbri/gismu (Reference to its own pubkey)
-        name: string;    // RENAMED from cneme. The canonical gismu name (e.g., "zukte", "gunka")
-        places: {        // RENAMED from sumti
-            x1?: string; // Original Lojban variable name (e.g., 'rutni')
-            x2?: string;
-            x3?: string;
-            x4?: string;
-            x5?: string;
-        };
-        translations: {  // RENAMED from stidi
-            en?: SchemaLanguageTranslation;
-            de?: SchemaLanguageTranslation;
-            // [languageCode: string]: SchemaLanguageTranslation; // Allow others if needed
-        };
-    }
-}
 
 // Define individual schemas first
 export const gunkaSchema: SchemaRecord = {
@@ -230,7 +176,6 @@ export const tciniSchema: SchemaRecord = {
     }
 };
 
-// --- NEW: ponse schema --- 
 export const ponseSchema: SchemaRecord = {
     pubkey: '@schema/ponse',
     metadata: { type: 'Schema' },
@@ -261,7 +206,6 @@ export const ponseSchema: SchemaRecord = {
     }
 };
 
-// --- NEW SCHEMA: ckaji (Property/Tag Association) ---
 export const ckajiSchema: SchemaRecord = {
     pubkey: '@schema/ckaji',
     metadata: { type: 'Schema' },
@@ -308,6 +252,32 @@ export const ckajiSchema: SchemaRecord = {
         }
     }
 };
+
+// --- NEW SCHEMA: balji (Storage Unit/Repository) ---
+export const baljiSchema: SchemaRecord = {
+    pubkey: '@schema/balji',
+    metadata: { type: 'Schema' },
+    data: {
+        schemaId: '@schema/balji',
+        name: 'balji', // "storage unit / repository"
+        places: { x1: 'selci' }, // The thing that *is* a storage unit
+        translations: {
+            en: {
+                purpose: "Classifies an entity as a storage unit, repository, or vault.",
+                prompt: `
+*Details:*
+    - x1: The entity being identified as a storage unit (e.g., a digital wallet, a physical vault).
+*Usage Examples:*
+    1. Digital Wallet: 'balji(@alice_wallet_concept)' -> The entity @alice_wallet_concept is a storage unit/wallet.
+                `,
+                places: {
+                    x1: { title: 'repository', description: 'The storage unit or repository itself.' }
+                }
+            },
+            // Add 'de' translation if needed
+        }
+    }
+};
 // --- END NEW SCHEMA ---
 
 /**
@@ -319,5 +289,6 @@ export const allSchemaRecords: SchemaRecord[] = [
     gunkaSchema, // Work
     prenuSchema, // Person
     ponseSchema, // Possession/Ownership
-    ckajiSchema  // Property/Tag <-- Add new schema
+    ckajiSchema,  // Property/Tag
+    baljiSchema  // Balji Schema
 ];
