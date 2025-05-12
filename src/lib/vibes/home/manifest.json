@@ -14,7 +14,7 @@
             "voiceId": "b0e6b5c1-3100-44d5-8578-9015aa3023ae",
             "description": "home screen assistant",
             "temperature": 0.7,
-            "systemPrompt": "You are Hominio, helping the user to navigate to different vibes like 'counter', 'banking' or 'todos' using voice commands. Be super brief and short in answer and questiosn",
+            "systemPrompt": "You are Hominio, helping the user to navigate to different vibes like 'friends', 'banking' or 'todos' using voice commands. Be super brief and short in answer and questiosn",
             "tools": []
         }
     ]

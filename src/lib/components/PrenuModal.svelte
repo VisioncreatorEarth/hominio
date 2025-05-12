@@ -1,31 +1,19 @@
 <script lang="ts">
 	import { onMount, getContext } from 'svelte';
-	// Remove direct auth/caps imports
-	// Remove direct hominio-auth import
-	// import type { getMe as getMeType } from '$lib/KERNEL/hominio-auth';
 	import type { CapabilityUser } from '$lib/KERNEL/hominio-caps';
-	// Remove direct hominio-query imports
-	// import { executeQuery, type LoroHqlQueryExtended } from '$lib/KERNEL/hominio-query';
-	// Remove direct hominio-mutate imports
-	// import {
-	// 	executeMutation as executeMutationInstance,
-	// 	type MutateHqlRequest,
-	// 	type CreateMutationOperation
-	// } from '$lib/KERNEL/hominio-mutate';
 	import { closeModal } from '$lib/KERNEL/modalStore'; // To close modal on success
 	import type { IndexLeafType } from '$lib/KERNEL/index-registry';
 	import { canCreatePersonConcept } from '$lib/KERNEL/hominio-caps';
-
-	// Import types from facade/core modules
 	import type { LoroHqlQueryExtended } from '$lib/KERNEL/hominio-svelte';
 	import type { MutateHqlRequest, CreateMutationOperation } from '$lib/KERNEL/hominio-mutate';
 
-	// --- Get Hominio Facade from Context ---
+	// --- Props ---
+	let { name: initialName = '' } = $props<{ name?: string }>();
+
 	const o = getContext<typeof import('$lib/KERNEL/hominio-svelte').o>('o');
-	// --- End Get Hominio Facade from Context ---
 
 	// --- Component State ---
-	let personName = $state('');
+	let personName = $state(initialName); // Initialize with prop
 	let isSchemaLoading = $state(true);
 	let schemaError = $state<string | null>(null);
 	let prenuSchemaId = $state<string | null>(null);
@@ -38,10 +26,6 @@
 	let isCheckingCapability = $state(false);
 	let canActuallyCreate = $state<boolean | null>(null);
 	let capabilityCheckError = $state<string | null>(null);
-
-	// REMOVE: Get User Context
-	// type GetCurrentUserFn = typeof getMeType;
-	// const getCurrentUser = getContext<GetCurrentUserFn>('getMe');
 
 	// --- Fetch Schema PubKeys --- (Self-contained)
 	async function loadSchemaPubKeys() {
@@ -305,55 +289,109 @@
 	});
 </script>
 
-<div class="space-y-4">
-	<h3 class="text-lg font-semibold text-[#153243]">Create New Person</h3>
+<!-- UI Updated to resemble SignerModal -->
+<div
+	class="mx-auto flex max-w-xl flex-col items-center justify-center rounded-2xl border border-stone-200 bg-[#fdf6ee] p-8 shadow-2xl"
+>
+	<h2 class="mb-4 text-2xl font-extrabold tracking-tight text-slate-800">
+		Create Your Person Concept
+	</h2>
+	<p class="mb-6 text-center text-base text-slate-600">
+		This represents you within the system. You can only create one.
+	</p>
 
 	{#if isSchemaLoading}
-		<p class="text-sm text-gray-500">Loading schema information...</p>
+		<div class="flex items-center justify-center py-4 text-slate-500">
+			<span class="spinner mr-3"></span> Loading required info...
+		</div>
 	{:else if schemaError}
-		<div class="rounded border border-red-400 bg-red-100 p-3 text-sm text-red-700">
+		<div
+			class="mb-4 w-full rounded-xl border-2 border-red-400 bg-red-50 p-4 text-sm text-red-700 shadow-md"
+		>
 			<strong>Error loading schemas:</strong>
-			{schemaError}
+			{schemaError} Cannot proceed.
 		</div>
 	{:else if isCheckingCapability}
-		<p class="text-sm text-gray-500">Checking creation permissions...</p>
+		<div class="flex items-center justify-center py-4 text-slate-500">
+			<span class="spinner mr-3"></span> Checking permissions...
+		</div>
 	{:else if capabilityCheckError}
-		<div class="rounded border border-red-400 bg-red-100 p-3 text-sm text-red-700">
+		<div
+			class="mb-4 w-full rounded-xl border-2 border-red-400 bg-red-50 p-4 text-sm text-red-700 shadow-md"
+		>
 			<strong>Error checking permissions:</strong>
 			{capabilityCheckError}
 		</div>
 	{:else if canActuallyCreate === false}
-		<div class="rounded border border-yellow-400 bg-yellow-50 p-3 text-sm text-yellow-700">
+		<div
+			class="mb-4 w-full rounded-xl border-2 border-yellow-400 bg-yellow-50 p-4 text-sm text-yellow-700 shadow-md"
+		>
 			You already have a person concept linked to your account. You cannot create another.
 		</div>
 	{:else if canActuallyCreate === true}
-		<div class="space-y-3">
+		<!-- Form Area -->
+		<div class="w-full space-y-4">
 			<div>
-				<label for="personName" class="mb-1 block text-sm font-medium text-gray-700"
-					>Person's Name:</label
+				<label for="personNameInput" class="mb-1 block text-sm font-semibold text-slate-700"
+					>Name Your Person Concept:</label
 				>
 				<input
 					type="text"
-					id="personName"
+					id="personNameInput"
 					bind:value={personName}
-					placeholder="Enter name"
-					class="w-full rounded-md border border-gray-300 px-3 py-2 text-gray-900 shadow-sm focus:border-[#174C6B] focus:ring-[#174C6B]"
+					placeholder="E.g., Sam's Digital Twin"
+					class="w-full rounded-lg border border-stone-300 px-4 py-2 text-slate-900 shadow-sm transition duration-150 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
 					required
-					disabled={isMutating || !canActuallyCreate}
+					disabled={isMutating}
 				/>
 			</div>
 
 			{#if mutationError}
-				<p class="text-sm text-red-600">{mutationError}</p>
+				<div class="rounded border border-red-300 bg-red-100 p-2 text-xs text-red-700">
+					{mutationError}
+				</div>
 			{/if}
 
-			<button
-				on:click={handleCreatePerson}
-				class="w-full rounded-md bg-[#153243] px-4 py-2 text-sm font-semibold text-[#DDD4C9] shadow-sm transition-colors hover:bg-[#174C6B] focus:ring-2 focus:ring-[#153243] focus:ring-offset-2 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-				disabled={isMutating || !personName.trim() || !canActuallyCreate}
-			>
-				{#if isMutating}Creating...{:else}Create Person{/if}
-			</button>
+			<!-- Action Buttons -->
+			<div class="mt-6 flex w-full justify-between gap-4">
+				<button
+					class="rounded-lg bg-slate-200 px-5 py-2 text-sm font-semibold text-slate-700 transition-colors duration-150 hover:bg-slate-300 disabled:opacity-50"
+					on:click={closeModal}
+					disabled={isMutating}>Cancel</button
+				>
+				<button
+					class="rounded-lg bg-emerald-600 px-5 py-2 text-sm font-semibold text-white transition-colors duration-150 hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+					on:click={handleCreatePerson}
+					disabled={isMutating || !personName.trim()}
+				>
+					{#if isMutating}<span class="spinner mr-2"></span>Creating...{:else}Create Person{/if}
+				</button>
+			</div>
+		</div>
+	{:else}
+		<!-- Fallback for unexpected state -->
+		<div
+			class="mb-4 w-full rounded-xl border-2 border-gray-400 bg-gray-50 p-4 text-sm text-gray-700 shadow-md"
+		>
+			Cannot determine creation status.
 		</div>
 	{/if}
 </div>
+
+<style>
+	.spinner {
+		display: inline-block;
+		border: 2px solid currentColor;
+		border-right-color: transparent;
+		width: 0.75em;
+		height: 0.75em;
+		border-radius: 50%;
+		animation: spin 0.75s linear infinite;
+		vertical-align: text-bottom;
+	}
+	@keyframes spin {
+		to {
+			transform: rotate(360deg);
+		}
+	}
+</style>

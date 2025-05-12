@@ -1,0 +1,23 @@
+{
+    "name": "createPrenu",
+    "skill": "Initiate the creation of a new person concept (prenu)",
+    "icon": "M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z",
+    "color": "teal",
+    "temporaryTool": {
+        "modelToolName": "createPrenu",
+        "description": "Opens a modal window for the user to create a new person concept (prenu). Optionally takes a suggested name.",
+        "dynamicParameters": [
+            {
+                "name": "name",
+                "location": "PARAMETER_LOCATION_BODY",
+                "schema": {
+                    "type": "string",
+                    "description": "A suggested name to pre-fill for the new person."
+                },
+                "required": true
+            }
+        ],
+        "client": {}
+    },
+    "implementationType": "client"
+}

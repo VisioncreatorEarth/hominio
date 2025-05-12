@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, getContext, onDestroy } from 'svelte';
+	import { onMount, getContext } from 'svelte';
 	import { browser } from '$app/environment';
 	import {
 		createAndStorePasskeyData,
@@ -10,7 +10,6 @@
 		type StoredPasskeyData
 	} from '$lib/wallet/passkeySigner';
 	import {
-		getSessionSigsWithGnosisPasskeyVerification,
 		getPermittedAuthMethodsForPkp,
 		gnosisPasskeyVerifyActionCode,
 		mintPKPWithPasskeyAndAction,
@@ -19,10 +18,7 @@
 	import type { LitNodeClient } from '@lit-protocol/lit-node-client';
 	import type { SessionSigs, AuthCallbackParams } from '@lit-protocol/types';
 	import { LitPKPResource, LitActionResource } from '@lit-protocol/auth-helpers';
-	import type { Hex, Address, WalletClient } from 'viem';
-	import { keccak256, hexToBytes } from 'viem';
-	import type { Writable } from 'svelte/store';
-	import { o as baseHominioFacade } from '$lib/KERNEL/hominio-svelte';
+	import type { Hex, Address } from 'viem';
 	import { pageMetadataStore } from '$lib/stores/layoutStore';
 	import type { PageData } from './$types';
 	import type { HominioFacade } from '$lib/KERNEL/hominio-svelte';
@@ -131,12 +127,6 @@
 		}
 	});
 
-	// onDestroy(() => { // Handled by $effect return
-	// 	if (unsubscribeLitClient) {
-	// 		unsubscribeLitClient();
-	// 	}
-	// });
-
 	$effect(() => {
 		// Reset the attempt flag if the PKP key context changes.
 		// This ensures that if a new key is loaded or the current key is cleared,
@@ -171,20 +161,6 @@
 				handleFetchPermittedAuthMethods(mintedPkpTokenId);
 			}
 		}
-
-		// The original subscription logic was just calling functions based on client status.
-		// If there was an explicit unsubscribe function from litClientStore.subscribe,
-		// it would be returned here. Assuming litClientStore is a Svelte store,
-		// $effect handles dependency tracking. If litClientStore itself had a more complex
-		// subscribe method returning a specific cleanup, that would need to be called.
-		// For a standard Svelte store, direct usage of $litClientStore in the effect
-		// is usually sufficient for reactivity. If litClientStore.subscribe returned
-		// a cleanup function, that should be returned from this $effect.
-		// Let's assume standard Svelte store behavior for now.
-		// If an explicit unsubscribe was needed from `litClientStore.subscribe()`:
-		// const unsubscribe = litClientStore.subscribe(async (clientValue) => { ... });
-		// return unsubscribe;
-		// However, we are reacting to $litClientStore directly.
 	});
 
 	async function tryResumePkpSession(currentLitClient: LitNodeClient, pkpKeyToResume: Hex) {

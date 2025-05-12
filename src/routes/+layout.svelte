@@ -1,6 +1,6 @@
 <script lang="ts">
 	import '../app.css';
-	import { onMount, onDestroy, setContext } from 'svelte';
+	import { onMount, onDestroy, setContext, type ComponentType } from 'svelte';
 	import { get } from 'svelte/store';
 	import { initializeLitClient } from '$lib/wallet/lit-connect';
 	import { initializeGuardianEoaClient } from '$lib/wallet/guardian-eoa';
@@ -15,7 +15,7 @@
 	import { goto } from '$app/navigation';
 	import Modal from '$lib/components/Modal.svelte';
 	import { openModal } from '$lib/KERNEL/modalStore';
-	import Prenu from '$lib/components/Prenu.svelte';
+	import Prenu from '$lib/components/PrenuModal.svelte';
 	import Navbar from '$lib/components/Navbar.svelte';
 
 	// Get the session store using o.authClient
@@ -315,13 +315,16 @@
 			</button>
 
 			<!-- Example Modal Trigger Button (Bottom Left) -->
-			<button
-				onclick={showModal}
-				class="fixed bottom-4 left-4 z-50 rounded-full border border-gray-300 bg-white/80 px-4 py-2 text-xs text-gray-700 shadow-lg backdrop-blur-sm transition-colors hover:bg-gray-100"
-				title="Open Example Modal"
-			>
-				Modal
-			</button>
+			<!-- REMOVED the button that manually opened Prenu modal -->
+			<!-- 
+            <button
+                onclick={showModal}
+                class="fixed bottom-4 left-4 z-50 rounded-full border border-gray-300 bg-white/80 px-4 py-2 text-xs text-gray-700 shadow-lg backdrop-blur-sm transition-colors hover:bg-gray-100"
+                title="Open Example Modal"
+            >
+                Modal
+            </button> 
+            -->
 		{/if}
 
 		{#if isCallActive}
