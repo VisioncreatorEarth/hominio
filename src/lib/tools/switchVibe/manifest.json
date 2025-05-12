@@ -5,14 +5,14 @@
     "color": "blue",
     "temporaryTool": {
         "modelToolName": "switchVibe",
-        "description": "Switch to a completely different vibe/experience with its own set of tools and default agent. Use this tool when the user wants to change to a different experience like todos, counter, or home. NEVER emit text when doing this tool call.",
+        "description": "Switch to a completely different vibe/experience with its own set of tools and default agent. Use this tool when the user wants to change to a different experience like todos, banking, counter, or home. Try to map the intention of the user to the actual available vibes. f.e. I want to send token, or see the balance -> banking vibe. or I need to add some todos or create an appointment -> todo vibe. etc. NEVER emit text when doing this tool call.",
         "dynamicParameters": [
             {
                 "name": "vibeId",
                 "location": "PARAMETER_LOCATION_BODY",
                 "schema": {
                     "type": "string",
-                    "description": "The ID of the vibe to switch to (e.g. \"home\", \"todos\", \"counter\")"
+                    "description": "The ID of the vibe to switch to (e.g. \"home\", \"todos\", \"banking\", \"counter\")"
                 },
                 "required": true
             }

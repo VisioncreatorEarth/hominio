@@ -19,6 +19,11 @@
 	import { getSessionSigsWithGnosisPasskeyVerification, executeLitAction } from '$lib/wallet/lit';
 	import type { Hex } from 'viem';
 	import { encryptString, decryptToString } from '@lit-protocol/encryption';
+	import { createPublicClient, http, serializeTransaction } from 'viem';
+	import { gnosis } from 'viem/chains';
+
+	const sahelPhaseConfig = roadmapConfig.phases.find((p) => p.name === 'Sahelanthropus');
+	const GNOSIS_RPC_URL = sahelPhaseConfig?.rpcUrls?.default?.http?.[0];
 
 	// Props: requestData (object), onSign (function), onCancel (function)
 	let { requestData, onSign, onCancel } = $props<{
@@ -48,6 +53,8 @@
 	let activeTab: 'summary' | 'details' = $state('summary');
 	let signResult: { success: boolean; message: string } | null = $state(null);
 	let signTimeout: ReturnType<typeof setTimeout> | null = null;
+	let lastTxHash: string | null = $state(null);
+	let explorerBaseUrl: string | null = $state(null);
 
 	// Get LitNodeClient from Svelte context
 	const o = getContext<HominioFacade>('o');
@@ -189,6 +196,55 @@
 		}
 	});
 
+	const displayOperationType = $derived(() => {
+		if (!requestData) return 'Unknown Operation';
+		switch (requestData.type) {
+			case 'message':
+				return 'Sign Message';
+			case 'transaction':
+				return 'Sign Transaction';
+			case 'executeAction':
+				return 'Execute Lit Action';
+			case 'encrypt':
+				return 'Encrypt Data';
+			case 'decrypt':
+				return 'Decrypt Data';
+			case 'authenticateSession':
+				return 'Authenticate PKP Session';
+			default:
+				return 'Unknown PKP Operation';
+		}
+	});
+
+	const derivedRequestedCapabilities = $derived(() => {
+		if (!requestData) return [];
+		const capabilities: string[] = [];
+		// This logic will mirror the switch in handleApproveOperation for resourceAbilityRequests
+		switch (requestData.type) {
+			case 'message':
+			case 'transaction':
+			case 'encrypt':
+			case 'decrypt':
+				capabilities.push(
+					'Sign with your PKP (for messages, transactions, or cryptographic operations).'
+				);
+				break;
+			case 'authenticateSession':
+				capabilities.push('Authenticate a session for your PKP.');
+				capabilities.push(
+					'This allows subsequent actions (signing, Lit Action execution) within this session.'
+				);
+				break;
+			case 'executeAction':
+				capabilities.push('Sign with your PKP.');
+				capabilities.push('Execute Lit Actions (currently any action, scoped to this PKP).');
+				break;
+			default:
+				capabilities.push('Perform the requested PKP operation.');
+		}
+		return capabilities;
+	});
+
 	function showSuccess(message: string) {
 		signResult = { success: true, message };
 		if (signTimeout) clearTimeout(signTimeout);
@@ -240,8 +296,10 @@
 			showError('Missing request data or Lit client for operation execution.');
 			return;
 		}
-		isSigning = true; // Mark that the specific operation is now processing
+		isSigning = true;
 		currentErrorInternal = null;
+		lastTxHash = null;
+		explorerBaseUrl = null;
 
 		try {
 			let result: any;
@@ -264,7 +322,17 @@
 						requestData.pkpPublicKey,
 						requestData.transaction
 					);
-					showSuccess('Transaction signed successfully!');
+					const publicClient = createPublicClient({
+						chain: gnosis,
+						transport: http(GNOSIS_RPC_URL)
+					});
+					const signedRawTx = serializeTransaction(requestData.transaction, result);
+					const txHash = await publicClient.sendRawTransaction({
+						serializedTransaction: signedRawTx
+					});
+					lastTxHash = txHash;
+					explorerBaseUrl = sahelPhaseConfig?.blockExplorers?.default?.url || null;
+					showSuccess('Transaction signed and broadcasted successfully!');
 					break;
 				case 'executeAction':
 					if (!requestData.actionCode) throw new Error('Lit Action code not provided.');
@@ -312,6 +380,10 @@
 					);
 					showSuccess('Data decrypted successfully!');
 					break;
+				case 'authenticateSession':
+					result = sessionSigs;
+					showSuccess('PKP session authenticated successfully!');
+					break;
 				default:
 					throw new Error('Unsupported operation type.');
 			}
@@ -328,111 +400,142 @@
 		}
 	}
 
+	// New function to encapsulate passkey interaction and session fetching
+	async function initiatePasskeyAuthenticationAndGetSigs() {
+		if (!internalLitNodeClient || !requestData || !storedPasskey) {
+			showError(
+				'Cannot initiate passkey auth: Lit client, request data, or stored passkey missing.'
+			);
+			passkeyLoginUIVisible = false;
+			isSessionLoading = false;
+			return;
+		}
+
+		// passkeyLoginUIVisible should be true already, set by the confirmation step
+		// isSessionLoading should be true already, set by the confirmation step
+		currentErrorInternal = null;
+
+		try {
+			console.log(
+				'[SignerModal] Initiating passkey authentication for PKP:',
+				requestData.pkpPublicKey
+			);
+
+			const sessionChallengeMessage = `Login to Hominio Signer Modal for PKP: ${requestData.pkpPublicKey} at ${new Date().toISOString()}`;
+			const messageHashAsChallenge = keccak256(new TextEncoder().encode(sessionChallengeMessage));
+			const rawIdBytes = hexToBytes(storedPasskey.rawId as Hex);
+
+			let pkpResource = new LitPKPResource('*');
+			let resourceAbilityRequests;
+			switch (requestData.type) {
+				case 'message':
+				case 'transaction':
+				case 'encrypt':
+				case 'decrypt':
+					resourceAbilityRequests = [
+						{
+							resource: pkpResource,
+							ability: 'pkp-signing' as const
+						}
+					];
+					break;
+				case 'executeAction':
+					resourceAbilityRequests = [
+						{
+							resource: pkpResource,
+							ability: 'pkp-signing' as const
+						},
+						{
+							resource: new LitActionResource('*'),
+							ability: 'lit-action-execution' as const
+						}
+					];
+					break;
+				case 'authenticateSession':
+					resourceAbilityRequests = [
+						{
+							resource: pkpResource,
+							ability: 'pkp-signing' as const
+						},
+						{
+							resource: new LitActionResource('*'),
+							ability: 'lit-action-execution' as const
+						}
+					];
+					break;
+				default:
+					throw new Error('Unsupported operation type for resource capabilities.');
+			}
+
+			console.log(
+				'[SignerModal] Effective Resource Keys for Session Sigs:',
+				JSON.stringify(
+					resourceAbilityRequests.map((rar) => ({
+						resourceKey: rar.resource.getResourceKey(),
+						ability: rar.ability
+					})),
+					null,
+					2
+				)
+			);
+
+			const assertion = (await navigator.credentials.get({
+				publicKey: {
+					challenge: hexToBytes(messageHashAsChallenge),
+					allowCredentials: [{ type: 'public-key', id: rawIdBytes }],
+					userVerification: 'required'
+				}
+			})) as PublicKeyCredential | null;
+
+			if (
+				!assertion ||
+				!assertion.response ||
+				!(assertion.response instanceof AuthenticatorAssertionResponse)
+			) {
+				throw new Error('Failed to get valid signature assertion from passkey.');
+			}
+
+			const sessionExpiration = new Date(Date.now() + 1 * 60 * 1000).toISOString(); // 1 minute expiration
+
+			const newSessionSigs = await getSessionSigsWithGnosisPasskeyVerification(
+				internalLitNodeClient,
+				requestData.pkpPublicKey,
+				sessionChallengeMessage,
+				assertion.response as AuthenticatorAssertionResponse,
+				storedPasskey,
+				'ethereum', // Or requestData.chain if applicable for the session context
+				resourceAbilityRequests,
+				sessionExpiration // Pass the 1-minute expiration
+			);
+			internalSessionSigs = newSessionSigs;
+			passkeyLoginUIVisible = false; // Hide passkey prompt, back to main modal view
+			console.log('[SignerModal] Successfully obtained new sessionSigs with 1-min expiration.');
+
+			if (!internalSessionSigs) {
+				throw new Error('Failed to obtain PKP session after passkey. Cannot proceed.');
+			}
+
+			await executeRequestedOperation(internalSessionSigs);
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			showError(`Passkey Auth/Session Error: ${msg}`);
+			passkeyLoginUIVisible = false; // Ensure UI is reset on error
+		} finally {
+			isSessionLoading = false;
+		}
+	}
+
 	// Task 1.2: Implement Session Acquisition and Operation Orchestration
 	async function handleApproveOperation() {
 		if (!internalLitNodeClient || !internalLitNodeClient.ready || !requestData || !storedPasskey) {
 			showError('Lit client not ready, request data missing, or no stored passkey available.');
 			return;
 		}
-
-		isSessionLoading = true;
-		passkeyLoginUIVisible = false;
 		currentErrorInternal = null;
 		signResult = null;
-
-		try {
-			let currentSessionSigs = internalSessionSigs;
-
-			if (!currentSessionSigs) {
-				console.log(
-					'[SignerModal] No active sessionSigs. Attempting to get new sessionSigs for PKP:',
-					requestData.pkpPublicKey
-				);
-
-				passkeyLoginUIVisible = true;
-
-				const sessionChallengeMessage = `Login to Hominio Signer Modal for PKP: ${requestData.pkpPublicKey} at ${new Date().toISOString()}`;
-				const messageHashAsChallenge = keccak256(new TextEncoder().encode(sessionChallengeMessage));
-
-				const rawIdBytes = hexToBytes(storedPasskey.rawId as Hex);
-
-				// Define resourceAbilityRequests based on operation type
-				let pkpResource = new LitPKPResource('*');
-				let resourceAbilityRequests;
-				switch (requestData.type) {
-					case 'message':
-					case 'transaction':
-					case 'encrypt':
-					case 'decrypt':
-						resourceAbilityRequests = [
-							{
-								resource: pkpResource,
-								ability: 'pkp-signing' as const // Ensure this is a const for type safety
-							}
-						];
-						break;
-					case 'executeAction':
-						// For now, allow executing any action. In future, might be specific action IPFS hash.
-						// And pkp-signing for the pkp that will execute the action.
-						resourceAbilityRequests = [
-							{
-								resource: pkpResource,
-								ability: 'pkp-signing' as const
-							},
-							{
-								resource: new LitActionResource('*'), // Any action
-								ability: 'lit-action-execution' as const // Corrected from lit-action-execute
-							}
-						];
-						break;
-					default:
-						throw new Error('Unsupported operation type for resource capabilities.');
-				}
-
-				const assertion = (await navigator.credentials.get({
-					publicKey: {
-						challenge: hexToBytes(messageHashAsChallenge),
-						allowCredentials: [{ type: 'public-key', id: rawIdBytes }],
-						userVerification: 'required'
-					}
-				})) as PublicKeyCredential | null;
-
-				if (
-					!assertion ||
-					!assertion.response ||
-					!(assertion.response instanceof AuthenticatorAssertionResponse)
-				) {
-					throw new Error('Failed to get valid signature assertion from passkey.');
-				}
-
-				currentSessionSigs = await getSessionSigsWithGnosisPasskeyVerification(
-					internalLitNodeClient,
-					requestData.pkpPublicKey,
-					sessionChallengeMessage,
-					assertion.response as AuthenticatorAssertionResponse,
-					storedPasskey,
-					'ethereum',
-					resourceAbilityRequests // Pass the resources here
-				);
-				internalSessionSigs = currentSessionSigs;
-				passkeyLoginUIVisible = false;
-				console.log(
-					'[SignerModal] Successfully obtained new sessionSigs with resource capabilities.'
-				);
-			}
-
-			if (!currentSessionSigs) {
-				throw new Error('Failed to obtain PKP session. Cannot proceed.');
-			}
-
-			await executeRequestedOperation(currentSessionSigs);
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			showError(`Session/Approval Error: ${msg}`);
-			passkeyLoginUIVisible = false;
-		} finally {
-			isSessionLoading = false;
-		}
+		passkeyLoginUIVisible = true;
+		isSessionLoading = true;
+		await initiatePasskeyAuthenticationAndGetSigs();
 	}
 
 	function handleCancel() {
@@ -476,6 +579,24 @@
 					><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" /></svg
 				>
 				<span class="text-lg font-semibold text-green-700">{signResult.message}</span>
+				{#if lastTxHash}
+					<div class="mt-2 w-full">
+						<p class="text-xs text-green-700">Transaction Hash:</p>
+						{#if explorerBaseUrl}
+							<a
+								href={`${explorerBaseUrl.endsWith('/') ? explorerBaseUrl : explorerBaseUrl + '/'}tx/${lastTxHash}`}
+								target="_blank"
+								rel="noopener noreferrer"
+								class="block rounded bg-green-200 p-1 break-all text-green-800 hover:underline"
+								>{lastTxHash}</a
+							>
+						{:else}
+							<code class="block rounded bg-green-200 p-1 break-all text-green-800"
+								>{lastTxHash}</code
+							>
+						{/if}
+					</div>
+				{/if}
 			{:else}
 				<svg
 					class="h-8 w-8 text-red-500"
@@ -698,7 +819,7 @@
 			)}</pre>
 	{/if}
 
-	{#if currentErrorInternal && !passkeyLoginUIVisible && !signResult?.success}
+	{#if currentErrorInternal && !passkeyLoginUIVisible}
 		<div class="mb-2 rounded border border-red-300 bg-red-100 p-2 text-xs text-red-700">
 			{currentErrorInternal}
 		</div>
@@ -720,8 +841,7 @@
 				passkeyLoginUIVisible}
 		>
 			{#if isSessionLoading && !passkeyLoginUIVisible}<span class="spinner mr-2"></span>Checking
-				Session...{:else if isSessionLoading && passkeyLoginUIVisible}<span class="spinner mr-2"
-				></span>Authenticating...{:else if isSigning}<span class="spinner mr-2"
+				Session...{:else if isSigning}<span class="spinner mr-2"
 				></span>Processing...{:else}Approve{/if}
 		</button>
 	</div>

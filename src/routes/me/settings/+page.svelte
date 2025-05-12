@@ -26,6 +26,8 @@
 	import { pageMetadataStore } from '$lib/stores/layoutStore';
 	import type { PageData } from './$types';
 	import type { HominioFacade } from '$lib/KERNEL/hominio-svelte';
+	import { requestPKPSignature } from '$lib/KERNEL/modalStore';
+	import type { PKPSigningRequestData } from '$lib/wallet/modalTypes';
 
 	// Use $props() for runes mode
 	let { data } = $props<{ data: PageData }>();
@@ -268,66 +270,44 @@
 		}
 
 		const pkpKeyToUse = mintedPkpPublicKey;
-		if (!pkpKeyToUse) {
-			mainError = 'No PKP Public Key available. Mint a PKP first (Step 2).';
+		const pkpEthAddressToUse = mintedPkpEthAddress;
+
+		if (!pkpKeyToUse || !pkpEthAddressToUse) {
+			mainError = 'No PKP Public Key or ETH Address available. Mint a PKP first (Step 2).';
 			return;
 		}
 
 		isLoadingSessionSigsGnosisPasskey = true;
 		generalIsLoading = true;
 		resetMainMessages();
-		sessionSigs = null; // Clear previous session before attempting new one
+		sessionSigs = null;
 		sessionAuthMethod = null;
 
+		const request: PKPSigningRequestData = {
+			type: 'authenticateSession',
+			pkpPublicKey: pkpKeyToUse,
+			pkpEthAddress: pkpEthAddressToUse
+		};
+
 		try {
-			const challengeMessage = 'Authenticate to use Hominio PKP with Passkey (Settings Check)';
-			const messageHashAsChallenge = keccak256(new TextEncoder().encode(challengeMessage));
+			console.log('[SettingsPage] Requesting session authentication via modal...');
+			const result = (await requestPKPSignature(request)) as SessionSigs;
 
-			const assertion = (await navigator.credentials.get({
-				publicKey: {
-					challenge: hexToBytes(messageHashAsChallenge),
-					allowCredentials: [{ type: 'public-key', id: hexToBytes(storedPasskey.rawId as Hex) }],
-					userVerification: 'required'
-				}
-			})) as PublicKeyCredential | null;
-
-			if (
-				!assertion ||
-				!assertion.response ||
-				!(assertion.response instanceof AuthenticatorAssertionResponse) ||
-				!assertion.response.authenticatorData ||
-				!assertion.response.signature
-			) {
-				throw new Error('Failed to get valid signature assertion from passkey.');
-			}
-
-			const assertionResponse = assertion.response;
-
-			if (!storedPasskey || !storedPasskey.signerContractAddress) {
-				throw new Error('Stored passkey data or signer address missing for authentication.');
-			}
-
-			sessionSigs = await getSessionSigsWithGnosisPasskeyVerification(
-				currentLitClient!,
-				pkpKeyToUse,
-				challengeMessage,
-				assertionResponse,
-				storedPasskey,
-				'ethereum' // Ensure this matches your target chain for the PKP
-			);
-
+			sessionSigs = result;
 			sessionAuthMethod = 'gnosis-passkey';
-			mainSuccess =
-				'Successfully authenticated PKP session via Passkey (Gnosis)! Session Sigs obtained.';
-			// Removed goToStep(5) for settings page
+			mainSuccess = 'Successfully authenticated PKP session via Modal! Session Sigs obtained.';
+			console.log('[SettingsPage] Session authenticated via modal:', sessionSigs);
 		} catch (err: unknown) {
-			mainError =
-				err instanceof Error
-					? `PKP Authentication Failed: ${err.message}`
-					: 'Unknown error during PKP authentication via Gnosis Passkey.';
+			const msg = err instanceof Error ? err.message : String(err);
+			if (msg.toLowerCase().includes('cancelled') || msg.toLowerCase().includes('user rejected')) {
+				mainSuccess = 'Session authentication cancelled by user.';
+				mainError = '';
+			} else {
+				mainError = `PKP Session Authentication Failed via Modal: ${msg}`;
+			}
 			sessionSigs = null;
 			sessionAuthMethod = null;
-			console.error('Error in handleRefreshSessionStatus (Authenticate PKP):', err);
+			console.error('[SettingsPage] Error in handleRefreshSessionStatus (via Modal):', err);
 		} finally {
 			isLoadingSessionSigsGnosisPasskey = false;
 			generalIsLoading = false;

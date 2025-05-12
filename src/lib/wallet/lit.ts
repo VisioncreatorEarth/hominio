@@ -547,6 +547,7 @@ go();
  * @param passkeyData Stored passkey data including coordinates and optional signer address.
  * @param chain The chain for which the session sigs are being requested (e.g., 'ethereum').
  * @param resourceAbilityRequestsFromModal Optional array of resource ability requests from modal
+ * @param expiration Optional expiration string for the session
  * @returns A promise that resolves to SessionSigs.
  */
 export const getSessionSigsWithGnosisPasskeyVerification = async (
@@ -556,7 +557,8 @@ export const getSessionSigsWithGnosisPasskeyVerification = async (
     assertionResponse: AuthenticatorAssertionResponse,
     passkeyData: StoredPasskeyData,
     chain: string,
-    resourceAbilityRequestsFromModal?: LitResourceAbilityRequest[]
+    resourceAbilityRequestsFromModal?: LitResourceAbilityRequest[],
+    expiration?: string
 ): Promise<SessionSigs> => {
     console.log('Attempting session sigs with Gnosis passkey verification Lit Action...');
 
@@ -612,6 +614,7 @@ export const getSessionSigsWithGnosisPasskeyVerification = async (
             jsParams,
             chain, // This 'chain' is for the session signatures, not the ethCalls in the action
             resourceAbilityRequests: finalResourceAbilityRequests, // Use the determined requests
+            expiration: expiration, // Pass it here
             // No authNeededCallback here as the Lit Action IS the auth method
         });
 

@@ -2,23 +2,25 @@ import { browser } from '$app/environment';
 import { get } from 'svelte/store';
 import { logToolActivity } from '$lib/ultravox/stores';
 import type { ToolParameters } from '$lib/ultravox/types';
-import type { LitNodeClient } from '@lit-protocol/lit-node-client';
-import { LitPKPResource, LitActionResource } from '@lit-protocol/auth-helpers';
-import type { SessionSigs, AuthCallbackParams } from '@lit-protocol/types';
+// LitNodeClient might still be needed if pre-checks are done, but LitPKPResource, LitActionResource, AuthCallbackParams are likely unused now.
+// import type { LitNodeClient } from '@lit-protocol/lit-node-client'; 
+// import { LitPKPResource, LitActionResource } from '@lit-protocol/auth-helpers';
+// import type { SessionSigs, AuthCallbackParams } from '@lit-protocol/types';
 import type { Hex, Address, TransactionSerializableEIP1559 } from 'viem';
 import {
     createPublicClient,
     http,
     parseUnits,
     encodeFunctionData,
-    serializeTransaction,
+    // serializeTransaction, // Removed as it's handled by the modal now
     isAddress
 } from 'viem';
 import { gnosis } from 'viem/chains';
 import { roadmapConfig } from '$lib/roadmap/config';
 import { o } from '$lib/KERNEL/hominio-svelte'; // For accessing Svelte stores
 import { requestPKPSignature } from '$lib/KERNEL/modalStore';
-import type { Signature } from 'viem';
+// import type { Signature } from 'viem'; // Signature will be handled by modal
+import type { PKPSigningRequestData } from '$lib/wallet/modalTypes';
 
 // --- Configuration from roadmap ---
 const sahelPhaseConfig = roadmapConfig.phases.find((p) => p.name === 'Sahelanthropus');
@@ -56,8 +58,8 @@ const erc20Abi = [
 ] as const;
 
 export interface ExecuteSendTokenParams {
-    litNodeClient: LitNodeClient;
-    sessionSigs: SessionSigs;
+    // litNodeClient: LitNodeClient; // Removed
+    // sessionSigs: SessionSigs; // Removed
     pkpPublicKey: Hex;
     pkpEthAddress: Address;
     recipientGuardianEoaAddress: Address;
@@ -65,11 +67,13 @@ export interface ExecuteSendTokenParams {
     sahelTokenDecimals?: number;
 }
 
-export interface ExecuteSendTokenResult {
-    txHash: Hex;
-    amountSent: string;
+// Result type changed as txHash is no longer generated here.
+export interface InitiateSendTokenResult {
+    message: string;
+    amountToSign: string;
     recipientAddress: Address;
     tokenSymbol: string;
+    senderPkpAddress: Address;
 }
 
 // --- Helper to get PKP data from localStorage (similar to getPKPBalance) ---
@@ -98,12 +102,10 @@ async function getStoredPKPData(): Promise<{ pkpEthAddress: Address; pkpPublicKe
 }
 
 // --- Core sending logic (modified executeSendSahelToGuardian) ---
-async function internalExecuteSendToken(
+async function internalInitiateSendToken(
     params: ExecuteSendTokenParams
-): Promise<ExecuteSendTokenResult> {
+): Promise<InitiateSendTokenResult> { // Return type changed
     const {
-        litNodeClient,
-        sessionSigs,
         pkpPublicKey,
         pkpEthAddress,
         recipientGuardianEoaAddress,
@@ -155,22 +157,38 @@ async function internalExecuteSendToken(
         gas: estimatedGas, maxFeePerGas, maxPriorityFeePerGas, chainId: EXPECTED_CHAIN_ID_SAHEL, type: 'eip1559'
     };
 
-    // --- Refactored: Use central signer modal ---
-    const signature = await requestPKPSignature({
+    const signingRequestData: PKPSigningRequestData = {
         type: 'transaction',
         transaction,
         pkpPublicKey,
         pkpEthAddress,
-        sessionSigs,
-        litNodeClient
-    }) as Signature;
-    // --- End refactor ---
+        tokenDecimals: decimalsToUse
+    };
 
-    const signedRawTx = serializeTransaction(transaction, signature);
-    const txHash = await publicClient.sendRawTransaction({ serializedTransaction: signedRawTx });
+    // Call requestPKPSignature but DO NOT await it.
+    // This will open the modal and the promise it returns will resolve/reject later.
+    // The tool function will return before that happens.
+    requestPKPSignature(signingRequestData)
+        .then(signature => {
+            // This block is for handling successful signature *after* the tool has already returned.
+            // The signature and broadcasting will now be handled *inside* the SignerModal.
+            // So, this .then() might just be for logging or a no-op if modal handles all post-sign.
+            console.log('[sendTokenTool] Modal signing process completed (signature obtained). Broadcasting is now handled by the modal.', signature);
+        })
+        .catch(error => {
+            // Handle modal cancellation or error *after* the tool has returned.
+            console.warn('[sendTokenTool] Modal signing process failed or was cancelled:', error);
+            // Log to tool activity if needed, but the primary tool response already happened.
+            logToolActivity('sendToken', `Modal interaction failed or cancelled: ${error.message || error}`, false);
+        });
 
-    // Return immediately after submission
-    return { txHash, amountSent: `${amount}`, recipientAddress: recipientGuardianEoaAddress, tokenSymbol: TOKEN_SYMBOL };
+    return {
+        message: `Transaction to send ${amount} ${TOKEN_SYMBOL} to ${recipientGuardianEoaAddress} prepared. Please sign it in the Hominio Signer Modal.`,
+        amountToSign: amount,
+        recipientAddress: recipientGuardianEoaAddress,
+        tokenSymbol: TOKEN_SYMBOL,
+        senderPkpAddress: pkpEthAddress
+    };
 }
 
 // --- Main Tool Implementation Function ---
@@ -186,14 +204,12 @@ export async function sendTokenImplementation(parameters: ToolParameters): Promi
         if (typeof parameters === 'object' && parameters !== null) parsedParams = parameters;
         else if (typeof parameters === 'string') try { parsedParams = JSON.parse(parameters); } catch { /* ignore parse error */ }
 
-        // 0. Get Amount from parameters
         if (parsedParams.amount && typeof parsedParams.amount === 'string' && parseFloat(parsedParams.amount) > 0) {
             amountToSend = parsedParams.amount;
         } else {
             throw new Error('Amount to send is required and must be a positive number string.');
         }
 
-        // 1. Get PKP Details (from params or localStorage)
         const storedPkp = await getStoredPKPData();
         finalPkpEthAddress = (parsedParams.pkpEthAddress && typeof parsedParams.pkpEthAddress === 'string' && isAddress(parsedParams.pkpEthAddress)) ? parsedParams.pkpEthAddress as Address : storedPkp?.pkpEthAddress || null;
         finalPkpPublicKey = (parsedParams.pkpPublicKey && typeof parsedParams.pkpPublicKey === 'string') ? parsedParams.pkpPublicKey as Hex : storedPkp?.pkpPublicKey || null;
@@ -202,7 +218,6 @@ export async function sendTokenImplementation(parameters: ToolParameters): Promi
             throw new Error('Sender PKP details (EthAddress, PublicKey) not provided and could not be retrieved from session/storage.');
         }
 
-        // 2. Get Recipient Guardian EOA (from params or Svelte store)
         const guardianAddressFromStore = get(o.guardian.address);
         finalRecipientAddress = (parsedParams.recipientGuardianEoaAddress && typeof parsedParams.recipientGuardianEoaAddress === 'string' && isAddress(parsedParams.recipientGuardianEoaAddress))
             ? parsedParams.recipientGuardianEoaAddress as Address
@@ -212,64 +227,35 @@ export async function sendTokenImplementation(parameters: ToolParameters): Promi
             throw new Error('Recipient Guardian EOA address not provided and could not be retrieved from session/storage.');
         }
 
-        // 3. Get LitNodeClient from Svelte store
-        const litNodeClient = get(o.lit.client);
-        if (!litNodeClient || !litNodeClient.ready) {
-            throw new Error('LitNodeClient not available or not ready. Ensure Lit Protocol is connected.');
-        }
+        // LitNodeClient check can be removed if not used for any pre-flight checks
+        // const litNodeClient = get(o.lit.client);
+        // if (!litNodeClient || !litNodeClient.ready) {
+        //     throw new Error('LitNodeClient not available or not ready. Ensure Lit Protocol is connected.');
+        // }
 
-        // 4. Get SessionSigs (attempt to resume)
-        let sessionSigs: SessionSigs;
-        try {
-            sessionSigs = await litNodeClient.getSessionSigs({
-                pkpPublicKey: finalPkpPublicKey,
-                chain: 'ethereum',
-                resourceAbilityRequests: [
-                    { resource: new LitPKPResource('*'), ability: 'pkp-signing' as const },
-                    { resource: new LitActionResource('*'), ability: 'lit-action-execution' as const }
-                ],
-                authNeededCallback: async (params: AuthCallbackParams) => {
-                    console.error('[sendTokenTool] AuthNeededCallback triggered. Tool cannot handle interactive auth.', params);
-                    throw new Error('Authentication required to proceed, but tool cannot handle interactive authentication. Ensure a resumable session exists.');
-                }
-            });
-        } catch (err: unknown) {
-            const errorMessage = err instanceof Error ? err.message : 'Unknown error during session resumption';
-            throw new Error(`Failed to get active session for PKP ${finalPkpPublicKey}: ${errorMessage}`);
-        }
+        // SessionSigs fetching is removed.
 
-        if (!sessionSigs) {
-            throw new Error('Could not obtain session signatures for the PKP. Ensure a resumable session exists.');
-        }
-
-        // 5. Execute the token send (return immediately after submission)
-        const result = await internalExecuteSendToken({
-            litNodeClient,
-            sessionSigs,
+        const result = await internalInitiateSendToken({
             pkpPublicKey: finalPkpPublicKey,
             pkpEthAddress: finalPkpEthAddress,
             recipientGuardianEoaAddress: finalRecipientAddress,
             amount: amountToSend
         });
 
-        const pendingMessage = `Transaction submitted. TxHash: ${result.txHash}`;
-        logToolActivity('sendToken', pendingMessage);
+        logToolActivity('sendToken', result.message);
         return JSON.stringify({
-            success: true,
-            message: pendingMessage,
-            txHash: result.txHash,
-            amountSent: result.amountSent,
-            tokenSymbol: result.tokenSymbol,
-            senderPkpAddress: finalPkpEthAddress,
-            recipientAddress: result.recipientAddress,
-            tokenAddress: SAHEL_TOKEN_ADDRESS,
-            chainId: EXPECTED_CHAIN_ID_SAHEL,
-            status: 'pending'
+            success: true, // Indicates the request to sign was successfully initiated
+            message: result.message,
+            details: {
+                amount: result.amountToSign,
+                tokenSymbol: result.tokenSymbol,
+                senderPkpAddress: result.senderPkpAddress,
+                recipientAddress: result.recipientAddress,
+                tokenAddress: SAHEL_TOKEN_ADDRESS,
+                chainId: EXPECTED_CHAIN_ID_SAHEL,
+                status: 'pending_signature' // New status
+            }
         });
-
-        // Optionally, you can start a background process here (if running in a backend environment)
-        // to poll for confirmation and push a follow-up message to the conversation stream.
-        // In a browser/client, handle this in the UI after tool call returns.
 
     } catch (error: unknown) {
         console.error('[sendTokenTool] Error:', error);
@@ -277,11 +263,13 @@ export async function sendTokenImplementation(parameters: ToolParameters): Promi
         logToolActivity('sendToken', `Error: ${errorMessage}`, false);
         return JSON.stringify({
             success: false,
-            message: `Error sending token: ${errorMessage}`,
-            senderPkpAddress: finalPkpEthAddress,
-            recipientAddress: finalRecipientAddress,
-            amountAttempted: amountToSend,
-            tokenSymbol: TOKEN_SYMBOL
+            message: `Error preparing send token transaction: ${errorMessage}`,
+            details: {
+                senderPkpAddress: finalPkpEthAddress,
+                recipientAddress: finalRecipientAddress,
+                amountAttempted: amountToSend,
+                tokenSymbol: TOKEN_SYMBOL
+            }
         });
     }
 }
