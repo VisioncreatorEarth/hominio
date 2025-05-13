@@ -22,9 +22,7 @@
             "tools": [
                 "createTodo",
                 "updateTodo",
-                "deleteTodo",
-                "queryTodos",
-                "filterTodos"
+                "queryTodos"
             ]
         }
     ]

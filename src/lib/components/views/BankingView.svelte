@@ -1,16 +1,20 @@
 <script lang="ts">
 	import { onMount, getContext } from 'svelte';
 	import { browser } from '$app/environment';
-	import type { Address, Hex } from 'viem';
+	import type { Address } from 'viem';
 	import { createPublicClient, http, formatUnits } from 'viem';
 	import { gnosis } from 'viem/chains';
 	import { roadmapConfig } from '$lib/roadmap/config';
-	import type { HominioFacade } from '$lib/KERNEL/hominio-svelte'; // Assuming HominioFacade type is available
+	import {
+		currentUserPkpProfileStore,
+		type CurrentUserPkpProfile
+	} from '$lib/stores/pkpSessionStore';
 
 	// Get Hominio facade from context if needed, though not directly used in this reduced version
 	// const o = getContext<HominioFacade>('o');
 
 	let mintedPkpEthAddress = $state<Address | null>(null);
+	let currentProfile = $state<CurrentUserPkpProfile | null>(null);
 
 	// --- Sahel Token Balance State & Config ---
 	const sahelPhaseConfig = roadmapConfig.phases.find((p) => p.name === 'Sahelanthropus');
@@ -42,27 +46,16 @@
 	let pkpSahelBalanceError = $state<string | null>(null);
 	let formattedPkpSahelBalance = $state<string | null>(null);
 
-	onMount(() => {
-		if (browser) {
-			const storedPKPDataString = localStorage.getItem('mintedPKPData');
-			if (storedPKPDataString) {
-				try {
-					const storedPKPData = JSON.parse(storedPKPDataString);
-					if (storedPKPData && storedPKPData.pkpEthAddress) {
-						mintedPkpEthAddress = storedPKPData.pkpEthAddress;
-					} else {
-						// console.warn('[BankingView] PKP ETH Address not found in localStorage.');
-						mintedPkpEthAddress = null; // Explicitly set to null if not found
-					}
-				} catch (error) {
-					console.error('[BankingView] Error parsing PKP data from localStorage:', error);
-					mintedPkpEthAddress = null;
-				}
-			} else {
-				// console.warn('[BankingView] No PKP data found in localStorage.');
-				mintedPkpEthAddress = null;
+	// Subscribe to the PKP profile store
+	$effect(() => {
+		const unsubscribe = currentUserPkpProfileStore.subscribe((profile) => {
+			currentProfile = profile;
+			mintedPkpEthAddress = profile?.pkpEthAddress || null;
+			if (!profile?.pkpEthAddress) {
+				// console.warn('[BankingView] PKP ETH Address not found in profile store.');
 			}
-		}
+		});
+		return unsubscribe; // Cleanup subscription when component unmounts or effect re-runs
 	});
 
 	async function fetchPkpSahelTokenBalance() {
@@ -138,9 +131,10 @@
 			pkpSahelTokenBalance = null;
 			formattedPkpSahelBalance = null;
 			isLoadingPkpSahelBalance = false; // Ensure loading stops if pre-reqs aren't met
-			if (!mintedPkpEthAddress && browser) {
-				// Only set this error if we expect an address
-				pkpSahelBalanceError = 'PKP Address not found in local storage.';
+			if (!mintedPkpEthAddress /* && browser */) {
+				// browser check will be removed
+				// Only set this error if we expect an address after store has been checked
+				pkpSahelBalanceError = 'PKP Address not found in your Hominio profile.';
 			} else if (mintedPkpEthAddress && (!SAHEL_TOKEN_ADDRESS || !GNOSIS_RPC_URL)) {
 				pkpSahelBalanceError = 'Sahel token configuration missing. Cannot display balance.';
 			}

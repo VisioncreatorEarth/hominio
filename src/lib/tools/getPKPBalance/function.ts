@@ -1,4 +1,3 @@
-import { browser } from '$app/environment';
 import { logToolActivity } from '$lib/ultravox/stores';
 import type { ToolParameters } from '$lib/ultravox/types';
 import { roadmapConfig } from '$lib/roadmap/config';
@@ -11,6 +10,8 @@ import {
     type PublicClient
 } from 'viem';
 import { gnosis } from 'viem/chains';
+import { get } from 'svelte/store';
+import { currentUserPkpProfileStore } from '$lib/stores/pkpSessionStore';
 
 const DEFAULT_CHAIN_ID = gnosis.id; // Gnosis mainnet
 
@@ -32,23 +33,6 @@ const erc20Abi = [
     }
 ] as const;
 
-async function getPkpEthAddressFromStorage(): Promise<Address | null> {
-    if (!browser) return null;
-    const storedPKPDataString = localStorage.getItem('mintedPKPData');
-    if (storedPKPDataString) {
-        try {
-            const storedPKPData = JSON.parse(storedPKPDataString);
-            if (storedPKPData && storedPKPData.pkpEthAddress && isAddress(storedPKPData.pkpEthAddress)) {
-                return storedPKPData.pkpEthAddress as Address;
-            }
-        } catch (error) {
-            console.warn('[getPKPBalanceTool] Error parsing mintedPKPData from localStorage:', error);
-            return null;
-        }
-    }
-    return null;
-}
-
 export async function getPKPBalanceImplementation(parameters: ToolParameters): Promise<string> {
     console.log('[getPKPBalanceTool] Called with parameters:', parameters);
     let pkpEthAddress: Address | null = null;
@@ -67,7 +51,13 @@ export async function getPKPBalanceImplementation(parameters: ToolParameters): P
         if (parsedParams.pkpEthAddress && typeof parsedParams.pkpEthAddress === 'string' && isAddress(parsedParams.pkpEthAddress)) {
             pkpEthAddress = parsedParams.pkpEthAddress as Address;
         } else {
-            pkpEthAddress = await getPkpEthAddressFromStorage();
+            const profile = get(currentUserPkpProfileStore);
+            if (profile && profile.pkpEthAddress && isAddress(profile.pkpEthAddress)) {
+                pkpEthAddress = profile.pkpEthAddress;
+                console.log('[getPKPBalanceTool] Retrieved pkpEthAddress from currentUserPkpProfileStore:', pkpEthAddress);
+            } else {
+                console.warn('[getPKPBalanceTool] pkpEthAddress not in params and not found or invalid in currentUserPkpProfileStore.');
+            }
         }
 
         if (!pkpEthAddress) {

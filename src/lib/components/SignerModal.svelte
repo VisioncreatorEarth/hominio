@@ -203,7 +203,7 @@
 	];
 
 	const decodedErc20Transfer = $derived(() => {
-		const currentRequestData = requestData as PKPSigningRequestData;
+		const currentRequestData = requestData;
 		if (
 			!currentRequestData ||
 			currentRequestData.type !== 'transaction' ||
@@ -254,9 +254,14 @@
 
 	$effect(() => {
 		const currentDecodedTransferValue = decodedErc20Transfer();
-		const currentRequestData = requestData as PKPSigningRequestData;
+		const currentRequestData = requestData;
 
-		if (currentRequestData && currentDecodedTransferValue && currentRequestData.transaction?.to) {
+		if (
+			currentRequestData &&
+			currentRequestData.type === 'transaction' &&
+			currentDecodedTransferValue &&
+			currentRequestData.transaction?.to
+		) {
 			isLoadingTokenMeta = true;
 			resolveTokenMeta(currentRequestData.transaction.to)
 				.then((meta) => {
@@ -779,8 +784,8 @@
 		</div>
 	{:else if activeTab === 'summary'}
 		{@const currentDecodedTransfer = decodedErc20Transfer()}
-		{@const currentRequestData = requestData as PKPSigningRequestData}
-		{#if currentDecodedTransfer}
+		{@const currentRequestData = requestData}
+		{#if currentDecodedTransfer && currentRequestData && currentRequestData.type === 'transaction'}
 			<div
 				class="mb-6 flex w-full max-w-xl flex-col gap-4 rounded-2xl border-2 border-green-400 bg-gradient-to-br from-green-50 to-[#fdf6ee] p-8 text-base shadow-lg"
 			>
@@ -808,7 +813,7 @@
 							? 'Loading...'
 							: tokenName
 								? `${tokenName} (${tokenSymbol})`
-								: currentRequestData?.transaction?.to}
+								: currentRequestData.transaction?.to}
 					</div>
 					<div class="font-semibold text-green-900">From:</div>
 					<div class="font-mono font-bold text-green-800">

@@ -10,7 +10,6 @@ export interface CurrentUserPkpProfile {
     pkpPublicKey: Hex;
     passkeyData: StoredPasskeyData; // This will hold rawId, coordinates, verifier contract, etc.
     pkpTokenId: string; // Added to store the PKP's own NFT token ID
-    // Potentially add pkpTokenId if readily available and useful globally
 }
 
 export const currentUserPkpProfileStore = writable<CurrentUserPkpProfile | null>(null);

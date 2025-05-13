@@ -163,7 +163,6 @@ export const pkpPasskeyServerPlugin = () => ({
             '/pkp-passkey-plugin/get-user-passkey-info',
             { method: 'GET' },
             async (ctx: any) => { // Use any for now
-                console.log('[pkpPasskeyPlugin:getUserPasskeyInfo] Endpoint hit');
                 const db = ctx.context.options.database;
 
                 if (!db) {
@@ -172,26 +171,21 @@ export const pkpPasskeyServerPlugin = () => ({
                 }
                 try {
                     const baSession = await getSessionFromCtx(ctx);
-                    console.log('[pkpPasskeyPlugin:getUserPasskeyInfo] Session data (summary):', baSession ? { session: { userId: baSession.session?.userId } } : null);
                     if (!baSession?.session?.userId) {
                         console.error('[pkpPasskeyPlugin:getUserPasskeyInfo] Unauthorized - No session or userId');
                         throw new APIError('UNAUTHORIZED', { status: 401 });
                     }
                     const userId = baSession.session.userId;
                     const query = 'SELECT "pkp_passkey" FROM "user" WHERE id = $1';
-                    console.log(`[pkpPasskeyPlugin:getUserPasskeyInfo] Executing query: ${query} for userId: ${userId}`);
                     const result: QueryResult = await db.query(query, [userId]);
-                    console.log('[pkpPasskeyPlugin:getUserPasskeyInfo] Query result raw rows:', result.rows);
 
                     if (result.rows.length === 0 || !result.rows[0].pkp_passkey) {
-                        console.log('[pkpPasskeyPlugin:getUserPasskeyInfo] No pkp_passkey data found for user or pkp_passkey field is null/empty in DB.');
                         return { pkp_passkey: null }; // Explicitly return null for the field
                     }
 
                     // The pg driver automatically parses the JSONB pkp_passkey column into an object.
                     // This object should conform to the PkpPasskey interface (rawId, pubKey, passkeyVerifierContract?)
                     const pkpDataFromDb = result.rows[0].pkp_passkey;
-                    console.log('[pkpPasskeyPlugin:getUserPasskeyInfo] pkp_passkey data from DB:', JSON.stringify(pkpDataFromDb, null, 2));
 
                     return {
                         pkp_passkey: pkpDataFromDb

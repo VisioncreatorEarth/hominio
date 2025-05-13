@@ -1,29 +1,22 @@
-import { browser } from '$app/environment';
 import { get } from 'svelte/store';
 import { logToolActivity } from '$lib/ultravox/stores';
 import type { ToolParameters } from '$lib/ultravox/types';
-// LitNodeClient might still be needed if pre-checks are done, but LitPKPResource, LitActionResource, AuthCallbackParams are likely unused now.
-// import type { LitNodeClient } from '@lit-protocol/lit-node-client'; 
-// import { LitPKPResource, LitActionResource } from '@lit-protocol/auth-helpers';
-// import type { SessionSigs, AuthCallbackParams } from '@lit-protocol/types';
-import type { Hex, Address, TransactionSerializableEIP1559 } from 'viem';
+import type { Address, TransactionSerializableEIP1559 } from 'viem';
 import {
     createPublicClient,
     http,
     parseUnits,
     encodeFunctionData,
-    // serializeTransaction, // Removed as it's handled by the modal now
     isAddress
 } from 'viem';
 import { gnosis } from 'viem/chains';
 import { roadmapConfig } from '$lib/roadmap/config';
 import { o } from '$lib/KERNEL/hominio-svelte'; // For accessing Svelte stores
 import { requestPKPSignature } from '$lib/wallet/modalStore';
-// import type { Signature } from 'viem'; // Signature will be handled by modal
-import type { PKPSigningRequestData } from '$lib/wallet/modalTypes';
-// Import queryPrenusImplementation to resolve names
+import type { PKPSignTransactionRequest } from '$lib/wallet/modalTypes'; // Changed to specific type
 import { queryPrenusImplementation } from '$lib/tools/queryPrenus/function';
 import type { AggregatedPrenuResult } from '$lib/tools/queryPrenus/function'; // Import result type
+import { currentUserPkpProfileStore, type CurrentUserPkpProfile } from '$lib/stores/pkpSessionStore'; // Added PKP profile store
 
 // --- Configuration from roadmap ---
 const sahelPhaseConfig = roadmapConfig.phases.find((p) => p.name === 'Sahelanthropus');
@@ -63,8 +56,7 @@ const erc20Abi = [
 export interface ExecuteSendTokenParams {
     // litNodeClient: LitNodeClient; // Removed
     // sessionSigs: SessionSigs; // Removed
-    pkpPublicKey: Hex;
-    pkpEthAddress: Address;
+    pkpEthAddress: Address; // Still needed for tx construction (nonce, gas estimation)
     recipientGuardianEoaAddress: Address;
     amount: string;
     sahelTokenDecimals?: number;
@@ -79,38 +71,12 @@ export interface InitiateSendTokenResult {
     senderPkpAddress: Address;
 }
 
-// --- Helper to get PKP data from localStorage (similar to getPKPBalance) ---
-async function getStoredPKPData(): Promise<{ pkpEthAddress: Address; pkpPublicKey: Hex } | null> {
-    if (!browser) return null;
-    const storedPKPDataString = localStorage.getItem('mintedPKPData');
-    if (storedPKPDataString) {
-        try {
-            const storedPKPData = JSON.parse(storedPKPDataString);
-            if (
-                storedPKPData &&
-                storedPKPData.pkpEthAddress && isAddress(storedPKPData.pkpEthAddress) &&
-                storedPKPData.pkpPublicKey && typeof storedPKPData.pkpPublicKey === 'string'
-            ) {
-                return {
-                    pkpEthAddress: storedPKPData.pkpEthAddress as Address,
-                    pkpPublicKey: storedPKPData.pkpPublicKey as Hex
-                };
-            }
-        } catch (error) {
-            console.warn('[sendTokenTool] Error parsing mintedPKPData from localStorage:', error);
-            return null;
-        }
-    }
-    return null;
-}
-
 // --- Core sending logic (modified executeSendSahelToGuardian) ---
 async function internalInitiateSendToken(
     params: ExecuteSendTokenParams
 ): Promise<InitiateSendTokenResult> { // Return type changed
     const {
-        pkpPublicKey,
-        pkpEthAddress,
+        pkpEthAddress, // Essential for building the transaction
         recipientGuardianEoaAddress,
         amount,
         sahelTokenDecimals: knownDecimals
@@ -160,12 +126,13 @@ async function internalInitiateSendToken(
         gas: estimatedGas, maxFeePerGas, maxPriorityFeePerGas, chainId: EXPECTED_CHAIN_ID_SAHEL, type: 'eip1559'
     };
 
-    const signingRequestData: PKPSigningRequestData = {
+    // Construct the request for the modal. PKP details are omitted.
+    const signingRequestData: PKPSignTransactionRequest = {
         type: 'transaction',
-        transaction,
-        pkpPublicKey,
-        pkpEthAddress,
-        tokenDecimals: decimalsToUse
+        transaction, // The unsigned transaction
+        tokenDecimals: decimalsToUse // Optional for modal display
+        // pkpPublicKey and pkpEthAddress are NOT included here.
+        // The SignerModal will get them from currentUserPkpProfileStore.
     };
 
     // Call requestPKPSignature but DO NOT await it.
@@ -198,7 +165,6 @@ async function internalInitiateSendToken(
 export async function sendTokenImplementation(parameters: ToolParameters): Promise<string> {
     console.log('[sendTokenTool] Called with parameters:', parameters);
     let finalPkpEthAddress: Address | null = null;
-    let finalPkpPublicKey: Hex | null = null;
     let finalRecipientAddress: Address | null = null;
     let amountToSend: string | null = null;
 
@@ -213,12 +179,16 @@ export async function sendTokenImplementation(parameters: ToolParameters): Promi
             throw new Error('Amount to send is required and must be a positive number string.');
         }
 
-        const storedPkp = await getStoredPKPData();
-        finalPkpEthAddress = (parsedParams.pkpEthAddress && typeof parsedParams.pkpEthAddress === 'string' && isAddress(parsedParams.pkpEthAddress)) ? parsedParams.pkpEthAddress as Address : storedPkp?.pkpEthAddress || null;
-        finalPkpPublicKey = (parsedParams.pkpPublicKey && typeof parsedParams.pkpPublicKey === 'string') ? parsedParams.pkpPublicKey as Hex : storedPkp?.pkpPublicKey || null;
+        // Get PKP details from parameters or fall back to store
+        const profileFromStore: CurrentUserPkpProfile | null = get(currentUserPkpProfileStore);
 
-        if (!finalPkpEthAddress || !finalPkpPublicKey) {
-            throw new Error('Sender PKP details (EthAddress, PublicKey) not provided and could not be retrieved from session/storage.');
+        finalPkpEthAddress = (parsedParams.pkpEthAddress && typeof parsedParams.pkpEthAddress === 'string' && isAddress(parsedParams.pkpEthAddress))
+            ? parsedParams.pkpEthAddress as Address
+            : profileFromStore?.pkpEthAddress || null;
+
+
+        if (!finalPkpEthAddress) {
+            throw new Error('Sender PKP EthAddress not provided and could not be retrieved from session/store.');
         }
 
         // --- Determine Recipient Address --- 
@@ -259,20 +229,14 @@ export async function sendTokenImplementation(parameters: ToolParameters): Promi
                 throw new Error('Recipient Guardian EOA address not provided and could not be retrieved from session/storage.');
             }
         }
-        // -------------------------------------
 
         if (!finalRecipientAddress) { // Should be unreachable if logic above is correct, but good failsafe
             throw new Error('Could not determine recipient address.');
         }
 
-        // LitNodeClient check can be removed if not used for any pre-flight checks
-        // const litNodeClient = get(o.lit.client);
-
-        // SessionSigs fetching is removed.
 
         const result = await internalInitiateSendToken({
-            pkpPublicKey: finalPkpPublicKey,
-            pkpEthAddress: finalPkpEthAddress,
+            pkpEthAddress: finalPkpEthAddress, // Essential for tx construction
             recipientGuardianEoaAddress: finalRecipientAddress,
             amount: amountToSend
         });
