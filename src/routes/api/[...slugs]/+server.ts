@@ -45,12 +45,15 @@ const requireAuth = async ({ request, set }: Context) => {
 }
 
 const betterAuthView = (context: Context) => {
-    const BETTER_AUTH_ACCEPT_METHODS = ["POST", "GET"]
-    // validate request method
+    console.log(`[betterAuthView] Received request: ${context.request.method} ${context.request.url}`);
+    const BETTER_AUTH_ACCEPT_METHODS = ["POST", "GET", "PUT"];
+
     if (BETTER_AUTH_ACCEPT_METHODS.includes(context.request.method)) {
+        console.log(`[betterAuthView] Forwarding to auth.handler.`);
         return auth.handler(context.request);
     } else {
-        context.error(405)
+        console.warn(`[betterAuthView] Method ${context.request.method} not allowed for ${context.request.url}`);
+        context.error(405);
     }
 }
 

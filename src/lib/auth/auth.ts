@@ -1,7 +1,9 @@
 import { env } from '$env/dynamic/private';
 import { betterAuth } from "better-auth";
 import pkg from 'pg';
+import { pkpPasskeyServerPlugin } from './pkp-passkey-plugin'; // Use the server plugin export
 const { Pool } = pkg;
+
 
 let authInstance: ReturnType<typeof betterAuth> | null = null;
 
@@ -31,10 +33,10 @@ export function getAuthClient(): ReturnType<typeof betterAuth> {
             trustedOrigins: [
                 'http://localhost:5173'
             ],
-            session: {
-                expiresIn: 60 * 60 * 24 * 7, // 7 days
-                updateAge: 60 * 60 * 24 // 1 day (every 1 day the session expiration is updated)
-            }
+            plugins: [
+                pkpPasskeyServerPlugin(), // Use the server plugin
+                // ... any other existing plugins (if any)
+            ]
         });
     }
     return authInstance;

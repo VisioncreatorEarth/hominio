@@ -2,6 +2,7 @@ import { createAuthClient } from "better-auth/svelte"
 import { browser } from '$app/environment';
 import { get } from 'svelte/store';
 import type { CapabilityUser } from './hominio-caps';
+import { pkpPasskeyClientPlugin } from '$lib/auth/pkp-passkey-plugin'; // Use the client plugin export
 
 // Local storage key for user ID and peer ID
 const ME_STORAGE_KEY = 'hominio_me';
@@ -31,7 +32,11 @@ export const authClient = createAuthClient({
             enabled: true,
             maxAge: 24 * 60 * 60 // 1 day in seconds
         }
-    }
+    },
+    plugins: [
+        pkpPasskeyClientPlugin(), // Use the client plugin
+        // ... any other existing client plugins (if any)
+    ]
 })
 
 /**
