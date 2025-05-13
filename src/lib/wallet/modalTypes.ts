@@ -1,20 +1,8 @@
 import type { AccessControlConditions } from '@lit-protocol/types'; // Use the general ACC type
-import type { Hex, Address, TransactionSerializable } from 'viem';
-// import type { StoredPasskeyData } from './passkeySigner'; // No longer needed in base request
-
-// Base interface for all PKP signing/operation requests to the modal
-// PKP-specific details are now handled internally by the modal using currentUserPkpProfileStore.
+import type { TransactionSerializable } from 'viem';
 export interface PKPSigningRequestBase {
-    // pkpPublicKey: Hex; // Removed
-    // pkpEthAddress: Address; // Removed
-    // pkpTokenId: string; // Removed
-    // passkeyData: StoredPasskeyData; // Removed
-
-    // Operation-specific fields remain, identified by 'type' and other properties.
-    // For example, 'transaction' for transaction type, 'message' for message type, etc.
 }
 
-// Specific request types now only contain operation-specific data + their 'type' discriminator.
 export interface PKPSignMessageRequest {
     type: 'message';
     message: string;

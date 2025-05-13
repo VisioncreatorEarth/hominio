@@ -39,20 +39,20 @@ export const datilTestChain: Chain = {
 export const datilChain: Chain = {
     id: 175188,
     name: 'Datil Mainnet',
-    nativeCurrency: { name: 'tstLPX', symbol: 'tstLPX', decimals: 18 },
+    nativeCurrency: { name: 'tstLPX', symbol: 'tstLPX', decimals: 18 }, // Assuming this is still correct for mainnet, verify if LPX is used.
     rpcUrls: {
-        default: { http: ['https://yellowstone-explorer.litprotocol.com/'] }, // Replace
-        public: { http: ['https://yellowstone-explorer.litprotocol.com/'] }   // Replace
+        default: { http: ['https://yellowstone-rpc.litprotocol.com/'] },
+        public: { http: ['https://yellowstone-rpc.litprotocol.com/'] }
     },
     blockExplorers: {
-        default: { name: 'Yellowstone Explorer', url: 'https://yellowstone-explorer.litprotocol.com' } // Replace
+        default: { name: 'Yellowstone Explorer', url: 'https://yellowstone-explorer.litprotocol.com' }
     },
-    testnet: true
+    testnet: false // Mainnet should not be marked as testnet
 };
 
 // --- Network Selection ---
 // Change this value to switch between environments
-export const CURRENT_LIT_NETWORK_ENVIRONMENT: LitNetworkEnvironment = 'datil-test' as LitNetworkEnvironment;
+export const CURRENT_LIT_NETWORK_ENVIRONMENT: LitNetworkEnvironment = 'datil' as LitNetworkEnvironment;
 
 // Resolved current chain based on the selected environment
 let resolvedCurrentChain: Chain;

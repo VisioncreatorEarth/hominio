@@ -14,18 +14,14 @@
 		AuthCallbackParams,
 		LitResourceAbilityRequest
 	} from '@lit-protocol/types';
-	import {
-		type StoredPasskeyData,
-		type AuthenticatorAssertionResponse
-	} from '$lib/wallet/passkeySigner';
+	import { type AuthenticatorAssertionResponse } from '$lib/wallet/passkeySigner';
 	import { LitPKPResource, LitActionResource } from '@lit-protocol/auth-helpers';
 	import { getSessionSigsWithGnosisPasskeyVerification, executeLitAction } from '$lib/wallet/lit';
-	import type { Hex, Address } from 'viem';
+	import type { Hex } from 'viem';
 	import { encryptString, decryptToString } from '@lit-protocol/encryption';
 	import { createPublicClient, http, serializeTransaction } from 'viem';
 	import { gnosis } from 'viem/chains';
 	import { LitAbility } from '@lit-protocol/constants';
-	import { browser } from '$app/environment';
 	import {
 		ensurePkpProfileLoaded,
 		currentUserPkpProfileStore,

@@ -24,10 +24,10 @@ const addresses: Record<LitNetworkEnvironment, ContractAddresses> = {
     },
     'datil': {
         // Placeholders - replace with actual datil (production) addresses
-        PKP_PERMISSIONS_CONTRACT_ADDRESS: '0xYourDatilProdPkpPermissionsAddress' as Address,
-        PKP_NFT_CONTRACT_ADDRESS: '0xYourDatilProdPkpNftAddress' as Address,
-        PKP_HELPER_CONTRACT_ADDRESS: '0xYourDatilProdPkpHelperAddress' as Address,
-        RATE_LIMIT_NFT_CONTRACT_ADDRESS: '0xYourDatilProdRateLimitNftAddress' as Address,
+        PKP_PERMISSIONS_CONTRACT_ADDRESS: '0x213Db6E1446928E19588269bEF7dFc9187c4829A' as Address,
+        PKP_NFT_CONTRACT_ADDRESS: '0x487A9D096BB4B7Ac1520Cb12370e31e677B175EA' as Address,
+        PKP_HELPER_CONTRACT_ADDRESS: '0x9123438C2c7c78B53e5081d6d3eA5DFcf51B57f0' as Address,
+        RATE_LIMIT_NFT_CONTRACT_ADDRESS: '0x01205d94Fee4d9F59A4aB24bf80D11d4DdAf6Eed' as Address,
     },
 };
 
