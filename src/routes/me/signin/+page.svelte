@@ -1,20 +1,14 @@
 <script lang="ts">
 	import { onMount, getContext } from 'svelte';
 	import { browser } from '$app/environment';
-	import { get } from 'svelte/store'; // Added for litClientStore
 	import type { HominioFacade } from '$lib/KERNEL/hominio-svelte';
 	import { authClient } from '$lib/KERNEL/hominio-auth';
 	import type { StoredPasskeyData } from '$lib/wallet/passkeySigner';
 	import { generatePasskeyMaterial, deployPasskeySignerContract } from '$lib/wallet/passkeySigner';
-	import {
-		mintPKPWithPasskeyAndAction,
-		gnosisPasskeyVerifyActionCode,
-		getSessionSigsWithGnosisPasskeyVerification // Added import
-	} from '$lib/wallet/lit';
+	import { mintPKPWithPasskeyAndAction, gnosisPasskeyVerifyActionCode } from '$lib/wallet/lit';
 	import { publicKeyToEthAddress } from '$lib/wallet/addressTokenUtils';
 	import type { Hex, Address } from 'viem';
-	import { keccak256, toBytes, hexToBytes } from 'viem'; // Added keccak256, toBytes, hexToBytes
-	import type { LitNodeClient } from '@lit-protocol/lit-node-client'; // Added type import
+	import { keccak256, hexToBytes } from 'viem'; // Added keccak256, toBytes, hexToBytes
 	import type { SessionSigs } from '@lit-protocol/types'; // Added type import
 	import { currentUserPkpProfileStore } from '$lib/stores/pkpSessionStore'; // Import the profile store
 	import type {
@@ -23,13 +17,9 @@
 	} from '$lib/auth/pkp-passkey-plugin';
 	import { requestPKPSignature } from '$lib/wallet/modalStore';
 	import type { PKPAuthenticateSessionRequest } from '$lib/wallet/modalTypes';
-	// TODO: Consider a dedicated store for active PKP session sigs if needed globally
-	// import { writable } from 'svelte/store';
-	// export const activePkpSessionSigs = writable<SessionSigs | null>(null);
 
 	const o = getContext<HominioFacade>('o');
 	const { client: guardianEoaClientStore, address: guardianEoaAddressStore } = o.guardian;
-	const litNodeClientStore = o.lit.client; // Get litNodeClient store
 
 	type FlowState =
 		| 'initial'
@@ -129,7 +119,6 @@
 				const passkey = userInfo.data.pkp_passkey;
 				existingUserPasskeyRawId = passkey.rawId;
 				existingUserPkpPublicKey = passkey.pubKey as Hex;
-				// Now expect username, pubkeyCoordinates, passkeyVerifierContract, and pkpTokenId from backend
 				existingUserPasskeyUsername = passkey.username || null;
 				existingUserPasskeyCoordinates = passkey.pubkeyCoordinates || null;
 				existingUserPasskeyVerifierContract = passkey.passkeyVerifierContract || null;
@@ -172,14 +161,6 @@
 	}
 
 	async function handleSignInWithPasskey() {
-		// const litNodeClient = get(litNodeClientStore); // Modal handles Lit client
-
-		// if (!litNodeClient || !litNodeClient.ready) { // Modal handles Lit client check
-		// 	currentError = 'Lit Protocol client not ready. Please wait or refresh.';
-		// 	flowState = 'error';
-		// 	return;
-		// }
-
 		if (
 			!existingUserPasskeyRawId ||
 			!existingUserPkpPublicKey ||
@@ -199,19 +180,9 @@
 		flowState = 'signInAuthenticating'; // Indicate modal will now handle authentication
 
 		try {
-			const passkeyDataForAuthModal: StoredPasskeyData = {
-				rawId: existingUserPasskeyRawId,
-				pubkeyCoordinates: existingUserPasskeyCoordinates,
-				username: existingUserPasskeyUsername,
-				passkeyVerifierContractAddress: existingUserPasskeyVerifierContract
-			};
-
+			// Construct request without PKP details
 			const authSessionRequest: PKPAuthenticateSessionRequest = {
-				type: 'authenticateSession',
-				pkpPublicKey: existingUserPkpPublicKey as Hex,
-				pkpEthAddress: publicKeyToEthAddress(existingUserPkpPublicKey as Hex) as Address,
-				passkeyData: passkeyDataForAuthModal,
-				pkpTokenId: existingUserPkpTokenId as string
+				type: 'authenticateSession'
 			};
 
 			console.log(
@@ -231,13 +202,31 @@
 			pkpEthAddress = derivedAddress;
 
 			// Populate the currentUserPkpProfileStore
-			if (derivedAddress) {
+			if (
+				derivedAddress &&
+				existingUserPkpPublicKey &&
+				existingUserPasskeyRawId &&
+				existingUserPasskeyCoordinates &&
+				existingUserPasskeyUsername &&
+				existingUserPasskeyVerifierContract &&
+				existingUserPkpTokenId
+			) {
 				currentUserPkpProfileStore.set({
 					pkpEthAddress: derivedAddress,
 					pkpPublicKey: existingUserPkpPublicKey as Hex,
-					passkeyData: passkeyDataForAuthModal, // Use the same passkeyData used for modal
+					passkeyData: {
+						// Reconstruct StoredPasskeyData for the store from existingUser... fields
+						rawId: existingUserPasskeyRawId,
+						pubkeyCoordinates: existingUserPasskeyCoordinates,
+						username: existingUserPasskeyUsername,
+						passkeyVerifierContractAddress: existingUserPasskeyVerifierContract
+					},
 					pkpTokenId: existingUserPkpTokenId as string
 				});
+			} else {
+				console.warn(
+					'[SignInPage] Could not set currentUserPkpProfileStore due to missing details after sign-in.'
+				);
 			}
 
 			flowMessage = `Successfully signed in! Your Hominio Wallet Address: ${pkpEthAddress}`;

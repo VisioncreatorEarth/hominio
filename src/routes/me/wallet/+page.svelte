@@ -195,7 +195,7 @@ go();`);
 	}
 
 	async function handleSignMessageWithPkp() {
-		const currentLitClient = $litClientStore; // Still needed to pass to modal if modal doesn't get from context itself
+		const currentLitClient = $litClientStore;
 		if (!currentLitClient || !currentLitClient.ready) {
 			mainError = 'Lit client not available or not ready.';
 			return;
@@ -204,9 +204,8 @@ go();`);
 			mainError = 'Enter a message to sign.';
 			return;
 		}
-		if (!pkpPublicKey || !pkpEthAddress || !passkeyDataForModal) {
-			mainError =
-				'PKP details or passkey data missing. Ensure wallet is set up and profile loaded.';
+		if (!currentPkpProfile) {
+			mainError = 'PKP Profile not loaded. Cannot initiate signing.';
 			return;
 		}
 
@@ -214,18 +213,13 @@ go();`);
 		resetMainMessages();
 		signatureResult = null;
 
-		const request: PKPSigningRequestData = {
-			pkpPublicKey: pkpPublicKey!,
-			pkpEthAddress: pkpEthAddress!,
-			passkeyData: passkeyDataForModal!,
-			pkpTokenId: pkpTokenId!,
+		// Construct request without PKP details
+		const request: PKPSignMessageRequest = {
 			type: 'message',
 			message: messageToSign
-			// litNodeClient and sessionSigs are handled by the modal
 		};
 
 		try {
-			// requestPKPSignature now returns a promise that resolves with the result or rejects
 			const result = (await requestPKPSignature(request)) as { signature: Hex; dataSigned: Hex };
 			signatureResult = result;
 			mainSuccess = 'Message signed successfully via modal!';
@@ -253,9 +247,8 @@ go();`);
 			mainError = 'Lit client not available or not ready.';
 			return;
 		}
-		if (!pkpPublicKey || !pkpEthAddress || !passkeyDataForModal) {
-			mainError =
-				'PKP details or passkey data missing for Lit Action. Ensure wallet is set up and profile loaded.';
+		if (!currentPkpProfile) {
+			mainError = 'PKP Profile not loaded. Cannot execute Lit Action.';
 			return;
 		}
 
@@ -263,11 +256,8 @@ go();`);
 		resetMainMessages();
 		litActionResult = null;
 
-		const request: PKPSigningRequestData = {
-			pkpPublicKey: pkpPublicKey!,
-			pkpEthAddress: pkpEthAddress!,
-			passkeyData: passkeyDataForModal!,
-			pkpTokenId: pkpTokenId!,
+		// Construct request without PKP details
+		const request: PKPExecuteActionRequest = {
 			type: 'executeAction',
 			actionCode: litActionCodeForExecution,
 			actionJsParams: { magicNumber: magicNumber }
@@ -328,15 +318,12 @@ go();`);
 			}
 		];
 
-		const request: PKPSigningRequestData = {
-			pkpPublicKey: pkpPublicKey!,
-			pkpEthAddress: pkpEthAddress!,
-			passkeyData: passkeyDataForModal!,
-			pkpTokenId: pkpTokenId!,
+		// Construct request without PKP details
+		const request: PKPEncryptRequest = {
 			type: 'encrypt',
 			dataToEncrypt: profileName.trim(),
 			accessControlConditions: accessControlConditions,
-			chain: 'ethereum' // Specify chain for ACCs if necessary
+			chain: 'ethereum'
 		};
 
 		try {
@@ -376,13 +363,12 @@ go();`);
 		if (
 			!browser ||
 			!$litClientStore?.ready ||
-			!encryptedProfileDataString || // SessionSigs removed from this check
-			profileName || // If already decrypted, skip
+			!encryptedProfileDataString ||
+			profileName ||
 			isDecryptingProfile ||
 			isEncryptingProfile ||
-			!pkpPublicKey || // Need PKP details for the request
-			!pkpEthAddress ||
-			!passkeyDataForModal // Need passkey data for the request
+			// PKP details for the request are handled by the modal.
+			!currentPkpProfile // Basic check that profile is loaded
 		) {
 			return;
 		}
@@ -401,11 +387,9 @@ go();`);
 				throw new Error('Stored encrypted data is missing required fields for decryption.');
 			}
 
-			const request: PKPSigningRequestData = {
-				pkpPublicKey: pkpPublicKey!,
-				pkpEthAddress: pkpEthAddress!,
-				passkeyData: passkeyDataForModal!,
-				pkpTokenId: pkpTokenId!,
+			// Construct request without PKP details
+			const decryptModalRequest: PKPDecryptRequest = {
+				// Renamed to avoid conflict if any prior var with same name
 				type: 'decrypt',
 				ciphertext: storedEncryptedData.ciphertext,
 				dataToEncryptHash: storedEncryptedData.dataToEncryptHash,
@@ -413,8 +397,9 @@ go();`);
 				chain: storedEncryptedData.chain || 'ethereum'
 			};
 
-			const decryptedNameStr = (await requestPKPSignature(request)) as string; // Assuming decrypt returns string
-			profileName = decryptedNameStr;
+			// Ensure decryptedNameStr is declared correctly, not redeclared
+			const decryptedResult = (await requestPKPSignature(decryptModalRequest)) as string;
+			profileName = decryptedResult; // Assign to profileName
 			mainSuccess = 'Profile name decrypted and loaded via modal.';
 		} catch (err: unknown) {
 			const message =
@@ -526,14 +511,17 @@ go();`);
 		resetMainMessages();
 		console.log('[WalletPage] Initiating Send Sahel Token process via modal...');
 
-		const currentLitClient = $litClientStore; // For modal, if it needs it explicitly
+		const currentLitClient = $litClientStore;
 
 		// 1. Prerequisite Checks
 		if (!currentLitClient?.ready) {
 			sendSahelError = 'Lit client not ready.';
-		} else if (!pkpPublicKey || !pkpEthAddress || !passkeyDataForModal) {
-			// Session check removed
-			sendSahelError = 'PKP details or passkey data not available.';
+		} else if (
+			!currentPkpProfile ||
+			!pkpPublicKey ||
+			!pkpEthAddress /* passkeyDataForModal and pkpTokenId are implicitly from profile now */
+		) {
+			sendSahelError = 'Core PKP details (PublicKey, EthAddress) from profile not available.';
 		} else if (!$guardianEoaAddressStore) {
 			sendSahelError = 'Guardian EOA address not available.';
 		} else if (!SAHEL_TOKEN_ADDRESS) {
@@ -597,14 +585,11 @@ go();`);
 			};
 
 			// 6. Sign Transaction via Central Modal
-			const request: PKPSigningRequestData = {
-				pkpPublicKey: pkpPublicKey!,
-				pkpEthAddress: pkpEthAddress!,
-				passkeyData: passkeyDataForModal!,
-				pkpTokenId: pkpTokenId!,
+			// Construct request without PKP details
+			const request: PKPSignTransactionRequest = {
 				type: 'transaction',
 				transaction: unsignedTx,
-				tokenDecimals: pkpSahelTokenDecimals // For display in modal
+				tokenDecimals: pkpSahelTokenDecimals
 			};
 
 			const signature = (await requestPKPSignature(request)) as Signature;
