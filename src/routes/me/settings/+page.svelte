@@ -31,11 +31,26 @@
 
 	const o = getContext<HominioFacade>('o');
 
-	// State for user profile / general settings
-	let userEmail = $state<string | null>(null);
-	let userId = $state<string | null>(null);
-	let userProvider = $state<string | null>(null);
-	let userCreatedAt = $state<string | null>(null);
+	// Reactive user session data using $state and $effect for subscription
+	const sessionStore = authClient.useSession();
+	let sessionState = $state(get(sessionStore)); // Initialize with current sync value
+
+	$effect(() => {
+		const unsubscribe = sessionStore.subscribe((value) => {
+			sessionState = value; // Update $state when store emits new values
+		});
+		return unsubscribe; // Cleanup subscription
+	});
+
+	// Derive dependent states from the reactive sessionState rune
+	const isSessionPending = $derived(sessionState?.isPending ?? true);
+	const sessionUser = $derived(sessionState?.data?.user);
+
+	let userEmailDisplay = $derived(sessionUser?.email || 'N/A');
+	let userIdDisplay = $derived(sessionUser?.id || 'N/A');
+	let userCreatedAtDisplay = $derived(
+		sessionUser?.createdAt ? new Date(sessionUser.createdAt).toLocaleDateString() : 'N/A'
+	);
 
 	let currentPkpProfile = $state<CurrentUserPkpProfile | null>(null);
 
@@ -45,7 +60,7 @@
 	let isLoadingWalletDetails = $state(false);
 	let walletDetailsError = $state<string | null>(null);
 
-	let generalIsLoading = $state(true);
+	let generalIsLoading = $state(true); // For ensurePkpProfileLoaded and initial UI state
 	let mainError = $state<string | null>(null);
 	let mainSuccess = $state<string | null>(null);
 
@@ -60,38 +75,12 @@
 		currentPkpProfile = value;
 	});
 
-	let userSessionPayload: { user: any; session: any } | null = null;
-
 	$effect(() => {
 		async function setupPage() {
 			generalIsLoading = true;
-
-			const sessionStore = authClient.useSession();
-			const actualSessionValue = get(sessionStore);
-
-			if (actualSessionValue && actualSessionValue.data) {
-				userSessionPayload = actualSessionValue.data;
-				if (userSessionPayload.user) {
-					userEmail = userSessionPayload.user.email || 'N/A';
-					userId = userSessionPayload.user.id;
-					const userObjectForProvider = userSessionPayload.user as any;
-					userProvider = userObjectForProvider.providerId
-						? userObjectForProvider.providerId.split('_')[0]
-						: 'N/A';
-					userCreatedAt = userSessionPayload.user.createdAt
-						? new Date(userSessionPayload.user.createdAt).toLocaleDateString()
-						: 'N/A';
-				}
-			} else {
-				userSessionPayload = null;
-				userEmail = 'N/A';
-				userId = 'N/A';
-				userProvider = 'N/A';
-				userCreatedAt = 'N/A';
-			}
-
+			console.log('[SettingsPage] Initializing page, ensuring PKP profile is loaded...');
 			await ensurePkpProfileLoaded();
-
+			console.log('[SettingsPage] PKP profile loading process complete.');
 			generalIsLoading = false;
 		}
 
@@ -232,20 +221,31 @@
 				>
 					Account
 				</h2>
-				<div class="space-y-4">
-					<div>
-						<label class="text-prussian-blue/70 block text-sm font-medium">User ID</label>
-						<p class="text-prussian-blue mt-1 text-sm">{userId || 'N/A'}</p>
+				{#if isSessionPending}
+					<div class="flex items-center justify-start p-4">
+						<div class="spinner text-prussian-blue/80 mr-3 h-5 w-5"></div>
+						<p class="text-prussian-blue/80 text-sm">Loading account details...</p>
 					</div>
-					<div>
-						<label class="text-prussian-blue/70 block text-sm font-medium">Email</label>
-						<p class="text-prussian-blue mt-1 text-sm">{userEmail || 'N/A'}</p>
+				{:else if sessionUser}
+					<div class="space-y-4">
+						<div>
+							<label class="text-prussian-blue/70 block text-sm font-medium">User ID</label>
+							<p class="text-prussian-blue mt-1 text-sm">{userIdDisplay}</p>
+						</div>
+						<div>
+							<label class="text-prussian-blue/70 block text-sm font-medium">Email</label>
+							<p class="text-prussian-blue mt-1 text-sm">{userEmailDisplay}</p>
+						</div>
+						<div>
+							<label class="text-prussian-blue/70 block text-sm font-medium">Joined On</label>
+							<p class="text-prussian-blue mt-1 text-sm">{userCreatedAtDisplay}</p>
+						</div>
 					</div>
-					<div>
-						<label class="text-prussian-blue/70 block text-sm font-medium">Joined On</label>
-						<p class="text-prussian-blue mt-1 text-sm">{userCreatedAt || 'N/A'}</p>
-					</div>
-				</div>
+				{:else}
+					<p class="text-prussian-blue/70 p-4 text-sm">
+						Account details are not available. You may need to log in again.
+					</p>
+				{/if}
 			{:else if selectedSettingsSectionId === 'wallet'}
 				<h2
 					class="border-prussian-blue/20 text-prussian-blue mb-6 border-b pb-4 text-2xl font-semibold"
