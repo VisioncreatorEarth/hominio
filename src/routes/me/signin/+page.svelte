@@ -209,8 +209,9 @@
 			const authSessionRequest: PKPAuthenticateSessionRequest = {
 				type: 'authenticateSession',
 				pkpPublicKey: existingUserPkpPublicKey as Hex,
-				pkpEthAddress: publicKeyToEthAddress(existingUserPkpPublicKey as Hex) as Address, // Derive address for modal if needed, or modal can do it
-				passkeyData: passkeyDataForAuthModal
+				pkpEthAddress: publicKeyToEthAddress(existingUserPkpPublicKey as Hex) as Address,
+				passkeyData: passkeyDataForAuthModal,
+				pkpTokenId: existingUserPkpTokenId as string
 			};
 
 			console.log(

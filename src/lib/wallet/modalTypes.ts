@@ -3,11 +3,14 @@ import type { Hex, Address, TransactionSerializable } from 'viem';
 import type { StoredPasskeyData } from './passkeySigner'; // Import StoredPasskeyData
 // import type { AccessControlConditions } from '@lit-protocol/types'; // Placeholder
 
-// Base request structure
-interface PKPSigningRequestBase {
+// Base interface for all PKP signing/operation requests to the modal
+export interface PKPSigningRequestBase {
     pkpPublicKey: Hex;
     pkpEthAddress: Address;
-    passkeyData: StoredPasskeyData; // Added passkeyData
+    pkpTokenId: string; // Made required
+    passkeyData: StoredPasskeyData; // For Gnosis Passkey flow directly within the modal
+    // Optional fields that vary by specific operation type
+    transaction?: TransactionSerializable; // For 'transaction' type
     // litNodeClient and sessionSigs are handled by the modal internally or via pkpSessionStore
     // and should not be passed by the calling page anymore.
     // litNodeClient?: LitNodeClient; 

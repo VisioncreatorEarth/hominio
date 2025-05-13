@@ -14,12 +14,13 @@
 		type AuthenticatorAssertionResponse
 	} from '$lib/wallet/passkeySigner';
 	import { LitPKPResource, LitActionResource } from '@lit-protocol/auth-helpers';
-	import { browser } from '$app/environment';
 	import { getSessionSigsWithGnosisPasskeyVerification, executeLitAction } from '$lib/wallet/lit';
-	import type { Hex } from 'viem';
+	import type { Hex, Address } from 'viem';
 	import { encryptString, decryptToString } from '@lit-protocol/encryption';
 	import { createPublicClient, http, serializeTransaction } from 'viem';
 	import { gnosis } from 'viem/chains';
+	import { LitAbility } from '@lit-protocol/constants';
+	import { browser } from '$app/environment';
 
 	const sahelPhaseConfig = roadmapConfig.phases.find((p) => p.name === 'Sahelanthropus');
 	const GNOSIS_RPC_URL = sahelPhaseConfig?.rpcUrls?.default?.http?.[0];
@@ -258,39 +259,20 @@
 	}
 
 	// Task 1.3: Define internalPasskeyAuthCallback (shell initially, then more complete)
+	// This function is currently not directly used by the primary flow after Gnosis passkey integration.
+	// The Gnosis-specific passkey flow is handled by getSessionSigsWithGnosisPasskeyVerification.
+	// For the new authNeededCallback, we will inline similar logic or call a helper.
 	async function internalPasskeyAuthCallback(params: AuthCallbackParams): Promise<AuthSig> {
-		console.log('[SignerModal] internalPasskeyAuthCallback triggered', params);
-		if (
-			!browser ||
-			!requestData?.passkeyData ||
-			!requestData?.pkpPublicKey ||
-			!internalLitNodeClient
-		) {
-			throw new Error(
-				'Passkey auth callback: Missing browser, stored passkey, PKP public key, or Lit client.'
-			);
-		}
-
-		passkeyLoginUIVisible = true;
-		isSessionLoading = true; // Indicate passkey interaction is a form of session loading
-		currentErrorInternal = null;
-
-		try {
-			console.error(
-				'internalPasskeyAuthCallback: This path might be incorrect for Gnosis EIP-1271 passkeys. Expecting direct call to getSessionSigsWithGnosisPasskeyVerification.'
-			);
-			throw new Error(
-				'Passkey authentication via generic authNeededCallback not fully implemented for this EIP-1271 setup. Use dedicated Gnosis passkey session function.'
-			);
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			currentErrorInternal = `Passkey Auth Error: ${msg}`;
-			showError(currentErrorInternal);
-			throw err; // Rethrow to fail the getSessionSigs call
-		} finally {
-			passkeyLoginUIVisible = false; // Hide prompt once done or failed
-			isSessionLoading = false;
-		}
+		console.warn(
+			'[SignerModal] internalPasskeyAuthCallback triggered, but flow should be managed by new getSessionSigsForOperation with inline Gnosis passkey auth.',
+			params
+		);
+		// This specific implementation might need to be revisited if Lit SDK's generic getSessionSigs
+		// requires this exact callback structure for Gnosis passkeys AND if getSessionSigsWithGnosisPasskeyVerification
+		// isn't suitable for direct use within it. For now, the primary path will be the new helper.
+		throw new Error(
+			'internalPasskeyAuthCallback not fully wired for the new Gnosis passkey session flow via getSessionSigs. Should be handled within authNeededCallback of getSessionSigsForOperation.'
+		);
 	}
 
 	// Task 1.4 (and 2.x stubs)
@@ -403,17 +385,70 @@
 
 	// New function to encapsulate passkey interaction and session fetching
 	async function initiatePasskeyAuthenticationAndGetSigs() {
-		if (!internalLitNodeClient || !requestData || !requestData.passkeyData) {
+		// Ensure requestData and its nested properties are checked before use
+		if (
+			!internalLitNodeClient ||
+			!requestData || // Check requestData itself
+			!requestData.passkeyData ||
+			!requestData.pkpPublicKey // pkpPublicKey is used for logging/context
+		) {
 			showError(
-				'Cannot initiate passkey auth: Lit client, request data, or passkey details missing from request.'
+				'Cannot initiate passkey auth: Lit client, request data, PKP public key, or passkey details missing.'
 			);
 			passkeyLoginUIVisible = false;
 			isSessionLoading = false;
-			return;
+			// For the direct flow, throwing might be better so handleApproveOperation catches it.
+			throw new Error(
+				'Lit client, request data, PKP public key, or passkey details missing for initiatePasskeyAuthenticationAndGetSigs'
+			);
 		}
 
-		// passkeyLoginUIVisible should be true already, set by the confirmation step
-		// isSessionLoading should be true already, set by the confirmation step
+		// For generating the AuthSig via passkey authentication, we should always request
+		// a signature for the wildcard PKP resource. This provides a general AuthSig
+		// for the PKP, which the Lit SDK can then use to derive more specific SessionSigs
+		// for the actual operation if needed.
+		const pkpResourceForAuthSig = new LitPKPResource('*');
+		console.log(
+			`[SignerModal-initiatePasskeyAuth] Using LitPKPResource("*") to generate a general AuthSig for PKP ${requestData.pkpPublicKey}, regardless of operation type "${requestData.type}".`
+		);
+		const resourceAbilityRequestsForAuthSig = [
+			{ resource: pkpResourceForAuthSig, ability: LitAbility.PKPSigning }
+		];
+
+		// If the operation is to execute a Lit Action, we also need to request permission
+		// for LitActionExecution. For now, use a wildcard action resource.
+		// Ideally, this would be scoped to the specific action's IPFS CID if available.
+		if (requestData.type === 'executeAction') {
+			resourceAbilityRequestsForAuthSig.push({
+				resource: new LitActionResource('*'), // Wildcard for now
+				ability: LitAbility.LitActionExecution
+			});
+			console.log(
+				'[SignerModal-initiatePasskeyAuth] Added wildcard LitActionResource for executeAction type.'
+			);
+		}
+
+		const { passkeyData, pkpPublicKey } = requestData; // pkpPublicKey for logging
+		const { rawId, pubkeyCoordinates, passkeyVerifierContractAddress } = passkeyData;
+
+		if (!rawId || !pubkeyCoordinates || !passkeyVerifierContractAddress) {
+			throw new Error('Invalid passkey data format.');
+		}
+
+		// The pkpTokenId check for non-'authenticateSession' types might still be relevant
+		// if other parts of the system rely on it being present in requestData, but it's not used
+		// for constructing the LitPKPResource in THIS function anymore for AuthSig generation.
+		if (requestData.type !== 'authenticateSession' && !requestData.pkpTokenId) {
+			showError(
+				`Cannot initiate passkey auth: pkpTokenId is missing in requestData for operation type '${requestData.type}'. This might be needed by other parts of the flow.`
+			);
+			passkeyLoginUIVisible = false;
+			isSessionLoading = false;
+			throw new Error(`pkpTokenId is missing for ${requestData.type}`);
+		}
+
+		// passkeyLoginUIVisible should be true already, set by the confirmation step in handleApproveOperation
+		// isSessionLoading should be true already, set by the confirmation step in handleApproveOperation
 		currentErrorInternal = null;
 
 		try {
@@ -422,57 +457,22 @@
 				requestData.pkpPublicKey
 			);
 
-			const sessionChallengeMessage = `Login to Hominio Signer Modal for PKP: ${requestData.pkpPublicKey} at ${new Date().toISOString()}`;
+			// Simplify the sessionChallengeMessage to avoid potential length issues if it's parsed as a resource ID.
+			// The pkpPublicKey is already an explicit parameter to getSessionSigsWithGnosisPasskeyVerification.
+			const sessionChallengeMessage = `Sign in to Hominio PKP Wallet via Passkey at ${new Date().toISOString()}`;
+			// const sessionChallengeMessage = `Login to Hominio Signer Modal for PKP: ${requestData.pkpPublicKey} at ${new Date().toISOString()}`;
 			const messageHashAsChallenge = keccak256(new TextEncoder().encode(sessionChallengeMessage));
 			const rawIdBytes = hexToBytes(requestData.passkeyData.rawId as Hex);
 
-			let pkpResource = new LitPKPResource('*');
-			let actionResource = new LitActionResource('*');
-			let resourceAbilityRequests;
-			switch (requestData.type) {
-				case 'message':
-				case 'transaction':
-				case 'encrypt':
-				case 'decrypt':
-					resourceAbilityRequests = [
-						{
-							resource: pkpResource,
-							ability: 'pkp-signing' as const
-						}
-					];
-					break;
-				case 'executeAction':
-					resourceAbilityRequests = [
-						{
-							resource: pkpResource,
-							ability: 'pkp-signing' as const
-						},
-						{
-							resource: actionResource,
-							ability: 'lit-action-execution' as const
-						}
-					];
-					break;
-				case 'authenticateSession':
-					resourceAbilityRequests = [
-						{
-							resource: pkpResource,
-							ability: 'pkp-signing' as const
-						},
-						{
-							resource: actionResource,
-							ability: 'lit-action-execution' as const
-						}
-					];
-					break;
-				default:
-					throw new Error('Unsupported operation type for resource capabilities.');
-			}
+			// REMOVED the switch statement that was incorrectly redefining pkpResource and resourceAbilityRequests
+			// using requestData.pkpTokenId, which caused the length error.
+			// We will ALWAYS use resourceAbilityRequestsForAuthSig (with LitPKPResource('*'))
+			// for the getSessionSigsWithGnosisPasskeyVerification call in this function.
 
 			console.log(
-				'[SignerModal] Effective Resource Keys for Session Sigs:',
+				'[SignerModal] resourceAbilityRequestsForAuthSig (for Gnosis direct - ALWAYS USE WILDCARD HERE):',
 				JSON.stringify(
-					resourceAbilityRequests.map((rar) => ({
+					resourceAbilityRequestsForAuthSig.map((rar) => ({
 						resourceKey: rar.resource.getResourceKey(),
 						ability: rar.ability
 					})),
@@ -497,54 +497,122 @@
 				throw new Error('Failed to get valid signature assertion from passkey.');
 			}
 
-			const sessionExpiration = new Date(Date.now() + 1 * 60 * 1000).toISOString(); // 1 minute expiration
+			// For the AuthSig generated here, it should be longer lived.
+			// The SessionSigs derived from it will have shorter, operation-specific expiries.
+			// Lit SDK defaults usually handle AuthSig expiry unless overridden.
+			// The sessionExpiration here is for the SessionSigs being generated by getSessionSigsWithGnosisPasskeyVerification.
+			const sessionExpiration = new Date(Date.now() + 1 * 60 * 1000).toISOString(); // 1 minute for this specific session sig
 
 			const newSessionSigs = await getSessionSigsWithGnosisPasskeyVerification(
 				internalLitNodeClient,
-				requestData.pkpPublicKey,
+				requestData.pkpPublicKey as Hex,
 				sessionChallengeMessage,
 				assertion.response as AuthenticatorAssertionResponse,
 				requestData.passkeyData,
 				'ethereum', // Or requestData.chain if applicable for the session context
-				resourceAbilityRequests,
-				sessionExpiration // Pass the 1-minute expiration
+				resourceAbilityRequestsForAuthSig, // ALWAYS use the wildcard resource for AuthSig generation
+				sessionExpiration // This expiration is for the SessionSigs
 			);
-			internalSessionSigs = newSessionSigs;
-			passkeyLoginUIVisible = false; // Hide passkey prompt, back to main modal view
-			console.log('[SignerModal] Successfully obtained new sessionSigs with 1-min expiration.');
 
-			if (!internalSessionSigs) {
-				throw new Error('Failed to obtain PKP session after passkey. Cannot proceed.');
+			console.log(
+				'[SignerModal-initiatePasskeyAuth] Successfully obtained new sessionSigs with Gnosis direct method.'
+			);
+
+			if (!newSessionSigs) {
+				throw new Error(
+					'Failed to obtain PKP session after passkey (Gnosis direct). Cannot proceed.'
+				);
 			}
-
-			await executeRequestedOperation(internalSessionSigs);
+			return newSessionSigs;
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
-			showError(`Passkey Auth/Session Error: ${msg}`);
-			passkeyLoginUIVisible = false; // Ensure UI is reset on error
+			console.error(
+				'[SignerModal-initiatePasskeyAuth] Error during Gnosis direct passkey auth:',
+				msg,
+				err
+			);
+			// showError will be called by the calling function (handleApproveOperation)
+			throw err; // Rethrow for the caller to handle UI error display
 		} finally {
-			isSessionLoading = false;
+			// UI state like passkeyLoginUIVisible and isSessionLoading will be managed by handleApproveOperation
 		}
 	}
 
 	// Task 1.2: Implement Session Acquisition and Operation Orchestration
 	async function handleApproveOperation() {
+		console.log('[SignerModal] handleApproveOperation called.');
 		if (
 			!internalLitNodeClient ||
 			!internalLitNodeClient.ready ||
 			!requestData ||
-			!requestData.passkeyData
+			!requestData.passkeyData || // passkeyData is crucial
+			!requestData.pkpPublicKey ||
+			!requestData.pkpEthAddress
 		) {
-			showError(
-				'Lit client not ready, request data missing, or no passkey details available in request.'
-			);
+			const errorMsg =
+				'Lit client not ready, request data missing, or crucial PKP/passkey details unavailable.';
+			console.error('[SignerModal handleApproveOperation] Pre-check failed:', errorMsg, {
+				clientReady: internalLitNodeClient?.ready,
+				hasRequestData: !!requestData,
+				hasPasskeyData: !!requestData?.passkeyData,
+				hasPkpPublicKey: !!requestData?.pkpPublicKey,
+				hasPkpEthAddress: !!requestData?.pkpEthAddress
+			});
+			showError(errorMsg);
 			return;
 		}
 		currentErrorInternal = null;
 		signResult = null;
+
+		// Show passkey UI and set loading states before calling initiatePasskeyAuthenticationAndGetSigs
 		passkeyLoginUIVisible = true;
 		isSessionLoading = true;
-		await initiatePasskeyAuthenticationAndGetSigs();
+		isSigning = true; // Indicates overall operation processing, including passkey auth
+
+		try {
+			console.log(
+				'[SignerModal handleApproveOperation] Calling initiatePasskeyAuthenticationAndGetSigs directly.'
+			);
+			const newSessionSigs = await initiatePasskeyAuthenticationAndGetSigs();
+
+			// If initiatePasskeyAuthenticationAndGetSigs was successful, newSessionSigs is populated.
+			// It would have thrown an error if it failed, which would be caught below.
+
+			internalSessionSigs = newSessionSigs;
+			console.log(
+				'[SignerModal handleApproveOperation] Successfully obtained sessionSigs directly, proceeding to execute.',
+				newSessionSigs
+			);
+
+			// Hide passkey UI as authentication is done
+			passkeyLoginUIVisible = false;
+			// isSessionLoading might be set false here or in executeRequestedOperation's finally block
+			// isSigning remains true until executeRequestedOperation finishes
+
+			console.log('[SignerModal handleApproveOperation] Calling executeRequestedOperation.');
+			await executeRequestedOperation(newSessionSigs);
+			console.log('[SignerModal handleApproveOperation] executeRequestedOperation completed.');
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.error('[SignerModal handleApproveOperation] Error in main try block:', msg, err);
+			if (
+				msg.toLowerCase().includes('user cancelled') ||
+				msg.includes('Authentication declined') ||
+				msg.includes('The operation was aborted') ||
+				msg.includes('declined by user') ||
+				msg.includes('The request is not allowed by the user agent or the platform')
+			) {
+				showError('Operation cancelled or rejected by user.');
+			} else {
+				showError(`Approval Failed: ${msg}`);
+			}
+		} finally {
+			// Reset all loading/UI states here to ensure consistency
+			isSigning = false;
+			isSessionLoading = false;
+			passkeyLoginUIVisible = false;
+			console.log('[SignerModal handleApproveOperation] Exiting finally block.');
+		}
 	}
 
 	function handleCancel() {
@@ -577,32 +645,32 @@
 	{#if signResult && !passkeyLoginUIVisible}
 		<div
 			class="mb-6 w-full max-w-xl rounded-xl border-2 {signResult.success
-				? 'border-green-400 bg-green-50'
+				? 'border-prussian-blue/60 bg-prussian-blue/10'
 				: 'border-red-400 bg-red-50'} flex items-center gap-3 p-6 text-base shadow-md"
 		>
 			{#if signResult.success}
 				<svg
-					class="h-8 w-8 text-green-500"
+					class="text-prussian-blue h-8 w-8"
 					fill="none"
 					stroke="currentColor"
 					stroke-width="2"
 					viewBox="0 0 24 24"
 					><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" /></svg
 				>
-				<span class="text-lg font-semibold text-green-700">{signResult.message}</span>
+				<span class="text-prussian-blue text-lg font-semibold">{signResult.message}</span>
 				{#if lastTxHash}
 					<div class="mt-2 w-full">
-						<p class="text-xs text-green-700">Transaction Hash:</p>
+						<p class="text-prussian-blue/80 text-xs">Transaction Hash:</p>
 						{#if explorerBaseUrl}
 							<a
 								href={`${explorerBaseUrl.endsWith('/') ? explorerBaseUrl : explorerBaseUrl + '/'}tx/${lastTxHash}`}
 								target="_blank"
 								rel="noopener noreferrer"
-								class="block rounded bg-green-200 p-1 break-all text-green-800 hover:underline"
+								class="bg-prussian-blue/20 text-prussian-blue block rounded p-1 break-all hover:underline"
 								>{lastTxHash}</a
 							>
 						{:else}
-							<code class="block rounded bg-green-200 p-1 break-all text-green-800"
+							<code class="bg-prussian-blue/20 text-prussian-blue block rounded p-1 break-all"
 								>{lastTxHash}</code
 							>
 						{/if}
@@ -881,24 +949,29 @@
 		</div>
 	{/if}
 
-	<div class="mt-4 flex w-full max-w-xl justify-between gap-2">
+	<div class="mt-4 flex w-full max-w-xl justify-between gap-3">
 		<button
-			class="rounded bg-slate-200 px-4 py-2 text-slate-700 hover:bg-slate-300"
+			class="rounded-md border border-red-500 px-4 py-2 text-sm font-semibold text-red-500 hover:bg-red-50/50 focus:ring-2 focus:ring-red-400 focus:ring-offset-2 focus:outline-none disabled:opacity-50"
 			on:click={handleCancel}
-			disabled={isSigning || isSessionLoading}>Cancel</button
+			disabled={isSigning || (passkeyLoginUIVisible && isSessionLoading)}
 		>
+			Decline
+		</button>
 		<button
-			class="rounded bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+			class="bg-prussian-blue text-linen hover:bg-prussian-blue/90 focus:ring-prussian-blue focus:ring-opacity-50 rounded-md px-4 py-2 text-sm font-semibold focus:ring-2 focus:outline-none disabled:opacity-50"
 			on:click={handleApproveOperation}
 			disabled={isSigning ||
-				isSessionLoading ||
+				(passkeyLoginUIVisible && isSessionLoading) ||
 				!internalLitNodeClient?.ready ||
-				!requestData?.passkeyData ||
-				passkeyLoginUIVisible}
+				!requestData?.passkeyData}
 		>
-			{#if isSessionLoading && !passkeyLoginUIVisible}<span class="spinner mr-2"></span>Checking
-				Session...{:else if isSigning}<span class="spinner mr-2"
-				></span>Processing...{:else}Approve{/if}
+			{#if isSessionLoading && passkeyLoginUIVisible}
+				<span class="spinner mr-2"></span>Authenticating Passkey...
+			{:else if isSigning}
+				<span class="spinner mr-2"></span>Processing...
+			{:else if isSessionLoading}
+				<span class="spinner mr-2"></span>Preparing Session...
+			{:else}Approve{/if}
 		</button>
 	</div>
 </div>

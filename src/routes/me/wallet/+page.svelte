@@ -218,6 +218,7 @@ go();`);
 			pkpPublicKey: pkpPublicKey!,
 			pkpEthAddress: pkpEthAddress!,
 			passkeyData: passkeyDataForModal!,
+			pkpTokenId: pkpTokenId!,
 			type: 'message',
 			message: messageToSign
 			// litNodeClient and sessionSigs are handled by the modal
@@ -266,6 +267,7 @@ go();`);
 			pkpPublicKey: pkpPublicKey!,
 			pkpEthAddress: pkpEthAddress!,
 			passkeyData: passkeyDataForModal!,
+			pkpTokenId: pkpTokenId!,
 			type: 'executeAction',
 			actionCode: litActionCodeForExecution,
 			actionJsParams: { magicNumber: magicNumber }
@@ -330,6 +332,7 @@ go();`);
 			pkpPublicKey: pkpPublicKey!,
 			pkpEthAddress: pkpEthAddress!,
 			passkeyData: passkeyDataForModal!,
+			pkpTokenId: pkpTokenId!,
 			type: 'encrypt',
 			dataToEncrypt: profileName.trim(),
 			accessControlConditions: accessControlConditions,
@@ -402,6 +405,7 @@ go();`);
 				pkpPublicKey: pkpPublicKey!,
 				pkpEthAddress: pkpEthAddress!,
 				passkeyData: passkeyDataForModal!,
+				pkpTokenId: pkpTokenId!,
 				type: 'decrypt',
 				ciphertext: storedEncryptedData.ciphertext,
 				dataToEncryptHash: storedEncryptedData.dataToEncryptHash,
@@ -597,6 +601,7 @@ go();`);
 				pkpPublicKey: pkpPublicKey!,
 				pkpEthAddress: pkpEthAddress!,
 				passkeyData: passkeyDataForModal!,
+				pkpTokenId: pkpTokenId!,
 				type: 'transaction',
 				transaction: unsignedTx,
 				tokenDecimals: pkpSahelTokenDecimals // For display in modal
