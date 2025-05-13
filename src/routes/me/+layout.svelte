@@ -4,19 +4,33 @@
 	import type { LayoutData } from './$types';
 	import { browser } from '$app/environment';
 	import { o } from '$lib/KERNEL/hominio-svelte';
-	import { setContext } from 'svelte';
+	import { setContext, onMount } from 'svelte';
 	import { pageMetadataStore } from '$lib/stores/layoutStore';
+	import { get } from 'svelte/store';
 
 	setContext('o', o);
 
-	export let data: LayoutData;
+	onMount(() => {
+		if (browser) {
+			o.pkp.initializeProfileState();
+		}
+	});
 
-	$: {
-		if (browser && !data.session) {
-			console.log('[Layout /me] No session detected on client, redirecting to /');
+	$effect(() => {
+		if (browser && o.pkp) {
+			const profile = get(o.pkp.profile);
+			console.log('[Me Layout] Facade PKP Profile in Layout:', profile);
+		}
+	});
+
+	let { data } = $props<{ data: LayoutData }>();
+
+	$effect(() => {
+		if (browser && data && !data.session) {
+			console.log('[Layout /me] No session detected on client (via $effect), redirecting to /');
 			goto('/');
 		}
-	}
+	});
 </script>
 
 <div class="flex h-screen flex-col bg-[#f8f4ed]">

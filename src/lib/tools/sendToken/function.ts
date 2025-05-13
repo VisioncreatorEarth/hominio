@@ -16,7 +16,6 @@ import { requestPKPSignature } from '$lib/wallet/modalStore';
 import type { PKPSignTransactionRequest } from '$lib/wallet/modalTypes'; // Changed to specific type
 import { queryPrenusImplementation } from '$lib/tools/queryPrenus/function';
 import type { AggregatedPrenuResult } from '$lib/tools/queryPrenus/function'; // Import result type
-import { currentUserPkpProfileStore, type CurrentUserPkpProfile } from '$lib/stores/pkpSessionStore'; // Added PKP profile store
 
 // --- Configuration from roadmap ---
 const sahelPhaseConfig = roadmapConfig.phases.find((p) => p.name === 'Sahelanthropus');
@@ -179,16 +178,17 @@ export async function sendTokenImplementation(parameters: ToolParameters): Promi
             throw new Error('Amount to send is required and must be a positive number string.');
         }
 
-        // Get PKP details from parameters or fall back to store
-        const profileFromStore: CurrentUserPkpProfile | null = get(currentUserPkpProfileStore);
-
-        finalPkpEthAddress = (parsedParams.pkpEthAddress && typeof parsedParams.pkpEthAddress === 'string' && isAddress(parsedParams.pkpEthAddress))
-            ? parsedParams.pkpEthAddress as Address
-            : profileFromStore?.pkpEthAddress || null;
-
-
-        if (!finalPkpEthAddress) {
-            throw new Error('Sender PKP EthAddress not provided and could not be retrieved from session/store.');
+        // pkpEthAddress is mandatory as per manifest, but add fallback from facade if AI doesn't provide it
+        if (parsedParams.pkpEthAddress && typeof parsedParams.pkpEthAddress === 'string' && isAddress(parsedParams.pkpEthAddress)) {
+            finalPkpEthAddress = parsedParams.pkpEthAddress as Address;
+        } else {
+            const profileFromFacade = get(o.pkp.profile);
+            if (profileFromFacade && profileFromFacade.pkpEthAddress) {
+                finalPkpEthAddress = profileFromFacade.pkpEthAddress;
+                console.warn('[sendTokenTool] pkpEthAddress was not provided in parameters by the AI. Using value from o.pkp.profile as a fallback. The AI or tool-calling mechanism should be updated to provide this directly if possible.');
+            } else {
+                throw new Error('Required parameter "pkpEthAddress" (sender PKP Ethereum address) is missing, invalid, or not a valid Ethereum address, and could not be retrieved from the application context (o.pkp.profile).');
+            }
         }
 
         // --- Determine Recipient Address --- 
@@ -222,7 +222,7 @@ export async function sendTokenImplementation(parameters: ToolParameters): Promi
             }
         } else {
             // No recipient input, default to Guardian EOA
-            const guardianAddressFromStore = get(o.guardian.address);
+            const guardianAddressFromStore = get(o.guardian.address); // This get() is for the guardian's address, not the PKP's.
             finalRecipientAddress = guardianAddressFromStore;
             console.log(`[sendTokenTool] No recipient specified, defaulting to Guardian EOA: ${finalRecipientAddress}`);
             if (!finalRecipientAddress) {

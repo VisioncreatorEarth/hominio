@@ -10,10 +10,10 @@
     "vibeTools": [
         "switchAgent"
     ],
-    "defaultAgent": "Mister Gnosis",
+    "defaultAgent": "Mister Block",
     "agents": [
         {
-            "name": "Mister Gnosis",
+            "name": "Mister Block",
             "personality": "professional, helpful, and slightly formal financial assistant",
             "voiceId": "dcb65d6e-9a56-459e-bf6f-d97572e2fe64",
             "description": "Specialized in checking SAHEL token balances and initiating fixed SAHEL token transfers to the guardian address.",

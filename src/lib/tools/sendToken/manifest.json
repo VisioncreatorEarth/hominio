@@ -5,8 +5,17 @@
     "color": "emerald",
     "temporaryTool": {
         "modelToolName": "sendToken",
-        "description": "Sends a specified amount of SAHEL token from the user's current Programmatic Key Pair (PKP) address. The recipient can be specified by their name (if they are a known prenu with a linked wallet) or by their direct ETH address. If no recipient is specified, it defaults to the user's primary Guardian EOA address.",
+        "description": "Sends a specified amount of SAHEL token from the user's provided Programmatic Key Pair (PKP) address. The PKP address, amount, and recipient are required. The recipient can be specified by their name (if they are a known prenu with a linked wallet) or by their direct ETH address. If no recipient is specified, it defaults to the user's primary Guardian EOA address.",
         "dynamicParameters": [
+            {
+                "name": "pkpEthAddress",
+                "location": "PARAMETER_LOCATION_BODY",
+                "schema": {
+                    "type": "string",
+                    "description": "Required. The sender's PKP Ethereum address."
+                },
+                "required": true
+            },
             {
                 "name": "amount",
                 "location": "PARAMETER_LOCATION_BODY",

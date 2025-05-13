@@ -3,11 +3,6 @@
 	import { browser } from '$app/environment';
 	import { get } from 'svelte/store';
 	import { authClient } from '$lib/KERNEL/hominio-auth';
-	import {
-		currentUserPkpProfileStore,
-		type CurrentUserPkpProfile,
-		ensurePkpProfileLoaded
-	} from '$lib/stores/pkpSessionStore';
 	import type { Hex, Address } from 'viem';
 	import { pageMetadataStore } from '$lib/stores/layoutStore';
 	import type { PageData } from './$types';
@@ -30,29 +25,19 @@
 	});
 
 	const o = getContext<HominioFacade>('o');
+	const pkpProfileStore = o.pkp.profile; // Access PKP profile from facade
 
 	// Reactive user session data using $state and $effect for subscription
 	const sessionStore = authClient.useSession();
-	let sessionState = $state(get(sessionStore)); // Initialize with current sync value
+	let sessionUser = $derived(get(sessionStore)?.data?.user ?? null);
+	let sessionError = $derived(get(sessionStore)?.error ?? null);
+	let isSessionPending = $derived(get(sessionStore)?.isPending ?? true);
 
-	$effect(() => {
-		const unsubscribe = sessionStore.subscribe((value) => {
-			sessionState = value; // Update $state when store emits new values
-		});
-		return unsubscribe; // Cleanup subscription
-	});
-
-	// Derive dependent states from the reactive sessionState rune
-	const isSessionPending = $derived(sessionState?.isPending ?? true);
-	const sessionUser = $derived(sessionState?.data?.user);
-
-	let userEmailDisplay = $derived(sessionUser?.email || 'N/A');
-	let userIdDisplay = $derived(sessionUser?.id || 'N/A');
+	let userEmailDisplay = $derived(sessionUser?.email ?? 'N/A');
+	let userIdDisplay = $derived(sessionUser?.id ?? 'N/A');
 	let userCreatedAtDisplay = $derived(
 		sessionUser?.createdAt ? new Date(sessionUser.createdAt).toLocaleDateString() : 'N/A'
 	);
-
-	let currentPkpProfile = $state<CurrentUserPkpProfile | null>(null);
 
 	// State for wallet details (capacity credits and auth methods)
 	let ownedCapacityCredits = $state<CapacityCredit[] | null>(null);
@@ -71,36 +56,22 @@
 	];
 	let selectedSettingsSectionId = $state('account');
 
-	const unsubscribePkpProfile = currentUserPkpProfileStore.subscribe((value) => {
-		currentPkpProfile = value;
-	});
-
 	$effect(() => {
-		async function setupPage() {
-			generalIsLoading = true;
-			console.log('[SettingsPage] Initializing page, ensuring PKP profile is loaded...');
-			await ensurePkpProfileLoaded();
-			console.log('[SettingsPage] PKP profile loading process complete.');
-			generalIsLoading = false;
-		}
-
-		setupPage();
-	});
-
-	$effect(() => {
+		// Use $pkpProfileStore directly here
+		const currentPkpProfileValue = $pkpProfileStore;
 		async function fetchWalletDetails() {
-			if (currentPkpProfile?.pkpEthAddress && currentPkpProfile?.pkpTokenId) {
+			if (currentPkpProfileValue?.pkpEthAddress && currentPkpProfileValue?.pkpTokenId) {
 				isLoadingWalletDetails = true;
 				walletDetailsError = null;
 				ownedCapacityCredits = null;
 				permittedAuthMethods = null;
 				try {
 					console.log(
-						`[SettingsPage] Fetching wallet details for PKP ETH Address: ${currentPkpProfile.pkpEthAddress} and Token ID: ${currentPkpProfile.pkpTokenId}`
+						`[SettingsPage] Fetching wallet details for PKP ETH Address: ${currentPkpProfileValue.pkpEthAddress} and Token ID: ${currentPkpProfileValue.pkpTokenId}`
 					);
 					const [credits, methods] = await Promise.all([
-						getOwnedCapacityCredits(currentPkpProfile.pkpEthAddress),
-						getPermittedAuthMethodsForPkp(currentPkpProfile.pkpTokenId)
+						getOwnedCapacityCredits(currentPkpProfileValue.pkpEthAddress),
+						getPermittedAuthMethodsForPkp(currentPkpProfileValue.pkpTokenId)
 					]);
 					ownedCapacityCredits = credits;
 					permittedAuthMethods = methods;
@@ -118,8 +89,16 @@
 			}
 		}
 
-		if (browser && currentPkpProfile) {
+		if (browser && currentPkpProfileValue) {
+			// Use currentPkpProfileValue
 			fetchWalletDetails();
+		}
+		// Set generalIsLoading based on whether pkpProfileStore has resolved from its initial undefined state
+		// This is a simple way to handle initial page load state if we expect pkpProfileStore to eventually be non-undefined.
+		if ($pkpProfileStore === undefined) {
+			generalIsLoading = true;
+		} else {
+			generalIsLoading = false;
 		}
 	});
 
@@ -187,7 +166,8 @@
 
 		<!-- General loading/error/success messages, centered within a max-width container -->
 		<div class="mx-auto mb-6 max-w-3xl">
-			{#if generalIsLoading && !currentPkpProfile}
+			{#if generalIsLoading && $pkpProfileStore === undefined}
+				<!-- Use $pkpProfileStore to determine loading -->
 				<div class="flex items-center justify-center rounded-lg bg-stone-50/50 p-8">
 					<div class="spinner text-prussian-blue/80 mr-3 h-8 w-8"></div>
 					<p class="text-prussian-blue/80 text-lg">Loading account settings...</p>
@@ -252,7 +232,8 @@
 				>
 					Wallet Info
 				</h2>
-				{#if currentPkpProfile}
+				{#if $pkpProfileStore}
+					<!-- Use $pkpProfileStore -->
 					<div class="space-y-6">
 						<div class="border-prussian-blue/20 space-y-3 rounded-md border p-4">
 							<h3 class="text-prussian-blue text-lg font-medium">Core Wallet Info</h3>
@@ -261,25 +242,25 @@
 									>Wallet Address (PKP)</label
 								>
 								<p class="text-prussian-blue mt-1 font-mono text-sm break-all">
-									{currentPkpProfile.pkpEthAddress}
+									{$pkpProfileStore.pkpEthAddress}
 								</p>
 							</div>
 							<div>
 								<label class="text-prussian-blue/70 block text-xs font-medium">PKP Public Key</label
 								>
 								<p class="text-prussian-blue/90 mt-1 font-mono text-xs break-all">
-									{currentPkpProfile.pkpPublicKey}
+									{$pkpProfileStore.pkpPublicKey}
 								</p>
 							</div>
 							<div>
 								<label class="text-prussian-blue/70 block text-xs font-medium">PKP Token ID</label>
 								<p class="text-prussian-blue/90 mt-1 font-mono text-xs break-all">
-									{currentPkpProfile.pkpTokenId}
+									{$pkpProfileStore.pkpTokenId}
 								</p>
 							</div>
 						</div>
 
-						{#if currentPkpProfile.passkeyData}
+						{#if $pkpProfileStore.passkeyData}
 							<div class="border-prussian-blue/20 space-y-3 rounded-md border p-4">
 								<h3 class="text-prussian-blue text-lg font-medium">Linked Passkey</h3>
 								<div>
@@ -287,7 +268,7 @@
 										>Passkey Raw ID</label
 									>
 									<p class="text-prussian-blue/90 mt-1 font-mono text-xs break-all">
-										{currentPkpProfile.passkeyData.rawId}
+										{$pkpProfileStore.passkeyData.rawId}
 									</p>
 								</div>
 								<div>
@@ -295,16 +276,16 @@
 										>Passkey Username</label
 									>
 									<p class="text-prussian-blue mt-1 text-sm">
-										{currentPkpProfile.passkeyData.username}
+										{$pkpProfileStore.passkeyData.username}
 									</p>
 								</div>
-								{#if currentPkpProfile.passkeyData.passkeyVerifierContractAddress}
+								{#if $pkpProfileStore.passkeyData.passkeyVerifierContractAddress}
 									<div>
 										<label class="text-prussian-blue/70 block text-xs font-medium"
 											>Passkey Verifier Contract</label
 										>
 										<p class="text-prussian-blue/90 mt-1 font-mono text-xs break-all">
-											{currentPkpProfile.passkeyData.passkeyVerifierContractAddress}
+											{$pkpProfileStore.passkeyData.passkeyVerifierContractAddress}
 										</p>
 									</div>
 								{/if}
@@ -390,7 +371,8 @@
 				>
 					Capacity Credits
 				</h2>
-				{#if currentPkpProfile}
+				{#if $pkpProfileStore}
+					<!-- Use $pkpProfileStore -->
 					{#if isLoadingWalletDetails}
 						<div class="flex items-center justify-center rounded-lg bg-stone-50/50 p-6">
 							<div class="spinner text-prussian-blue/80 mr-3 h-6 w-6"></div>
@@ -433,9 +415,11 @@
 						<p class="text-prussian-blue mb-3 text-lg font-medium">
 							Wallet information is required to view capacity credits.
 						</p>
-						{#if !currentPkpProfile && generalIsLoading}
+						{#if !$pkpProfileStore && generalIsLoading}
+							<!-- Use $pkpProfileStore and generalIsLoading -->
 							<p class="text-prussian-blue/80 mb-4 text-sm">Loading account details...</p>
-						{:else if !currentPkpProfile}
+						{:else if !$pkpProfileStore}
+							<!-- Use $pkpProfileStore -->
 							<p class="text-prussian-blue/80 mb-4 text-sm">
 								Please set up your Hominio Wallet first.
 							</p>

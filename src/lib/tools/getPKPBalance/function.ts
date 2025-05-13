@@ -10,8 +10,8 @@ import {
     type PublicClient
 } from 'viem';
 import { gnosis } from 'viem/chains';
+import { o } from '$lib/KERNEL/hominio-svelte';
 import { get } from 'svelte/store';
-import { currentUserPkpProfileStore } from '$lib/stores/pkpSessionStore';
 
 const DEFAULT_CHAIN_ID = gnosis.id; // Gnosis mainnet
 
@@ -51,17 +51,13 @@ export async function getPKPBalanceImplementation(parameters: ToolParameters): P
         if (parsedParams.pkpEthAddress && typeof parsedParams.pkpEthAddress === 'string' && isAddress(parsedParams.pkpEthAddress)) {
             pkpEthAddress = parsedParams.pkpEthAddress as Address;
         } else {
-            const profile = get(currentUserPkpProfileStore);
-            if (profile && profile.pkpEthAddress && isAddress(profile.pkpEthAddress)) {
-                pkpEthAddress = profile.pkpEthAddress;
-                console.log('[getPKPBalanceTool] Retrieved pkpEthAddress from currentUserPkpProfileStore:', pkpEthAddress);
+            const profileFromFacade = get(o.pkp.profile);
+            if (profileFromFacade && profileFromFacade.pkpEthAddress) {
+                pkpEthAddress = profileFromFacade.pkpEthAddress;
+                console.warn('[getPKPBalanceTool] pkpEthAddress was not provided in parameters by the AI. Using value from o.pkp.profile as a fallback. The AI or tool-calling mechanism should be updated to provide this directly if possible.');
             } else {
-                console.warn('[getPKPBalanceTool] pkpEthAddress not in params and not found or invalid in currentUserPkpProfileStore.');
+                throw new Error('Required parameter "pkpEthAddress" is missing, invalid, or not a valid Ethereum address, and could not be retrieved from the application context (o.pkp.profile).');
             }
-        }
-
-        if (!pkpEthAddress) {
-            throw new Error('PKP Ethereum address not provided and could not be retrieved from user session/storage.');
         }
 
         if (parsedParams.chainId && typeof parsedParams.chainId === 'number') {

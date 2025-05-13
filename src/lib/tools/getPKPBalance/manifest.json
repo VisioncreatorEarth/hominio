@@ -5,16 +5,16 @@
     "color": "green",
     "temporaryTool": {
         "modelToolName": "getPKPBalance",
-        "description": "Retrieves the SAHEL token balance for the user's Programmatic Key Pair (PKP) address on the Gnosis chain. If no PKP address is provided, it attempts to use the one associated with the current user session.",
+        "description": "Retrieves the SAHEL token balance for the user's Programmatic Key Pair (PKP) address on the Gnosis chain. The PKP address must be provided.",
         "dynamicParameters": [
             {
                 "name": "pkpEthAddress",
                 "location": "PARAMETER_LOCATION_BODY",
                 "schema": {
                     "type": "string",
-                    "description": "Optional. The PKP Ethereum address to check the balance for. If omitted, attempts to use the user's current PKP."
+                    "description": "Required. The PKP Ethereum address to check the balance for."
                 },
-                "required": false
+                "required": true
             },
             {
                 "name": "chainId",

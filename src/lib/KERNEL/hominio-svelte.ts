@@ -1,4 +1,4 @@
-import { writable, readable, get, type Readable, type Writable } from 'svelte/store';
+import { writable, readable, get, derived, type Readable, type Writable } from 'svelte/store';
 import { browser } from '$app/environment';
 import { subscribeToDbChanges } from './hominio-db';
 import { executeQuery as coreExecuteQuery } from './hominio-query/index';
@@ -13,6 +13,8 @@ import type {
 } from './hominio-types';
 import type { LitNodeClient } from '@lit-protocol/lit-node-client';
 import type { Address, WalletClient } from 'viem';
+import type { CurrentUserPkpProfile } from '$lib/stores/pkpSessionStore';
+import { ensurePkpProfileLoaded, currentUserPkpProfileStore } from '$lib/stores/pkpSessionStore';
 
 // --- Internal State ---
 
@@ -52,6 +54,30 @@ const guardianEoaClientStore = writable<WalletClient | null>(null);
 const guardianEoaAddressStore = writable<Address | null>(null);
 const guardianEoaChainIdStore = writable<number | null>(null);
 const guardianEoaErrorStore = writable<string | null>(null);
+
+// --- PKP Facade ---
+class PkpFacade {
+    private readonly _profile = writable<CurrentUserPkpProfile | null>(null);
+    public readonly profile = derived(this._profile, $p => $p);
+
+    public initializeProfileState(): void {
+        if (browser) {
+            ensurePkpProfileLoaded()
+                .catch(err => {
+                    console.error('[PkpFacade] Error calling ensurePkpProfileLoaded:', err);
+                });
+
+            currentUserPkpProfileStore.subscribe(profile => {
+                // console.log('[PkpFacade] currentUserPkpProfileStore subscription updated, new profile:', profile);
+                this._profile.set(profile);
+            });
+            // Set initial value from store in case subscribe doesn't fire immediately or ensurePkpProfileLoaded is slow
+            // This ensures that if the store is already populated (e.g. by a previous ensurePkpProfileLoaded call),
+            // the facade's profile store reflects it immediately on initialization.
+            this._profile.set(get(currentUserPkpProfileStore));
+        }
+    }
+}
 
 // --- Subscribe internal Svelte notifier to generic DB changes ---
 if (browser) {
@@ -267,6 +293,8 @@ async function executeMutationFacade(request: MutateHqlRequest): Promise<Mutatio
 }
 
 // --- Export Single Object ---
+const pkpFacadeInstance = new PkpFacade();
+
 export const o = {
     query: executeQueryFacade,
     subscribe: processReactiveQueryFacade,
@@ -281,7 +309,8 @@ export const o = {
         address: guardianEoaAddressStore,
         chainId: guardianEoaChainIdStore,
         error: guardianEoaErrorStore
-    }
+    },
+    pkp: pkpFacadeInstance
 };
 
 // --- Centralized Type Definition for the Facade ---
@@ -300,6 +329,7 @@ export interface HominioFacade {
         chainId: Writable<number | null>;
         error: Writable<string | null>;
     };
+    pkp: PkpFacade;
 }
 
 // --- Export renamed types needed externally ---

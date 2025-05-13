@@ -22,11 +22,6 @@
 	import { createPublicClient, http, serializeTransaction } from 'viem';
 	import { gnosis } from 'viem/chains';
 	import { LitAbility } from '@lit-protocol/constants';
-	import {
-		ensurePkpProfileLoaded,
-		currentUserPkpProfileStore,
-		type CurrentUserPkpProfile
-	} from '$lib/stores/pkpSessionStore';
 
 	const sahelPhaseConfig = roadmapConfig.phases.find((p) => p.name === 'Sahelanthropus');
 	const GNOSIS_RPC_URL = sahelPhaseConfig?.rpcUrls?.default?.http?.[0];
@@ -46,11 +41,6 @@
 	}>();
 
 	const dispatch = createEventDispatcher();
-
-	// Internal State for PKP Profile
-	let internalPkpProfile = $state<CurrentUserPkpProfile | null>(null);
-	let isPkpProfileLoading = $state<boolean>(false);
-	let pkpProfileError = $state<string | null>(null);
 
 	// Internal State for session and passkey management
 	let internalSessionSigs: SessionSigs | null = $state(null);
@@ -76,78 +66,13 @@
 	const o = getContext<HominioFacade>('o');
 	const litNodeClientStore = o.lit.client;
 
+	// Get PKP profile reactively from the facade
+	const pkpProfileStore = o.pkp.profile; // Access the store from the facade
+	// Let Svelte's reactivity handle $pkpProfileStore in script/template as needed
+
 	$effect(() => {
 		internalLitNodeClient = get(litNodeClientStore);
 		console.log('[SignerModal] LitNodeClient updated:', internalLitNodeClient?.ready);
-	});
-
-	// Effect 1: Keep internalPkpProfile synced with the store
-	$effect(() => {
-		const unsubscribe = currentUserPkpProfileStore.subscribe((profile) => {
-			// Update internalPkpProfile only if the new profile is different.
-			// This simple check works if 'profile' is null or if the object reference changes.
-			// For more complex scenarios, a deep equality check or immutable patterns in the store might be needed.
-			if (internalPkpProfile !== profile) {
-				internalPkpProfile = profile;
-			}
-
-			if (profile) {
-				console.log(
-					'[SignerModal] Store subscription updated internalPkpProfile. Profile is now available.'
-				);
-				// If a profile is successfully loaded/retrieved, clear any loading-specific error.
-				if (pkpProfileError && pkpProfileError.startsWith('Failed to load PKP profile:')) {
-					pkpProfileError = null;
-				}
-			} else {
-				// This branch is hit if the store provides a null profile.
-				// Warn only if a request is active and we aren't in the middle of a load.
-				if (requestData && !isPkpProfileLoading) {
-					console.warn(
-						'[SignerModal] Store subscription: PKP profile became null from store when not actively loading. This might be an issue if an operation was pending.'
-					);
-				}
-			}
-		});
-		return unsubscribe; // Cleanup subscription
-	});
-
-	// Effect 2: Trigger loading of PKP profile if needed
-	$effect(() => {
-		// This effect runs if requestData, internalPkpProfile, or isPkpProfileLoading changes.
-		if (requestData && internalPkpProfile === null && !isPkpProfileLoading) {
-			// Attempt to load if:
-			// 1. There's requestData (modal is active).
-			// 2. internalPkpProfile is null (not loaded yet).
-			// 3. We are not already loading (isPkpProfileLoading is false).
-			console.log('[SignerModal] Load Trigger Effect: Conditions met. Initiating profile load.');
-			isPkpProfileLoading = true;
-			pkpProfileError = null; // Clear previous profile loading errors.
-
-			ensurePkpProfileLoaded()
-				.then(() => {
-					console.log('[SignerModal] ensurePkpProfileLoaded() promise resolved successfully.');
-					// Effect 1 (store sync) should handle updating `internalPkpProfile` based on the store change.
-					// If `internalPkpProfile` becomes non-null, this effect (Effect 2) will re-run,
-					// but the condition `internalPkpProfile === null` will then be false, preventing another load.
-				})
-				.catch((err) => {
-					const msg = err instanceof Error ? err.message : String(err);
-					console.error('[SignerModal] Error during ensurePkpProfileLoaded():', msg);
-					pkpProfileError = `Failed to load PKP profile: ${msg}`;
-					showError(pkpProfileError); // Update UI with the error
-				})
-				.finally(() => {
-					isPkpProfileLoading = false;
-					console.log('[SignerModal] Load Trigger Effect: isPkpProfileLoading set to false.');
-				});
-		}
-	});
-
-	onMount(() => {
-		return () => {
-			if (signTimeout) clearTimeout(signTimeout);
-		};
 	});
 
 	// Tab navigation style variables
@@ -157,6 +82,7 @@
 	const tabInactive = 'border-transparent text-slate-500 hover:text-emerald-700';
 
 	const displayData = $derived(() => {
+		const currentPkpProfile = $pkpProfileStore; // Use the reactive store value
 		if (!requestData || typeof requestData !== 'object') return requestData;
 
 		// Cast requestData to full PKPSigningRequestData temporarily to access operation-specific fields.
@@ -164,9 +90,9 @@
 		const opSpecificData = requestData as PKPSigningRequestData;
 
 		return {
-			// PKP data from internal profile for display
-			pkpPublicKey: internalPkpProfile?.pkpPublicKey,
-			pkpEthAddress: internalPkpProfile?.pkpEthAddress,
+			// PKP data from facade profile store for display
+			pkpPublicKey: currentPkpProfile?.pkpPublicKey,
+			pkpEthAddress: currentPkpProfile?.pkpEthAddress,
 			// Operation-specific data from requestData
 			type: opSpecificData.type,
 			transaction: opSpecificData.type === 'transaction' ? opSpecificData.transaction : undefined,
@@ -355,12 +281,13 @@
 
 	async function executeRequestedOperation(sessionSigs: SessionSigs) {
 		const currentRequestData = requestData as PKPSigningRequestData;
+		const currentPkpProfile = $pkpProfileStore; // Use facade store
 
 		if (
 			!currentRequestData ||
 			!internalLitNodeClient ||
-			!internalPkpProfile ||
-			!internalPkpProfile.pkpPublicKey
+			!currentPkpProfile || // Check facade store value
+			!currentPkpProfile.pkpPublicKey
 		) {
 			showError(
 				'Missing request data, Lit client, PKP profile, or PKP public key for operation execution.'
@@ -380,7 +307,7 @@
 					result = await signWithPKP(
 						internalLitNodeClient,
 						sessionSigs,
-						internalPkpProfile.pkpPublicKey,
+						currentPkpProfile.pkpPublicKey, // Use facade store value
 						currentRequestData.message
 					);
 					showSuccess('Message signed successfully!');
@@ -391,7 +318,7 @@
 					result = await signTransactionWithPKP(
 						internalLitNodeClient,
 						sessionSigs,
-						internalPkpProfile.pkpPublicKey,
+						currentPkpProfile.pkpPublicKey, // Use facade store value
 						currentRequestData.transaction
 					);
 					const publicClient = createPublicClient({
@@ -471,22 +398,23 @@
 
 	async function initiatePasskeyAuthenticationAndGetSigs() {
 		const currentRequestData = requestData as PKPSigningRequestData;
+		const currentPkpProfile = $pkpProfileStore; // Use facade store
 
 		if (
 			!internalLitNodeClient ||
 			!currentRequestData ||
-			!internalPkpProfile ||
-			!internalPkpProfile.passkeyData ||
-			!internalPkpProfile.pkpPublicKey ||
-			!internalPkpProfile.pkpTokenId
+			!currentPkpProfile || // Check facade store value
+			!currentPkpProfile.passkeyData ||
+			!currentPkpProfile.pkpPublicKey ||
+			!currentPkpProfile.pkpTokenId
 		) {
-			const errorDetail = !internalPkpProfile
+			const errorDetail = !currentPkpProfile // Check facade store value
 				? 'PKP Profile not loaded. '
-				: !internalPkpProfile.passkeyData
+				: !currentPkpProfile.passkeyData // Check facade store value
 					? 'Passkey data missing in profile. '
-					: !internalPkpProfile.pkpPublicKey
+					: !currentPkpProfile.pkpPublicKey // Check facade store value
 						? 'PKP public key missing in profile. '
-						: !internalPkpProfile.pkpTokenId
+						: !currentPkpProfile.pkpTokenId // Check facade store value
 							? 'PKP token ID missing in profile. '
 							: '';
 			const errorMessage =
@@ -499,7 +427,7 @@
 		}
 
 		const { passkeyData: currentPasskeyData, pkpPublicKey: currentPkpPublicKey } =
-			internalPkpProfile;
+			currentPkpProfile; // Use facade store value
 
 		const pkpResourceForAuthSig = new LitPKPResource('*');
 		console.log(
@@ -597,29 +525,27 @@
 
 	async function handleApproveOperation() {
 		console.log('[SignerModal] handleApproveOperation called.');
-		if (pkpProfileError) {
-			showError(`Cannot proceed: ${pkpProfileError}`);
-			return;
-		}
+		const currentPkpProfile = $pkpProfileStore; // Use facade store
+
 		if (
 			!internalLitNodeClient ||
 			!internalLitNodeClient.ready ||
 			!requestData ||
-			!internalPkpProfile ||
-			!internalPkpProfile.passkeyData ||
-			!internalPkpProfile.pkpPublicKey ||
-			!internalPkpProfile.pkpEthAddress ||
-			!internalPkpProfile.pkpTokenId
+			!currentPkpProfile || // Check facade store value
+			!currentPkpProfile.passkeyData ||
+			!currentPkpProfile.pkpPublicKey ||
+			!currentPkpProfile.pkpEthAddress ||
+			!currentPkpProfile.pkpTokenId
 		) {
-			const errorDetail = !internalPkpProfile
+			const errorDetail = !currentPkpProfile // Check facade store value
 				? 'PKP Profile not loaded. '
-				: !internalPkpProfile.passkeyData
+				: !currentPkpProfile.passkeyData // Check facade store value
 					? 'Passkey data missing in profile. '
-					: !internalPkpProfile.pkpPublicKey
+					: !currentPkpProfile.pkpPublicKey // Check facade store value
 						? 'PKP Public Key missing in profile. '
-						: !internalPkpProfile.pkpEthAddress
+						: !currentPkpProfile.pkpEthAddress // Check facade store value
 							? 'PKP ETH Address missing in profile. '
-							: !internalPkpProfile.pkpTokenId
+							: !currentPkpProfile.pkpTokenId // Check facade store value
 								? 'PKP Token ID missing in profile. '
 								: '';
 			const errorMsg =
@@ -628,12 +554,11 @@
 			console.error('[SignerModal handleApproveOperation] Pre-check failed:', errorMsg, {
 				clientReady: internalLitNodeClient?.ready,
 				hasRequestData: !!requestData,
-				hasInternalPkpProfile: !!internalPkpProfile,
-				isProfileLoading: isPkpProfileLoading,
-				hasPasskeyDataInProfile: !!internalPkpProfile?.passkeyData,
-				hasPkpPublicKeyInProfile: !!internalPkpProfile?.pkpPublicKey,
-				hasPkpEthAddressInProfile: !!internalPkpProfile?.pkpEthAddress,
-				hasPkpTokenIdInProfile: !!internalPkpProfile?.pkpTokenId
+				hasInternalPkpProfile: !!currentPkpProfile, // Check facade store value
+				hasPasskeyDataInProfile: !!currentPkpProfile?.passkeyData, // Check facade store value
+				hasPkpPublicKeyInProfile: !!currentPkpProfile?.pkpPublicKey, // Check facade store value
+				hasPkpEthAddressInProfile: !!currentPkpProfile?.pkpEthAddress, // Check facade store value
+				hasPkpTokenIdInProfile: !!currentPkpProfile?.pkpTokenId // Check facade store value
 			});
 			showError(errorMsg);
 			return;
@@ -761,9 +686,9 @@
 			<h3 class="mb-4 text-xl font-bold text-yellow-700">Passkey Authentication Needed</h3>
 			<p class="mb-4 text-yellow-600">Your approval requires authentication with your passkey.</p>
 			<p class="mb-2 text-sm text-yellow-500">
-				PKP: {internalPkpProfile?.pkpEthAddress
-					? shortAddress(internalPkpProfile.pkpEthAddress)
-					: isPkpProfileLoading
+				PKP: {$pkpProfileStore?.pkpEthAddress
+					? shortAddress($pkpProfileStore.pkpEthAddress)
+					: $pkpProfileStore === null && requestData
 						? 'Loading PKP info...'
 						: 'N/A'}
 			</p>
@@ -817,9 +742,7 @@
 					</div>
 					<div class="font-semibold text-green-900">From:</div>
 					<div class="font-mono font-bold text-green-800">
-						{internalPkpProfile?.pkpEthAddress
-							? shortAddress(internalPkpProfile.pkpEthAddress)
-							: 'N/A'}
+						{$pkpProfileStore?.pkpEthAddress ? shortAddress($pkpProfileStore.pkpEthAddress) : 'N/A'}
 					</div>
 					<div class="font-semibold text-green-900">To:</div>
 					<div class="font-mono font-bold text-green-800">
@@ -853,9 +776,7 @@
 					class="mb-3 rounded bg-blue-100 p-4 font-mono text-base whitespace-pre-wrap text-blue-800">{currentRequestData.message}</pre>
 				<div class="font-semibold text-blue-900">From:</div>
 				<div class="font-mono font-bold text-blue-800">
-					{internalPkpProfile?.pkpEthAddress
-						? shortAddress(internalPkpProfile.pkpEthAddress)
-						: 'N/A'}
+					{$pkpProfileStore?.pkpEthAddress ? shortAddress($pkpProfileStore.pkpEthAddress) : 'N/A'}
 				</div>
 			</div>
 		{:else if currentRequestData?.type === 'executeAction'}
@@ -883,9 +804,7 @@
 				<div class="font-mono text-sm text-purple-800">Inline Code Snippet (see details)</div>
 				<div class="font-semibold text-purple-900">Signer PKP:</div>
 				<div class="font-mono font-bold text-purple-800">
-					{internalPkpProfile?.pkpEthAddress
-						? shortAddress(internalPkpProfile.pkpEthAddress)
-						: 'N/A'}
+					{$pkpProfileStore?.pkpEthAddress ? shortAddress($pkpProfileStore.pkpEthAddress) : 'N/A'}
 				</div>
 				<div class="font-semibold text-purple-900">Action JS Params:</div>
 				<pre
@@ -919,9 +838,9 @@
 				</div>
 				<div class="font-semibold text-teal-900">Wallet to Authenticate:</div>
 				<div class="font-mono font-bold text-teal-800">
-					{internalPkpProfile?.pkpEthAddress
-						? shortAddress(internalPkpProfile.pkpEthAddress)
-						: isPkpProfileLoading
+					{$pkpProfileStore?.pkpEthAddress
+						? shortAddress($pkpProfileStore.pkpEthAddress)
+						: $pkpProfileStore === null && requestData
 							? 'Loading PKP info...'
 							: 'N/A'}
 				</div>
@@ -968,9 +887,7 @@
 						: 'N/A'}</pre>
 				<div class="font-semibold text-cyan-900">Signer PKP:</div>
 				<div class="font-mono font-bold text-cyan-800">
-					{internalPkpProfile?.pkpEthAddress
-						? shortAddress(internalPkpProfile.pkpEthAddress)
-						: 'N/A'}
+					{$pkpProfileStore?.pkpEthAddress ? shortAddress($pkpProfileStore.pkpEthAddress) : 'N/A'}
 				</div>
 				<div class="font-semibold text-cyan-900">Access Conditions:</div>
 				<div class="font-mono text-xs text-cyan-800">See details tab.</div>
@@ -1000,9 +917,7 @@
 						'N/A'}</pre>
 				<div class="font-semibold text-orange-900">Signer PKP:</div>
 				<div class="font-mono font-bold text-orange-800">
-					{internalPkpProfile?.pkpEthAddress
-						? shortAddress(internalPkpProfile.pkpEthAddress)
-						: 'N/A'}
+					{$pkpProfileStore?.pkpEthAddress ? shortAddress($pkpProfileStore.pkpEthAddress) : 'N/A'}
 				</div>
 				<div class="font-semibold text-orange-900">Access Conditions:</div>
 				<div class="font-mono text-xs text-orange-800">See details tab.</div>
@@ -1028,9 +943,9 @@
 			)}</pre>
 	{/if}
 
-	{#if (pkpProfileError && !passkeyLoginUIVisible && !signResult) || (currentErrorInternal && !passkeyLoginUIVisible && !signResult && !pkpProfileError)}
+	{#if currentErrorInternal && !passkeyLoginUIVisible && !signResult}
 		<div class="mb-2 rounded border border-red-300 bg-red-100 p-2 text-xs text-red-700">
-			{pkpProfileError || currentErrorInternal}
+			{currentErrorInternal}
 		</div>
 	{/if}
 
@@ -1045,16 +960,16 @@
 		<button
 			class="bg-prussian-blue text-linen hover:bg-prussian-blue/90 focus:ring-prussian-blue focus:ring-opacity-50 rounded-md px-4 py-2 text-sm font-semibold focus:ring-2 focus:outline-none disabled:opacity-50"
 			on:click={handleApproveOperation}
-			disabled={isPkpProfileLoading ||
-				!!pkpProfileError ||
+			disabled={($pkpProfileStore === null && !!requestData) || // Simplified: disabled if loading (profile null while request active)
 				isSigning ||
 				(passkeyLoginUIVisible && isSessionLoading) ||
 				!internalLitNodeClient?.ready ||
-				!internalPkpProfile ||
-				!internalPkpProfile.passkeyData ||
-				!internalPkpProfile.pkpTokenId}
+				!$pkpProfileStore || // Explicitly check if profile is loaded for operation
+				!$pkpProfileStore?.passkeyData ||
+				!$pkpProfileStore?.pkpTokenId}
 		>
-			{#if isPkpProfileLoading}
+			{#if $pkpProfileStore === null && requestData}
+				<!-- Loading Profile... -->
 				<span class="spinner mr-2"></span>Loading Profile...
 			{:else if isSessionLoading && passkeyLoginUIVisible}
 				<span class="spinner mr-2"></span>Authenticating Passkey...
