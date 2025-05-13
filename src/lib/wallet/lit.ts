@@ -4,15 +4,13 @@ import { hashMessage, hexToBytes, keccak256, toBytes, createPublicClient, http, 
 import type { Address, Hex, WalletClient, PublicClient, Signature } from 'viem';
 import type { SessionSigs, AuthCallbackParams, GetSessionSigsProps, AuthSig, SigResponse, ExecuteJsResponse, LitResourceAbilityRequest } from '@lit-protocol/types';
 import {
-    AUTH_METHOD_TYPE_PASSKEY,
     formatSignatureForEIP1271,
-    EIP1271_MAGIC_VALUE,
+    EIP_1271_MAGIC_VALUE,
     type StoredPasskeyData,
     type AuthenticatorAssertionResponse
 } from './passkeySigner';
 import { utils as ethersUtils } from 'ethers';
 import * as ipfsOnlyHash from 'ipfs-only-hash';
-// Import constants from config
 import {
     currentChain,
     currentLitEnvironment,
@@ -24,8 +22,20 @@ import {
     RATE_LIMIT_NFT_CONTRACT_ADDRESS,
     RATE_LIMIT_NFT_ABI
 } from './config/index';
-// import { 준비된쿼리StringToBytes, uint8arrayToString } from '@lit-protocol/uint8arrays'; // This line is removed/commented out
 import type { TransactionSerializable } from 'viem';
+
+// NEW TYPE DEFINITIONS
+export interface CapacityCredit {
+    tokenId: string;
+    requestsPerKilosecond: bigint;
+    expiresAt: bigint;
+}
+
+export interface PermittedAuthMethod {
+    authMethodType: bigint;
+    id: Hex; // This can be an IPFS CID for actions, or other identifiers for different auth method types
+    userPubkey: Hex; // For passkeys, this is the pubkey on the verifier contract. For others, could be 0x0.
+}
 
 type LitNodeClientNetworkKey = 'datil-dev' | 'datil-test' | 'datil';
 
@@ -264,7 +274,7 @@ export const registerPasskeyAuthMethod = async (
         }
 
         const authMethod = {
-            authMethodType: BigInt(AUTH_METHOD_TYPE_PASSKEY),
+            authMethodType: BigInt(1), // Replaced AUTH_METHOD_TYPE_PASSKEY with its literal value 1 (Passkey)
             id: authMethodId,
             userPubkey: '0x' as Hex
         };
@@ -485,8 +495,8 @@ const go = async () => {
 
   const nullAddress = '0x0000000000000000000000000000000000000000';
   // Check for jsParams strictly used in THIS action. External RPC URL is now mandatory if internal fails.
-  if (!messageHash || !formattedSignature || !JS_EIP1271_MAGIC_VALUE || !passkeySignerContractAddress || passkeySignerContractAddress.toLowerCase() === nullAddress || !externalGnosisRpcUrl) {
-    throw new Error("Missing required jsParams (messageHash, formattedSignature, JS_EIP1271_MAGIC_VALUE, valid passkeySignerContractAddress, or externalGnosisRpcUrl).");
+  if (!messageHash || !formattedSignature || !JS_EIP_1271_MAGIC_VALUE || !passkeyVerifierContract || passkeyVerifierContract.toLowerCase() === nullAddress || !externalGnosisRpcUrl) {
+    throw new Error("Missing required jsParams (messageHash, formattedSignature, JS_EIP_1271_MAGIC_VALUE, valid passkeyVerifierContract, or externalGnosisRpcUrl).");
   }
 
   let verified = false;
@@ -508,7 +518,7 @@ const go = async () => {
   }
   
   const provider = new ethers.providers.JsonRpcProvider(rpcUrlToUse);
-  const magicValueLower = JS_EIP1271_MAGIC_VALUE.toLowerCase();
+  const magicValueLower = JS_EIP_1271_MAGIC_VALUE.toLowerCase();
   let contractCallResult;
 
   try {
@@ -516,7 +526,7 @@ const go = async () => {
     const iface = new ethers.utils.Interface(proxyAbi);
     const calldata = iface.encodeFunctionData("isValidSignature", [messageHash, formattedSignature]);
     
-    contractCallResult = await provider.call({ to: passkeySignerContractAddress, data: calldata });
+    contractCallResult = await provider.call({ to: passkeyVerifierContract, data: calldata });
 
     if (contractCallResult && typeof contractCallResult === 'string' && contractCallResult.toLowerCase().startsWith(magicValueLower)) {
       verified = true;
@@ -526,7 +536,7 @@ const go = async () => {
   if (verified) {
     Lit.Actions.setResponse({ response: JSON.stringify({ verified: true }) });
   } else {
-    let errMsg = "Gnosis proxy verification failed. Proxy: " + passkeySignerContractAddress + ". RPC: " + rpcUrlToUse;
+    let errMsg = "Gnosis proxy verification failed. Proxy: " + passkeyVerifierContract + ". RPC: " + rpcUrlToUse;
     if (contractCallResult !== undefined) { 
         errMsg += ". Call result: " + contractCallResult;
     }
@@ -569,6 +579,10 @@ export const getSessionSigsWithGnosisPasskeyVerification = async (
     if (!passkeyData?.pubkeyCoordinates?.x || !passkeyData?.pubkeyCoordinates?.y) {
         throw new Error('Passkey public key coordinates are missing.');
     }
+    // Ensure passkeyVerifierContractAddress exists on passkeyData before using it
+    if (passkeyData.passkeyVerifierContractAddress === undefined) {
+        throw new Error('Passkey verifier contract address is missing from passkeyData.');
+    }
 
     try {
         // 1. Prepare message hash
@@ -583,8 +597,8 @@ export const getSessionSigsWithGnosisPasskeyVerification = async (
         const jsParams = {
             messageHash: messageHash,
             formattedSignature: formattedSignature,
-            passkeySignerContractAddress: passkeyData.signerContractAddress || '0x0000000000000000000000000000000000000000',
-            JS_EIP1271_MAGIC_VALUE: EIP1271_MAGIC_VALUE,
+            passkeyVerifierContract: passkeyData.passkeyVerifierContractAddress || '0x0000000000000000000000000000000000000000',
+            JS_EIP_1271_MAGIC_VALUE: EIP_1271_MAGIC_VALUE,
             externalGnosisRpcUrl: DEFAULT_GNOSIS_RPC_URL // Pass the default external RPC URL
         };
         console.log('jsParams for Gnosis Passkey Verification Lit Action (minimized):', jsParams);
@@ -640,6 +654,7 @@ export const getSessionSigsWithGnosisPasskeyVerification = async (
  * @param walletClient Viem Wallet Client connected to the EOA (for signing the mint tx).
  * @param eoaAddress Address of the EOA paying for gas.
  * @param passkeyAuthMethodId The unique ID for the passkey auth method (keccak256 of rawId).
+ * @param passkeyVerifierContract The address of the passkey verifier contract.
  * @param gnosisVerifyActionCode The JS code string of the verification Lit Action.
  * @param capacityRequestsPerKilosecond The number of requests per kilosecond for the Capacity Credit NFT.
  * @param capacityDaysUntilUTCMidnightExpiration The number of days until the Capacity Credit NFT expires at UTC midnight.
@@ -649,6 +664,7 @@ export const mintPKPWithPasskeyAndAction = async (
     walletClient: WalletClient,
     eoaAddress: Address,
     passkeyAuthMethodId: Hex,
+    passkeyVerifierContract: Address,
     gnosisVerifyActionCode: string,
     capacityRequestsPerKilosecond: bigint = 80n,
     capacityDaysUntilUTCMidnightExpiration: number = 1
@@ -663,6 +679,9 @@ export const mintPKPWithPasskeyAndAction = async (
     }
     if (!passkeyAuthMethodId || !passkeyAuthMethodId.startsWith('0x')) {
         throw new Error('Passkey Auth Method ID cannot be empty and must be a hex string.');
+    }
+    if (!passkeyVerifierContract || !passkeyVerifierContract.startsWith('0x')) {
+        throw new Error('Passkey Verifier Contract address cannot be empty and must be a hex string.');
     }
     if (!gnosisVerifyActionCode.trim()) {
         throw new Error('Gnosis Verify Action Code cannot be empty.');
@@ -712,19 +731,19 @@ export const mintPKPWithPasskeyAndAction = async (
         //    Pass bytes arguments as Hex strings ('0x...') for Viem's writeContract
         const args = [
             2n, // keyType = ECDSA k256
-            [ipfsCidHex], // permittedIpfsCIDs (bytes[] -> Hex[]) 
+            [ipfsCidHex], // permittedIpfsCIDs (for the Lit Action)
             [[1n]], // permittedIpfsCIDScopes (Action: SignAnything)
             [] as Address[], // permittedAddresses
             [] as bigint[][], // permittedAddressScopes
-            [] as bigint[], // permittedAuthMethodTypes (Was: [BigInt(AUTH_METHOD_TYPE_PASSKEY)])
-            [] as Hex[], // permittedAuthMethodIds (Was: [passkeyAuthMethodId])
-            [] as Hex[], // permittedAuthMethodPubkeys (Was: ['0x'])
-            [] as bigint[][], // permittedAuthMethodScopes (Was: [[]])
+            [] as bigint[], // permittedAuthMethodTypes (No native passkey auth method)
+            [] as Hex[],    // permittedAuthMethodIds (No native passkey auth method)
+            [] as Hex[],    // permittedAuthMethodPubkeys (No native passkey auth method)
+            [] as bigint[][], // permittedAuthMethodScopes (No native passkey auth method)
             false, // addPkpEthAddressAsPermittedAddress
             true // sendPkpToItself
         ] as const;
 
-        console.log("Arguments prepared for PKPHelper (bytes as Hex) - NATIVE PASSKEY REGISTRATION REMOVED:");
+        console.log("Arguments prepared for PKPHelper - ONLY Lit Action auth method will be added:");
         console.log({ // Log args individually for clarity
             keyType: args[0],
             permittedIpfsCIDs: args[1],

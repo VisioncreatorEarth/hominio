@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { modalStore, closeModal } from '$lib/KERNEL/modalStore';
+	import { modalStore, closeModal } from '$lib/wallet/modalStore';
 	import { fade } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
 

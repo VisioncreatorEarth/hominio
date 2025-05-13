@@ -1,11 +1,13 @@
 import type { AccessControlConditions } from '@lit-protocol/types'; // Use the general ACC type
 import type { Hex, Address, TransactionSerializable } from 'viem';
+import type { StoredPasskeyData } from './passkeySigner'; // Import StoredPasskeyData
 // import type { AccessControlConditions } from '@lit-protocol/types'; // Placeholder
 
 // Base request structure
 interface PKPSigningRequestBase {
     pkpPublicKey: Hex;
     pkpEthAddress: Address;
+    passkeyData: StoredPasskeyData; // Added passkeyData
     // litNodeClient and sessionSigs are handled by the modal internally or via pkpSessionStore
     // and should not be passed by the calling page anymore.
     // litNodeClient?: LitNodeClient; 
@@ -45,9 +47,12 @@ export interface PKPDecryptRequest extends PKPSigningRequestBase {
     chain: string;
 }
 
+// New request type for authenticating a PKP session
 export interface PKPAuthenticateSessionRequest extends PKPSigningRequestBase {
     type: 'authenticateSession';
-    // No additional specific params needed for just authenticating a session for the PKP
+    // No additional specific params needed beyond base for now, 
+    // as PKP and passkey details are for identification and auth challenge.
+    // Capabilities will be defined within the modal or as a standard set for this type.
 }
 
 // Union type for all possible requests

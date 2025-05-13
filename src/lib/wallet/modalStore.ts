@@ -66,7 +66,7 @@ export function requestPKPSignature(requestData: PKPSigningRequestData): Promise
                 cleanup();
             }
         };
-        openModal(SignerModal, modalProps);
+        openModal(SignerModal as unknown as ComponentType, modalProps as unknown as Record<string, unknown>);
     });
     return activePKPSignPromise;
 } 

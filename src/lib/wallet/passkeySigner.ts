@@ -10,7 +10,7 @@ import { gnosis } from 'viem/chains';
 // --- Constants ---
 const RP_NAME = 'Hominio Passkey Signer'; // Changed RP name
 const USER_DISPLAY_NAME = 'Hominio User';
-const STORAGE_KEY = 'hominio_passkey_data'; // Renamed storage key
+// const STORAGE_KEY = 'hominio_passkey_data'; // Renamed storage key - REMOVED as it's no longer used
 const RPC_URL = 'https://rpc.gnosischain.com';
 
 // Deployed Contract Addresses on Gnosis Chain (from Contracts.md and previous context)
@@ -19,13 +19,7 @@ export const FACTORY_ADDRESS = '0x1d31F259eE307358a26dFb23EB365939E8641195' as A
 export const FCL_VERIFIER_ADDRESS = '0xA86e0054C51E4894D88762a017ECc5E5235f5DBA' as Address;
 
 // EIP-1271 Magic Value
-export const EIP1271_MAGIC_VALUE = '0x1626ba7e';
-
-// --- NEW: Custom Auth Method Type --- 
-// Defined by hashing the Factory Address string
-export const AUTH_METHOD_TYPE_PASSKEY = keccak256(toBytes(FACTORY_ADDRESS));
-// export const AUTH_METHOD_TYPE_PASSKEY = 100n; // Reverted from simple BigInt
-console.log("AUTH_METHOD_TYPE_PASSKEY:", AUTH_METHOD_TYPE_PASSKEY); // Log for verification
+export const EIP_1271_MAGIC_VALUE = '0x1626ba7e';
 
 // --- ABIs (Updated with correct ABI from GnosisScan) ---
 const FactoryABI = [
@@ -227,8 +221,8 @@ export type StoredPasskeyData = {
         y: string; // hex format (prefixed 0x)
     };
     username: string;
-    signerContractAddress?: string; // Optional: Store deployed address
-    authMethodId?: string; // NEW: Unique ID for this passkey as an auth method (hex format)
+    passkeyVerifierContractAddress?: string; // RENAMED from signerContractAddress
+    // authMethodId?: string; // NEW: Unique ID for this passkey as an auth method (hex format) -- REMOVED
 };
 
 export declare interface AuthenticatorAssertionResponse extends AuthenticatorResponse {
@@ -350,9 +344,11 @@ export async function createPasskeyCredential(username: string): Promise<{ crede
 }
 
 /**
- * Creates a passkey, extracts coordinates, calculates authMethodId, and stores relevant data.
+ * Creates a passkey, extracts coordinates, calculates authMethodId.
+ * This function NO LONGER stores data in localStorage.
+ * RENAMED from createAndStorePasskeyData
  */
-export async function createAndStorePasskeyData(username: string): Promise<StoredPasskeyData | null> {
+export async function generatePasskeyMaterial(username: string): Promise<StoredPasskeyData | null> {
     try {
         const result = await createPasskeyCredential(username);
         if (!result) return null;
@@ -362,22 +358,21 @@ export async function createAndStorePasskeyData(username: string): Promise<Store
         const passkeyRawIdBytes = new Uint8Array(credential.rawId);
         const passkeyRawIdHex = bytesToHex(passkeyRawIdBytes); // Store rawId as hex
 
-        // Calculate the authMethodId by hashing the rawId bytes
-        const authMethodId = keccak256(passkeyRawIdBytes);
+        // Calculate the authMethodId by hashing the rawId bytes -- REMOVED
+        // const authMethodId = keccak256(passkeyRawIdBytes);
 
-        const storedData: StoredPasskeyData = {
+        const passkeyMaterial: StoredPasskeyData = {
             rawId: passkeyRawIdHex,
             pubkeyCoordinates: coordinates,
             username: username,
-            authMethodId: authMethodId, // Store the calculated ID
-            // signerContractAddress will be added after deployment
+            // authMethodId: authMethodId, // Store the calculated ID -- REMOVED
+            // passkeyVerifierContractAddress will be undefined at this stage
         };
 
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(storedData));
-        console.log('Stored Passkey Data (with authMethodId):', storedData);
-        return storedData;
+        console.log('Generated Passkey Material (not stored locally by this function):', passkeyMaterial);
+        return passkeyMaterial;
     } catch (error) {
-        console.error('Error creating and storing passkey data:', error);
+        console.error('Error generating passkey material:', error);
         // Propagate error message
         throw error;
     }
@@ -385,33 +380,34 @@ export async function createAndStorePasskeyData(username: string): Promise<Store
 
 /**
  * Retrieves the passkey data (including authMethodId) from localStorage.
+ * @deprecated This function is deprecated. Passkey data should be managed by the backend or temporary component state.
  */
-export function getStoredPasskeyData(): StoredPasskeyData | null {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (!stored) {
-        return null;
-    }
-    try {
-        // Parse should now include authMethodId if it exists
-        const parsedData = JSON.parse(stored) as StoredPasskeyData;
-        console.log("Retrieved StoredPasskeyData:", parsedData);
-        return parsedData;
-    } catch (parseError) {
-        console.error("Failed to parse stored passkey data.", parseError);
-        localStorage.removeItem(STORAGE_KEY);
-        return null;
-    }
-}
+// export function getStoredPasskeyData(): StoredPasskeyData | null { // REMOVED
+// const stored = localStorage.getItem(STORAGE_KEY);
+// if (!stored) {
+// return null;
+// }
+// try {
+//         // Parse should now include authMethodId if it exists
+// const parsedData = JSON.parse(stored) as StoredPasskeyData;
+// console.log("Retrieved StoredPasskeyData:", parsedData);
+// return parsedData;
+// } catch (parseError) {
+// console.error("Failed to parse stored passkey data.", parseError);
+// localStorage.removeItem(STORAGE_KEY);
+// return null;
+// }
 
 /**
  * Clears the stored passkey data.
+ * @deprecated This function is deprecated. Passkey data should be managed by the backend or temporary component state.
  */
-export function clearStoredPasskeyData(): void {
-    localStorage.removeItem(STORAGE_KEY);
-    // Reset wallet client/account if needed
-    // walletClient = null;
-    // walletAccount = null;
-}
+// export function clearStoredPasskeyData(): void { // REMOVED
+// localStorage.removeItem(STORAGE_KEY);
+//     // Reset wallet client/account if needed
+//     // walletClient = null;
+//     // walletAccount = null;
+// }
 
 // --- Signature Formatting Helpers (inspired by user snippet) ---
 
@@ -503,19 +499,26 @@ export function formatSignatureForEIP1271(assertionResponse: AuthenticatorAssert
 // --- Contract Interaction Functions ---
 
 /**
- * Predicts the EIP-1271 signer contract address for the stored passkey.
+ * Predicts the EIP-1271 signer contract address for the given public key coordinates.
  * Reverted back to using readContract.
+ * DOES NOT rely on localStorage.
  */
-export async function getPasskeySignerContractAddress(): Promise<Address | null> {
-    const storedData = getStoredPasskeyData();
-    if (!storedData?.pubkeyCoordinates?.x || !storedData?.pubkeyCoordinates?.y) {
-        console.error("No stored passkey coordinates found.");
+export async function getPasskeySignerContractAddress(
+    pubkeyCoordinates: { x: Hex; y: Hex } // Accept pubkey coordinates
+): Promise<Address | null> {
+    // const storedData = getStoredPasskeyData(); // REMOVED
+    // if (!storedData?.pubkeyCoordinates?.x || !storedData?.pubkeyCoordinates?.y) { // REMOVED
+    //     console.error("No stored passkey coordinates found.");
+    //     return null;
+    // }
+    if (!pubkeyCoordinates || !pubkeyCoordinates.x || !pubkeyCoordinates.y) {
+        console.error("Public key coordinates (x,y) are required to predict the signer address.");
         return null;
     }
 
     try {
-        const x = hexToBigInt(storedData.pubkeyCoordinates.x as Hex);
-        const y = hexToBigInt(storedData.pubkeyCoordinates.y as Hex);
+        const x = hexToBigInt(pubkeyCoordinates.x as Hex); // USE ARGUMENT
+        const y = hexToBigInt(pubkeyCoordinates.y as Hex); // USE ARGUMENT
         // Calculate the verifiers value using FCL as fallback
         const verifiersValue = BigInt(FCL_VERIFIER_ADDRESS);
 
@@ -538,15 +541,21 @@ export async function getPasskeySignerContractAddress(): Promise<Address | null>
 /**
  * Deploys the EIP-1271 signer contract via the factory.
  * Requires a connected & funded EOA wallet ON GNOSIS CHAIN.
- * ACCEPTS walletClient and eoaAddress as arguments.
+ * ACCEPTS walletClient, eoaAddress, and pubkeyCoordinates as arguments.
+ * RETURNS the transaction hash and deployed signerAddress (passkeyVerifierContractAddress).
+ * DOES NOT write to localStorage.
  */
 export async function deployPasskeySignerContract(
     walletClient: WalletClient, // Accept wallet client
-    eoaAddress: Address // Accept EOA address
-): Promise<{ txHash: Hex; signerAddress?: Address } | null> {
-    const storedData = getStoredPasskeyData();
-    if (!storedData || !storedData.pubkeyCoordinates.x || !storedData.pubkeyCoordinates.y) {
-        throw new Error('Passkey data with coordinates not found. Create a passkey first.');
+    eoaAddress: Address, // Accept EOA address
+    pubkeyCoordinates: { x: Hex; y: Hex } // Accept pubkey coordinates
+): Promise<{ txHash: Hex; signerAddress?: Address } | null> { // signerAddress is the passkeyVerifierContractAddress
+    // const storedData = getStoredPasskeyData(); // REMOVED: No longer reads from localStorage
+    // if (!storedData || !storedData.pubkeyCoordinates.x || !storedData.pubkeyCoordinates.y) { // REMOVED
+    //     throw new Error('Passkey data with coordinates not found. Create a passkey first.');
+    // }
+    if (!pubkeyCoordinates || !pubkeyCoordinates.x || !pubkeyCoordinates.y) {
+        throw new Error('Public key coordinates (x, y) are required to deploy the signer contract.');
     }
     if (!walletClient || !eoaAddress) { // Check provided arguments
         throw new Error('Wallet client and EOA address are required to deploy the signer contract.');
@@ -590,8 +599,8 @@ export async function deployPasskeySignerContract(
             (BigInt(precompileAddressShort) << 160n) + BigInt(fallbackVerifierAddress);
 
         console.log('Deploying signer contract with:');
-        console.log(' Public Key X:', storedData.pubkeyCoordinates.x);
-        console.log(' Public Key Y:', storedData.pubkeyCoordinates.y);
+        console.log(' Public Key X:', pubkeyCoordinates.x); // USE ARGUMENT
+        console.log(' Public Key Y:', pubkeyCoordinates.y); // USE ARGUMENT
         console.log(' Verifiers (BigInt):', verifiersBigInt);
         console.log(' Factory Address:', FACTORY_ADDRESS);
         console.log(' Account:', eoaAddress); // Use provided eoaAddress
@@ -601,8 +610,8 @@ export async function deployPasskeySignerContract(
             abi: FactoryABI,
             functionName: 'createSigner',
             args: [
-                hexToBigInt(storedData.pubkeyCoordinates.x as Hex),
-                hexToBigInt(storedData.pubkeyCoordinates.y as Hex),
+                hexToBigInt(pubkeyCoordinates.x as Hex), // USE ARGUMENT
+                hexToBigInt(pubkeyCoordinates.y as Hex), // USE ARGUMENT
                 verifiersBigInt // Pass the computed BigInt
             ],
             account: eoaAddress, // Use provided eoaAddress
@@ -646,15 +655,7 @@ export async function deployPasskeySignerContract(
             }
         }
 
-        if (signerAddress) {
-            // Update stored data with the deployed address
-            storedData.signerContractAddress = signerAddress;
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(storedData));
-            console.log('Updated stored passkey data with signer address.');
-        } else {
-            console.warn("Could not extract signer address from 'Created' event logs.");
-        }
-
+        // Ensure signerAddress is returned (it could be undefined if not found in logs)
         return { txHash, signerAddress };
 
     } catch (error: unknown) {
@@ -701,13 +702,23 @@ export async function deployPasskeySignerContract(
 
 /**
  * Verifies a passkey signature for a message hash using the FACTORY contract helper.
+ * ACCEPTS message, rawId, and pubkeyCoordinates as arguments.
+ * DOES NOT rely on localStorage.
  */
 export async function checkSignature(
     message: string,
+    rawId: Hex, // Passkey Raw ID
+    pubkeyCoordinates: { x: Hex; y: Hex } // Passkey Public Key Coordinates
 ): Promise<{ isCorrect: boolean; error?: string }> {
-    const storedData = getStoredPasskeyData();
-    if (!storedData?.pubkeyCoordinates?.x || !storedData?.pubkeyCoordinates?.y) {
-        return { isCorrect: false, error: "No stored passkey coordinates found." };
+    // const storedData = getStoredPasskeyData(); // REMOVED
+    // if (!storedData?.pubkeyCoordinates?.x || !storedData?.pubkeyCoordinates?.y) { // REMOVED
+    //     return { isCorrect: false, error: "No stored passkey coordinates found." };
+    // }
+    if (!rawId) {
+        return { isCorrect: false, error: "Passkey rawId is required." };
+    }
+    if (!pubkeyCoordinates || !pubkeyCoordinates.x || !pubkeyCoordinates.y) {
+        return { isCorrect: false, error: "Passkey pubkeyCoordinates (x,y) are required." };
     }
 
     try {
@@ -718,7 +729,7 @@ export async function checkSignature(
         const assertion = await navigator.credentials.get({
             publicKey: {
                 challenge: hexToBytes(messageHash),
-                allowCredentials: [{ type: 'public-key', id: hexToBytes(storedData.rawId as Hex) }],
+                allowCredentials: [{ type: 'public-key', id: hexToBytes(rawId) }], // USE ARGUMENT rawId
                 userVerification: 'required',
             },
         }) as PublicKeyCredential | null;
@@ -741,8 +752,8 @@ export async function checkSignature(
         console.log("(Factory Check) Formatted Signature for Contract:", formattedSignature);
 
         // 3. Call the verification function on the factory contract
-        const x = hexToBigInt(storedData.pubkeyCoordinates.x as Hex);
-        const y = hexToBigInt(storedData.pubkeyCoordinates.y as Hex);
+        const x = hexToBigInt(pubkeyCoordinates.x as Hex); // USE ARGUMENT pubkeyCoordinates
+        const y = hexToBigInt(pubkeyCoordinates.y as Hex); // USE ARGUMENT pubkeyCoordinates
         const verifiersValue = BigInt(FCL_VERIFIER_ADDRESS); // Using FCL for factory check consistency
 
         console.log("(Factory Check) Verifying signature via factory...");
@@ -755,7 +766,7 @@ export async function checkSignature(
         console.log("(Factory Check) Verification Result (bytes4):", result);
 
         // 4. Check result against EIP-1271 magic value
-        const isValid = result.toLowerCase() === EIP1271_MAGIC_VALUE.toLowerCase();
+        const isValid = result.toLowerCase() === EIP_1271_MAGIC_VALUE.toLowerCase();
         return { isCorrect: isValid };
 
     } catch (error) {
@@ -770,17 +781,23 @@ export async function checkSignature(
 
 /**
  * NEW: Verifies a passkey signature for a message hash using the DEPLOYED PROXY contract.
+ * ACCEPTS message, passkeyRawId, and passkeyVerifierContract (deployed signer address) as arguments.
+ * DOES NOT rely on localStorage.
  */
 export async function verifySignatureWithProxy(
     message: string,
-    signerContractAddress: Address | undefined | null
+    passkeyRawId: Hex, // Passkey Raw ID
+    passkeyVerifierContract: Address | undefined | null // Deployed Signer/Verifier contract address
 ): Promise<{ isCorrect: boolean; error?: string }> {
-    if (!signerContractAddress) {
-        return { isCorrect: false, error: "Signer contract address is missing." };
+    if (!passkeyVerifierContract) {
+        return { isCorrect: false, error: "Passkey verifier contract address is missing." };
     }
-    const storedData = getStoredPasskeyData();
-    if (!storedData?.rawId) {
-        return { isCorrect: false, error: "No stored passkey rawId found." };
+    // const storedData = getStoredPasskeyData(); // REMOVED
+    // if (!storedData?.rawId) { // REMOVED
+    //     return { isCorrect: false, error: "No stored passkey rawId found." };
+    // }
+    if (!passkeyRawId) {
+        return { isCorrect: false, error: "Passkey rawId is required." };
     }
 
     try {
@@ -791,7 +808,7 @@ export async function verifySignatureWithProxy(
         const assertion = await navigator.credentials.get({
             publicKey: {
                 challenge: hexToBytes(messageHash),
-                allowCredentials: [{ type: 'public-key', id: hexToBytes(storedData.rawId as Hex) }],
+                allowCredentials: [{ type: 'public-key', id: hexToBytes(passkeyRawId) }], // USE ARGUMENT passkeyRawId
                 userVerification: 'required',
             },
         }) as PublicKeyCredential | null;
@@ -814,9 +831,9 @@ export async function verifySignatureWithProxy(
         console.log("(Proxy Check) Formatted Signature for Contract:", formattedSignature);
 
         // 3. Call the standard EIP-1271 isValidSignature on the deployed proxy contract
-        console.log(`(Proxy Check) Verifying signature via deployed proxy: ${signerContractAddress}`);
+        console.log(`(Proxy Check) Verifying signature via deployed proxy: ${passkeyVerifierContract}`);
         const result = await publicClient.readContract({
-            address: signerContractAddress, // Call DEPLOYED PROXY
+            address: passkeyVerifierContract, // Call DEPLOYED PROXY (using argument)
             abi: EIP1271ABI, // Use standard EIP-1271 ABI
             functionName: 'isValidSignature',
             args: [messageHash, formattedSignature]
@@ -824,7 +841,7 @@ export async function verifySignatureWithProxy(
         console.log("(Proxy Check) Verification Result (bytes4):", result);
 
         // 4. Check result against EIP-1271 magic value
-        const isValid = result.toLowerCase() === EIP1271_MAGIC_VALUE.toLowerCase();
+        const isValid = result.toLowerCase() === EIP_1271_MAGIC_VALUE.toLowerCase();
         return { isCorrect: isValid };
 
     } catch (error) {

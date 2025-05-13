@@ -1,4 +1,4 @@
-import { openModal } from '$lib/KERNEL/modalStore';
+import { openModal } from '$lib/wallet/modalStore';
 import PrenuModal from '$lib/components/PrenuModal.svelte'; // Assuming rename is done
 import { logToolActivity } from '$lib/ultravox/stores';
 import type { ToolParameters } from '$lib/ultravox/types';

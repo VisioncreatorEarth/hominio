@@ -10,7 +10,6 @@
 	import type { LitNodeClient } from '@lit-protocol/lit-node-client';
 	import type { AuthSig, SessionSigs, AuthCallbackParams } from '@lit-protocol/types';
 	import {
-		getStoredPasskeyData,
 		type StoredPasskeyData,
 		type AuthenticatorAssertionResponse
 	} from '$lib/wallet/passkeySigner';
@@ -44,8 +43,10 @@
 	let internalSessionSigs: SessionSigs | null = $state(null);
 	let isSessionLoading: boolean = $state(false);
 	let passkeyLoginUIVisible: boolean = $state(false);
-	let storedPasskey: StoredPasskeyData | null = $state(null);
 	let internalLitNodeClient: LitNodeClient | null = $state(null);
+	let sessionDurationMessage = $derived(
+		requestData?.type === 'authenticateSession' ? 'This session will be valid for 1 minute.' : null
+	);
 
 	// Existing state
 	let isSigning = $state(false);
@@ -66,8 +67,6 @@
 	});
 
 	onMount(() => {
-		storedPasskey = getStoredPasskeyData();
-		console.log('[SignerModal] Stored Passkey Data onMount:', storedPasskey);
 		return () => {
 			if (signTimeout) clearTimeout(signTimeout);
 		};
@@ -210,7 +209,7 @@
 			case 'decrypt':
 				return 'Decrypt Data';
 			case 'authenticateSession':
-				return 'Authenticate PKP Session';
+				return 'Authenticate Hominio Wallet Session';
 			default:
 				return 'Unknown PKP Operation';
 		}
@@ -219,7 +218,6 @@
 	const derivedRequestedCapabilities = $derived(() => {
 		if (!requestData) return [];
 		const capabilities: string[] = [];
-		// This logic will mirror the switch in handleApproveOperation for resourceAbilityRequests
 		switch (requestData.type) {
 			case 'message':
 			case 'transaction':
@@ -230,9 +228,9 @@
 				);
 				break;
 			case 'authenticateSession':
-				capabilities.push('Authenticate a session for your PKP.');
+				capabilities.push('Authenticate a secure session for your Hominio Wallet.');
 				capabilities.push(
-					'This allows subsequent actions (signing, Lit Action execution) within this session.'
+					'This will allow Hominio to perform actions on your behalf, such as signing messages, transactions, and managing your encrypted data using this PKP wallet.'
 				);
 				break;
 			case 'executeAction':
@@ -262,7 +260,12 @@
 	// Task 1.3: Define internalPasskeyAuthCallback (shell initially, then more complete)
 	async function internalPasskeyAuthCallback(params: AuthCallbackParams): Promise<AuthSig> {
 		console.log('[SignerModal] internalPasskeyAuthCallback triggered', params);
-		if (!browser || !storedPasskey || !requestData?.pkpPublicKey || !internalLitNodeClient) {
+		if (
+			!browser ||
+			!requestData?.passkeyData ||
+			!requestData?.pkpPublicKey ||
+			!internalLitNodeClient
+		) {
 			throw new Error(
 				'Passkey auth callback: Missing browser, stored passkey, PKP public key, or Lit client.'
 			);
@@ -371,10 +374,8 @@
 							accessControlConditions: requestData.accessControlConditions,
 							ciphertext: requestData.ciphertext,
 							dataToEncryptHash: requestData.dataToEncryptHash,
-							chain: requestData.chain, // Pass chain if available in requestData
-							// sessionSigs are typically handled by the authenticated litNodeClient or within ACCs if specific auth is needed for them
-							// For PKP-based decryption where PKP meets ACCs, client session should be sufficient.
-							sessionSigs: sessionSigs // Let's include it as per the plan's original intent, and see if linter complains like for encrypt.
+							chain: requestData.chain,
+							sessionSigs: sessionSigs
 						},
 						internalLitNodeClient
 					);
@@ -382,7 +383,7 @@
 					break;
 				case 'authenticateSession':
 					result = sessionSigs;
-					showSuccess('PKP session authenticated successfully!');
+					showSuccess('Hominio Wallet session authenticated successfully!');
 					break;
 				default:
 					throw new Error('Unsupported operation type.');
@@ -402,9 +403,9 @@
 
 	// New function to encapsulate passkey interaction and session fetching
 	async function initiatePasskeyAuthenticationAndGetSigs() {
-		if (!internalLitNodeClient || !requestData || !storedPasskey) {
+		if (!internalLitNodeClient || !requestData || !requestData.passkeyData) {
 			showError(
-				'Cannot initiate passkey auth: Lit client, request data, or stored passkey missing.'
+				'Cannot initiate passkey auth: Lit client, request data, or passkey details missing from request.'
 			);
 			passkeyLoginUIVisible = false;
 			isSessionLoading = false;
@@ -423,9 +424,10 @@
 
 			const sessionChallengeMessage = `Login to Hominio Signer Modal for PKP: ${requestData.pkpPublicKey} at ${new Date().toISOString()}`;
 			const messageHashAsChallenge = keccak256(new TextEncoder().encode(sessionChallengeMessage));
-			const rawIdBytes = hexToBytes(storedPasskey.rawId as Hex);
+			const rawIdBytes = hexToBytes(requestData.passkeyData.rawId as Hex);
 
 			let pkpResource = new LitPKPResource('*');
+			let actionResource = new LitActionResource('*');
 			let resourceAbilityRequests;
 			switch (requestData.type) {
 				case 'message':
@@ -446,7 +448,7 @@
 							ability: 'pkp-signing' as const
 						},
 						{
-							resource: new LitActionResource('*'),
+							resource: actionResource,
 							ability: 'lit-action-execution' as const
 						}
 					];
@@ -458,7 +460,7 @@
 							ability: 'pkp-signing' as const
 						},
 						{
-							resource: new LitActionResource('*'),
+							resource: actionResource,
 							ability: 'lit-action-execution' as const
 						}
 					];
@@ -502,7 +504,7 @@
 				requestData.pkpPublicKey,
 				sessionChallengeMessage,
 				assertion.response as AuthenticatorAssertionResponse,
-				storedPasskey,
+				requestData.passkeyData,
 				'ethereum', // Or requestData.chain if applicable for the session context
 				resourceAbilityRequests,
 				sessionExpiration // Pass the 1-minute expiration
@@ -527,8 +529,15 @@
 
 	// Task 1.2: Implement Session Acquisition and Operation Orchestration
 	async function handleApproveOperation() {
-		if (!internalLitNodeClient || !internalLitNodeClient.ready || !requestData || !storedPasskey) {
-			showError('Lit client not ready, request data missing, or no stored passkey available.');
+		if (
+			!internalLitNodeClient ||
+			!internalLitNodeClient.ready ||
+			!requestData ||
+			!requestData.passkeyData
+		) {
+			showError(
+				'Lit client not ready, request data missing, or no passkey details available in request.'
+			);
 			return;
 		}
 		currentErrorInternal = null;
@@ -556,11 +565,13 @@
 			on:click={() => (activeTab = 'summary')}
 			aria-selected={activeTab === 'summary'}>Summary</button
 		>
-		<button
-			class={`${tabBase} ${activeTab === 'details' ? tabActive : tabInactive}`}
-			on:click={() => (activeTab = 'details')}
-			aria-selected={activeTab === 'details'}>Details</button
-		>
+		{#if requestData?.type !== 'authenticateSession'}
+			<button
+				class={`${tabBase} ${activeTab === 'details' ? tabActive : tabInactive}`}
+				on:click={() => (activeTab = 'details')}
+				aria-selected={activeTab === 'details'}>Details</button
+			>
+		{/if}
 	</div>
 	<!-- Tab Content -->
 	{#if signResult && !passkeyLoginUIVisible}
@@ -739,6 +750,46 @@
 						2
 					)}</pre>
 			</div>
+		{:else if requestData?.type === 'authenticateSession'}
+			<div
+				class="mb-6 flex w-full max-w-xl flex-col gap-4 rounded-2xl border-2 border-teal-400 bg-gradient-to-br from-teal-50 to-[#fdf6ee] p-8 text-base shadow-lg"
+			>
+				<div class="mb-2 flex items-center gap-3">
+					<svg
+						class="h-9 w-9 text-teal-500"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						viewBox="0 0 24 24"
+					>
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8zM5 10V7a7 7 0 0114 0v3M9 21a2 2 0 01-2-2V10a2 2 0 012-2h6a2 2 0 012 2v9a2 2 0 01-2 2H9z"
+						/>
+					</svg>
+					<span class="text-2xl font-extrabold tracking-tight text-teal-700"
+						>Authenticate Session</span
+					>
+				</div>
+				<div class="font-semibold text-teal-900">Wallet to Authenticate:</div>
+				<div class="font-mono font-bold text-teal-800">
+					{requestData?.pkpEthAddress ? shortAddress(requestData.pkpEthAddress) : 'N/A'}
+				</div>
+				<div class="font-semibold text-teal-900">Requested Session Capabilities:</div>
+				<ul class="list-disc pl-5 text-sm text-teal-800">
+					{#each derivedRequestedCapabilities() as capability}
+						<li>{capability}</li>
+					{/each}
+				</ul>
+				{#if sessionDurationMessage && requestData?.type === 'authenticateSession'}
+					<p class="mt-2 text-sm font-semibold text-teal-700">{sessionDurationMessage}</p>
+				{/if}
+				<p class="mt-2 text-xs text-teal-600">
+					This session will allow Hominio to use this wallet on your behalf until the session
+					expires.
+				</p>
+			</div>
 		{:else if requestData?.type === 'encrypt'}
 			<div
 				class="mb-6 flex w-full max-w-xl flex-col gap-4 rounded-2xl border-2 border-cyan-400 bg-gradient-to-br from-cyan-50 to-[#fdf6ee] p-8 text-base shadow-lg"
@@ -807,7 +858,12 @@
 			<div
 				class="mb-6 w-full max-w-xl rounded-xl border border-stone-300 bg-white p-6 text-base text-slate-700 shadow-sm"
 			>
-				No ABI-decoded summary available for this transaction.
+				{#if requestData?.type === 'transaction'}
+					No ABI-decoded summary available for this transaction. View raw details in the "Details"
+					tab.
+				{:else}
+					Review details in the "Details" tab.
+				{/if}
 			</div>
 		{/if}
 	{:else if activeTab === 'details'}
@@ -837,7 +893,7 @@
 			disabled={isSigning ||
 				isSessionLoading ||
 				!internalLitNodeClient?.ready ||
-				!storedPasskey ||
+				!requestData?.passkeyData ||
 				passkeyLoginUIVisible}
 		>
 			{#if isSessionLoading && !passkeyLoginUIVisible}<span class="spinner mr-2"></span>Checking

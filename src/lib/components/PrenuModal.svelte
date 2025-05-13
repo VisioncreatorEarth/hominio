@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, getContext } from 'svelte';
 	import type { CapabilityUser } from '$lib/KERNEL/hominio-caps';
-	import { closeModal } from '$lib/KERNEL/modalStore'; // To close modal on success
+	import { closeModal } from '$lib/wallet/modalStore'; // To close modal on success
 	import type { IndexLeafType } from '$lib/KERNEL/index-registry';
 	import { canCreatePersonConcept } from '$lib/KERNEL/hominio-caps';
 	import type { LoroHqlQueryExtended } from '$lib/KERNEL/hominio-svelte';

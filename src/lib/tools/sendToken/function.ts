@@ -18,7 +18,7 @@ import {
 import { gnosis } from 'viem/chains';
 import { roadmapConfig } from '$lib/roadmap/config';
 import { o } from '$lib/KERNEL/hominio-svelte'; // For accessing Svelte stores
-import { requestPKPSignature } from '$lib/KERNEL/modalStore';
+import { requestPKPSignature } from '$lib/wallet/modalStore';
 // import type { Signature } from 'viem'; // Signature will be handled by modal
 import type { PKPSigningRequestData } from '$lib/wallet/modalTypes';
 // Import queryPrenusImplementation to resolve names

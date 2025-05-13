@@ -1,21 +1,9 @@
 <script lang="ts">
 	import { onMount, getContext, onDestroy } from 'svelte';
 	import { browser } from '$app/environment';
-	import { getStoredPasskeyData, type StoredPasskeyData } from '$lib/wallet/passkeySigner';
-	// import {
-	// 	signWithPKP, // Handled by modal
-	// 	executeLitAction, // Handled by modal
-	// 	getSessionSigsWithGnosisPasskeyVerification, // Handled by modal
-	// 	signTransactionWithPKP // Handled by modal
-	// } from '$lib/wallet/lit';
-	import type { LitNodeClient } from '@lit-protocol/lit-node-client';
-	// import type { SessionSigs, ExecuteJsResponse, AuthCallbackParams } from '@lit-protocol/types'; // SessionSigs handled by modal
-	import type { ExecuteJsResponse } from '@lit-protocol/types'; // Keep for action result type
-	// import { LitPKPResource, LitActionResource } from '@lit-protocol/auth-helpers'; // Resources handled by modal
+	import type { ExecuteJsResponse } from '@lit-protocol/types';
 	import type { Hex, Address, TransactionSerializableEIP1559, Signature } from 'viem';
 	import {
-		// keccak256, // May not be needed if modal handles challenges
-		// hexToBytes, // May not be needed
 		formatUnits,
 		createPublicClient,
 		http,
@@ -28,8 +16,12 @@
 	import type { PageData } from './$types';
 	import { roadmapConfig } from '$lib/roadmap/config';
 	import type { HominioFacade } from '$lib/KERNEL/hominio-svelte';
-	import { requestPKPSignature } from '$lib/KERNEL/modalStore';
-	import type { PKPSigningRequestData } from '$lib/wallet/modalTypes'; // Import this type
+	import { requestPKPSignature } from '$lib/wallet/modalStore';
+	import type { PKPSigningRequestData } from '$lib/wallet/modalTypes';
+	import {
+		currentUserPkpProfileStore,
+		type CurrentUserPkpProfile
+	} from '$lib/stores/pkpSessionStore';
 
 	// Use $props() for runes mode
 	let { data } = $props<{ data: PageData }>();
@@ -53,14 +45,23 @@
 		error: guardianEoaErrorStore
 	} = o.guardian;
 
-	let storedPasskey = $state<StoredPasskeyData | null>(null);
-	let mintedPkpTokenId = $state<string | null>(null);
-	let mintedPkpPublicKey = $state<Hex | null>(null);
-	let mintedPkpEthAddress = $state<Address | null>(null);
-	// let sessionSigs = $state<SessionSigs | null>(null); // REMOVED - Handled by modal
-	// let sessionAuthMethod = $state<'gnosis-passkey' | 'resumed-from-cache' | null>(null); // REMOVED
-	// let isLoadingSessionSigsGnosisPasskey = $state(false); // REMOVED
-	// let isLoadingPkpSessionResume = $state(false); // REMOVED
+	let currentPkpProfile = $state<CurrentUserPkpProfile | null>(null);
+
+	// Reactive derivations from currentPkpProfile
+	let passkeyDataForModal = $derived(currentPkpProfile?.passkeyData);
+	let pkpTokenId = $derived(currentPkpProfile?.pkpTokenId);
+	let pkpPublicKey = $derived(currentPkpProfile?.pkpPublicKey);
+	let pkpEthAddress = $derived(currentPkpProfile?.pkpEthAddress);
+
+	// Use $effect for currentUserPkpProfileStore subscription
+	$effect(() => {
+		const unsubscribe = currentUserPkpProfileStore.subscribe((profile) => {
+			currentPkpProfile = profile;
+			console.log('[WalletPage] currentUserPkpProfileStore updated:', profile);
+		});
+		return () => unsubscribe();
+	});
+
 	let messageToSign = $state('Hello from Hominio PKP Wallet!');
 	let signatureResult = $state<{ signature: Hex; dataSigned: Hex } | null>(null);
 	let isSigningMessage = $state(false);
@@ -81,7 +82,6 @@ const go = async () => {
   }
 };
 go();`);
-	// let generalIsLoading = $state(false); // Re-evaluate if needed, modal has its own loading
 	let mainError = $state('');
 	let mainSuccess = $state('');
 	let profileName = $state('');
@@ -145,29 +145,30 @@ go();`);
 
 	onMount(async () => {
 		if (browser) {
-			storedPasskey = getStoredPasskeyData();
+			// storedPasskey = getStoredPasskeyData(); // REMOVED
 
-			const storedPKPDataString = localStorage.getItem('mintedPKPData');
-			if (storedPKPDataString) {
-				try {
-					const storedPKPData = JSON.parse(storedPKPDataString);
-					if (
-						storedPKPData &&
-						storedPKPData.pkpTokenId &&
-						storedPKPData.pkpPublicKey &&
-						storedPKPData.pkpEthAddress
-					) {
-						mintedPkpTokenId = storedPKPData.pkpTokenId;
-						mintedPkpPublicKey = storedPKPData.pkpPublicKey;
-						mintedPkpEthAddress = storedPKPData.pkpEthAddress;
-					} else {
-						localStorage.removeItem('mintedPKPData');
-					}
-				} catch (error) {
-					localStorage.removeItem('mintedPKPData');
-				}
-			}
+			// const storedPKPDataString = localStorage.getItem('mintedPKPData'); // REMOVED
+			// if (storedPKPDataString) { // REMOVED
+			// 	try { // REMOVED
+			// 		const storedPKPData = JSON.parse(storedPKPDataString); // REMOVED
+			// 		if ( // REMOVED
+			// 			storedPKPData && // REMOVED
+			// 			storedPKPData.pkpTokenId && // REMOVED
+			// 			storedPKPData.pkpPublicKey && // REMOVED
+			// 			storedPKPData.pkpEthAddress // REMOVED
+			// 		) { // REMOVED
+			// 			mintedPkpTokenId = storedPKPData.pkpTokenId; // REMOVED
+			// 			mintedPkpPublicKey = storedPKPData.pkpPublicKey; // REMOVED
+			// 			mintedPkpEthAddress = storedPKPData.pkpEthAddress; // REMOVED
+			// 		} else { // REMOVED
+			// 			localStorage.removeItem('mintedPKPData'); // REMOVED
+			// 		} // REMOVED
+			// 	} catch (error) { // REMOVED
+			// 		localStorage.removeItem('mintedPKPData'); // REMOVED
+			// 	} // REMOVED
+			// } // REMOVED
 
+			// encryptedProfileDataString is still managed by localStorage for now
 			encryptedProfileDataString = localStorage.getItem(PROFILE_STORAGE_KEY);
 
 			// Removed session resumption logic from here
@@ -203,9 +204,9 @@ go();`);
 			mainError = 'Enter a message to sign.';
 			return;
 		}
-		if (!mintedPkpPublicKey || !mintedPkpEthAddress) {
-			// PKP details still needed for requestData
-			mainError = 'PKP Public Key or ETH Address missing. Check Settings.';
+		if (!pkpPublicKey || !pkpEthAddress || !passkeyDataForModal) {
+			mainError =
+				'PKP details or passkey data missing. Ensure wallet is set up and profile loaded.';
 			return;
 		}
 
@@ -214,8 +215,9 @@ go();`);
 		signatureResult = null;
 
 		const request: PKPSigningRequestData = {
-			pkpPublicKey: mintedPkpPublicKey!,
-			pkpEthAddress: mintedPkpEthAddress!,
+			pkpPublicKey: pkpPublicKey!,
+			pkpEthAddress: pkpEthAddress!,
+			passkeyData: passkeyDataForModal!,
 			type: 'message',
 			message: messageToSign
 			// litNodeClient and sessionSigs are handled by the modal
@@ -250,8 +252,9 @@ go();`);
 			mainError = 'Lit client not available or not ready.';
 			return;
 		}
-		if (!mintedPkpPublicKey || !mintedPkpEthAddress) {
-			mainError = 'PKP Public Key or ETH Address missing for Lit Action. Check Settings.';
+		if (!pkpPublicKey || !pkpEthAddress || !passkeyDataForModal) {
+			mainError =
+				'PKP details or passkey data missing for Lit Action. Ensure wallet is set up and profile loaded.';
 			return;
 		}
 
@@ -260,8 +263,9 @@ go();`);
 		litActionResult = null;
 
 		const request: PKPSigningRequestData = {
-			pkpPublicKey: mintedPkpPublicKey!,
-			pkpEthAddress: mintedPkpEthAddress!,
+			pkpPublicKey: pkpPublicKey!,
+			pkpEthAddress: pkpEthAddress!,
+			passkeyData: passkeyDataForModal!,
 			type: 'executeAction',
 			actionCode: litActionCodeForExecution,
 			actionJsParams: { magicNumber: magicNumber }
@@ -299,10 +303,11 @@ go();`);
 		if (
 			!currentLitClient ||
 			!currentLitClient.ready ||
-			!mintedPkpPublicKey ||
-			!mintedPkpEthAddress
+			!pkpPublicKey ||
+			!pkpEthAddress ||
+			!passkeyDataForModal
 		) {
-			mainError = 'Lit client/PKP details needed to save profile.';
+			mainError = 'Lit client/PKP details/passkey data needed to save profile.';
 			return;
 		}
 
@@ -317,13 +322,14 @@ go();`);
 				chain: 'ethereum', // Or the chain your PKP is associated with for ACCs
 				method: '',
 				parameters: [':userAddress'],
-				returnValueTest: { comparator: '=', value: mintedPkpEthAddress! }
+				returnValueTest: { comparator: '=', value: pkpEthAddress! }
 			}
 		];
 
 		const request: PKPSigningRequestData = {
-			pkpPublicKey: mintedPkpPublicKey!,
-			pkpEthAddress: mintedPkpEthAddress!,
+			pkpPublicKey: pkpPublicKey!,
+			pkpEthAddress: pkpEthAddress!,
+			passkeyData: passkeyDataForModal!,
 			type: 'encrypt',
 			dataToEncrypt: profileName.trim(),
 			accessControlConditions: accessControlConditions,
@@ -371,8 +377,9 @@ go();`);
 			profileName || // If already decrypted, skip
 			isDecryptingProfile ||
 			isEncryptingProfile ||
-			!mintedPkpPublicKey || // Need PKP details for the request
-			!mintedPkpEthAddress
+			!pkpPublicKey || // Need PKP details for the request
+			!pkpEthAddress ||
+			!passkeyDataForModal // Need passkey data for the request
 		) {
 			return;
 		}
@@ -392,8 +399,9 @@ go();`);
 			}
 
 			const request: PKPSigningRequestData = {
-				pkpPublicKey: mintedPkpPublicKey!,
-				pkpEthAddress: mintedPkpEthAddress!,
+				pkpPublicKey: pkpPublicKey!,
+				pkpEthAddress: pkpEthAddress!,
+				passkeyData: passkeyDataForModal!,
 				type: 'decrypt',
 				ciphertext: storedEncryptedData.ciphertext,
 				dataToEncryptHash: storedEncryptedData.dataToEncryptHash,
@@ -431,7 +439,7 @@ go();`);
 
 	// --- Fetch PKP Sahel Token Balance Logic (Remains largely the same) ---
 	async function fetchPkpSahelTokenBalance() {
-		if (!mintedPkpEthAddress) {
+		if (!pkpEthAddress) {
 			pkpSahelBalanceError = 'PKP ETH address not available to fetch balance.';
 			return;
 		}
@@ -474,7 +482,7 @@ go();`);
 				address: SAHEL_TOKEN_ADDRESS,
 				abi: erc20Abi,
 				functionName: 'balanceOf',
-				args: [mintedPkpEthAddress]
+				args: [pkpEthAddress]
 			});
 			pkpSahelTokenBalance = balanceResult as bigint;
 
@@ -494,12 +502,12 @@ go();`);
 	}
 
 	$effect(() => {
-		if (mintedPkpEthAddress && SAHEL_TOKEN_ADDRESS && GNOSIS_RPC_URL) {
+		if (pkpEthAddress && SAHEL_TOKEN_ADDRESS && GNOSIS_RPC_URL) {
 			fetchPkpSahelTokenBalance();
 		} else {
 			pkpSahelTokenBalance = null;
 			formattedPkpSahelBalance = null;
-			if (mintedPkpEthAddress && (!SAHEL_TOKEN_ADDRESS || !GNOSIS_RPC_URL)) {
+			if (pkpEthAddress && (!SAHEL_TOKEN_ADDRESS || !GNOSIS_RPC_URL)) {
 				pkpSahelBalanceError = 'Sahel token configuration missing. Cannot display balance.';
 			}
 		}
@@ -519,9 +527,9 @@ go();`);
 		// 1. Prerequisite Checks
 		if (!currentLitClient?.ready) {
 			sendSahelError = 'Lit client not ready.';
-		} else if (!mintedPkpPublicKey || !mintedPkpEthAddress) {
+		} else if (!pkpPublicKey || !pkpEthAddress || !passkeyDataForModal) {
 			// Session check removed
-			sendSahelError = 'PKP details not available.';
+			sendSahelError = 'PKP details or passkey data not available.';
 		} else if (!$guardianEoaAddressStore) {
 			sendSahelError = 'Guardian EOA address not available.';
 		} else if (!SAHEL_TOKEN_ADDRESS) {
@@ -549,7 +557,7 @@ go();`);
 
 			// 4. Transaction Parameters
 			const nonce = await publicClient.getTransactionCount({
-				address: mintedPkpEthAddress!,
+				address: pkpEthAddress!,
 				blockTag: 'pending'
 			});
 			const { maxFeePerGas, maxPriorityFeePerGas } = await publicClient.estimateFeesPerGas();
@@ -565,7 +573,7 @@ go();`);
 			});
 
 			const estimatedGas = await publicClient.estimateGas({
-				account: mintedPkpEthAddress!,
+				account: pkpEthAddress!,
 				to: SAHEL_TOKEN_ADDRESS!,
 				data: encodedTransferData,
 				value: 0n
@@ -586,8 +594,9 @@ go();`);
 
 			// 6. Sign Transaction via Central Modal
 			const request: PKPSigningRequestData = {
-				pkpPublicKey: mintedPkpPublicKey!,
-				pkpEthAddress: mintedPkpEthAddress!,
+				pkpPublicKey: pkpPublicKey!,
+				pkpEthAddress: pkpEthAddress!,
+				passkeyData: passkeyDataForModal!,
 				type: 'transaction',
 				transaction: unsignedTx,
 				tokenDecimals: pkpSahelTokenDecimals // For display in modal
@@ -627,14 +636,14 @@ go();`);
 	<main class="px-4 py-8">
 		<div class="mx-auto max-w-3xl">
 			<!-- Sahel Token Balance Card -->
-			{#if mintedPkpEthAddress}
+			{#if pkpEthAddress}
 				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
 					<h2 class="mb-4 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
 						{SAHEL_TOKEN_SYMBOL} Balance
 					</h2>
 					<div class="mb-2">
 						<p class="text-sm text-slate-500">For PKP Address:</p>
-						<p class="font-mono text-sm break-all text-sky-700">{mintedPkpEthAddress}</p>
+						<p class="font-mono text-sm break-all text-sky-700">{pkpEthAddress}</p>
 					</div>
 
 					{#if !sahelPhaseConfig}
@@ -668,14 +677,14 @@ go();`);
 			<!-- End Sahel Token Balance Card -->
 
 			<!-- Send Sahel Token Card -->
-			{#if mintedPkpEthAddress && $guardianEoaAddressStore && SAHEL_TOKEN_ADDRESS}
+			{#if pkpEthAddress && $guardianEoaAddressStore && SAHEL_TOKEN_ADDRESS}
 				<div class="mb-8 rounded-xl bg-white p-6 shadow-lg md:p-8">
 					<h2 class="mb-4 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
 						Send {SAHEL_TOKEN_SYMBOL}
 					</h2>
 					<p class="mb-2 text-sm text-slate-600">
-						This will send <strong>0.1 {SAHEL_TOKEN_SYMBOL}</strong> from your PKP Address ({mintedPkpEthAddress
-							? `${mintedPkpEthAddress.slice(0, 6)}...${mintedPkpEthAddress.slice(-4)}`
+						This will send <strong>0.1 {SAHEL_TOKEN_SYMBOL}</strong> from your PKP Address ({pkpEthAddress
+							? `${pkpEthAddress.slice(0, 6)}...${pkpEthAddress.slice(-4)}`
 							: 'N/A'}) to your Guardian EOA Address ({$guardianEoaAddressStore
 							? `${$guardianEoaAddressStore.slice(0, 6)}...${$guardianEoaAddressStore.slice(-4)}`
 							: 'N/A'}).
@@ -685,8 +694,9 @@ go();`);
 						on:click={handleSendSahelToken}
 						disabled={isSendingSahel ||
 							!$litClientStore?.ready ||
-							!mintedPkpPublicKey ||
-							!mintedPkpEthAddress}
+							!pkpPublicKey ||
+							!pkpEthAddress ||
+							!passkeyDataForModal}
 						class="w-full justify-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
 					>
 						{#if isSendingSahel}
@@ -751,8 +761,8 @@ go();`);
 			{/if}
 
 			<!-- Wallet Operations Section (Keep this structure) -->
-			{#if mintedPkpPublicKey && mintedPkpEthAddress}
-				<!-- Only show if PKP is available -->
+			{#if pkpPublicKey && pkpEthAddress && passkeyDataForModal}
+				<!-- Only show if PKP is available and passkeyData exists -->
 				<div class="rounded-xl bg-white p-6 shadow-lg md:p-8">
 					<h2 class="mb-6 border-b border-stone-200 pb-3 text-2xl font-semibold text-slate-700">
 						{profileName ? `${profileName}'s Wallet` : 'PKP Wallet'}
@@ -822,7 +832,10 @@ go();`);
 									<button
 										on:click={handleSignMessageWithPkp}
 										class="w-full justify-center rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-sky-700 disabled:opacity-50"
-										disabled={isSigningMessage || !$litClientStore?.ready || !mintedPkpPublicKey}
+										disabled={isSigningMessage ||
+											!$litClientStore?.ready ||
+											!pkpPublicKey ||
+											!passkeyDataForModal}
 									>
 										{#if isSigningMessage}<span class="spinner mr-2"></span>Signing...{:else}Sign
 											Message with PKP{/if}
@@ -867,7 +880,10 @@ go();`);
 									<button
 										on:click={handleExecuteLitAction}
 										class="w-full justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
-										disabled={isExecutingAction || !$litClientStore?.ready || !mintedPkpPublicKey}
+										disabled={isExecutingAction ||
+											!$litClientStore?.ready ||
+											!pkpPublicKey ||
+											!passkeyDataForModal}
 									>
 										{#if isExecutingAction}<span class="spinner mr-2"></span>Executing Action...{:else}Execute
 											Lit Action{/if}
@@ -924,16 +940,17 @@ go();`);
 											disabled={isEncryptingProfile ||
 												isDecryptingProfile ||
 												!$litClientStore?.ready ||
-												!mintedPkpPublicKey ||
-												!mintedPkpEthAddress}
+												!pkpPublicKey ||
+												!pkpEthAddress ||
+												!passkeyDataForModal}
 										>
 											{#if isEncryptingProfile}<span class="spinner mr-2"></span>Encrypting &
 												Saving...{:else if isDecryptingProfile}<span class="spinner mr-2"
 												></span>Decrypting...{:else}Save Encrypted Profile{/if}
 										</button>
-										{#if !$litClientStore?.ready || !mintedPkpPublicKey || !mintedPkpEthAddress}
+										{#if !$litClientStore?.ready || !pkpPublicKey || !pkpEthAddress || !passkeyDataForModal}
 											<p class="mt-2 text-xs text-orange-600">
-												Note: Requires Lit Client Ready & PKP details.
+												Note: Requires Lit Client Ready, PKP details & Passkey data.
 											</p>{/if}
 									</div>
 								</div>
@@ -945,14 +962,16 @@ go();`);
 				<div class="rounded-xl bg-white p-6 text-center shadow-lg md:p-8">
 					<h2 class="mb-4 text-xl font-semibold text-slate-600">PKP Wallet Not Initialized</h2>
 					<p class="text-sm text-slate-500">
-						Please ensure you have minted a PKP and it's loaded. <br />
-						You can manage PKP minting and other settings on the <strong>Settings</strong> page.
+						Please complete the wallet setup via the <a
+							href="/me/signin"
+							class="font-medium text-emerald-600 hover:underline">Passkey Wallet Setup</a
+						> page.
 					</p>
 					<a
-						href="/me/settings"
-						class="mt-6 inline-block rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 focus:ring-4 focus:ring-blue-300 focus:outline-none"
+						href="/me/signin"
+						class="mt-6 inline-block rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-emerald-700 focus:ring-4 focus:ring-emerald-300 focus:outline-none"
 					>
-						Go to Settings
+						Go to Wallet Setup
 					</a>
 				</div>
 			{/if}

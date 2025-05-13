@@ -14,7 +14,7 @@
 	import { type Snippet } from 'svelte';
 	import { goto } from '$app/navigation';
 	import Modal from '$lib/components/Modal.svelte';
-	import { openModal } from '$lib/KERNEL/modalStore';
+	import { openModal } from '$lib/wallet/modalStore';
 	import Prenu from '$lib/components/PrenuModal.svelte';
 	import Navbar from '$lib/components/Navbar.svelte';
 
