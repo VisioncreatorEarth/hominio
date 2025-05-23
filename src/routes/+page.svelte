@@ -11,6 +11,7 @@
 	import BuildMonetize from '$lib/components/sections/hominio/BuildMonetize.svelte';
 	import FutureFeatures from '$lib/components/sections/hominio/FutureFeatures.svelte';
 	import Founders from '$lib/components/sections/hominio/Founders.svelte';
+	import VibeEditorSection from '$lib/components/sections/hominio/VibeEditorSection.svelte';
 
 	// State for mobile navigation menu
 	let navMenuOpen = $state(false);
@@ -24,6 +25,7 @@
 	let buildMonetizeSection: HTMLElement | null = $state(null);
 	let futureFeaturesSection: HTMLElement | null = $state(null);
 	let foundersSection: HTMLElement | null = $state(null);
+	let vibeEditorSection: HTMLElement | null = $state(null);
 
 	// Array to track sections for intersection observing
 	// Needs to be reactive if sections are added/removed dynamically, otherwise can be plain array
@@ -45,6 +47,7 @@
 			dataPotSection,
 			whatsAVibeSection,
 			gameChangerSection,
+			vibeEditorSection,
 			marketplaceSection,
 			buildMonetizeSection,
 			futureFeaturesSection,
@@ -111,6 +114,7 @@
 	<DataPot bind:dataPotSection />
 	<WhatsAVibe bind:sectionRef={whatsAVibeSection} />
 	<GameChanger bind:sectionRef={gameChangerSection} />
+	<VibeEditorSection bind:sectionRef={vibeEditorSection} />
 	<Marketplace bind:sectionRef={marketplaceSection} />
 	<BuildMonetize bind:sectionRef={buildMonetizeSection} />
 	<FutureFeatures bind:sectionRef={futureFeaturesSection} />
